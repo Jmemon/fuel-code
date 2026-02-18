@@ -91,8 +91,18 @@ export async function checkDbHealth(
   const start = performance.now();
 
   try {
-    // Run a trivial query with a timeout to detect hung connections
-    await sql`SELECT 1`.timeout(HEALTH_CHECK_TIMEOUT_MS / 1000);
+    // Run a trivial query with a timeout to detect hung connections.
+    // postgres.js doesn't have a per-query .timeout() method, so we race
+    // the query against a manual timeout promise.
+    await Promise.race([
+      sql`SELECT 1`,
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("DB health check timed out")),
+          HEALTH_CHECK_TIMEOUT_MS,
+        ),
+      ),
+    ]);
 
     const latency_ms = Math.round(performance.now() - start);
     return { ok: true, latency_ms };

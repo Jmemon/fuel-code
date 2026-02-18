@@ -1,0 +1,21 @@
+# Docker Compose configuration for E2E integration tests.
+# Uses non-standard ports (5433, 6380) to avoid conflicts with any
+# local Postgres/Redis instances running on default ports.
+# Uses tmpfs for Postgres to run entirely in RAM for speed.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: fuel_code_test
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+    ports:
+      - "5433:5432"    # non-standard port to avoid conflicts
+    tmpfs:
+      - /var/lib/postgresql/data  # RAM disk for speed
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"    # non-standard port to avoid conflicts

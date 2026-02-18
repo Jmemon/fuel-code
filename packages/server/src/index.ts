@@ -105,10 +105,14 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // --- Step 5: Create and connect Redis client ---
+  // --- Step 5: Create and connect Redis clients ---
+  // Two separate clients are needed because the consumer uses XREADGROUP BLOCK
+  // which holds the connection. Health checks (PING) and event writes (XADD)
+  // need their own connection to avoid queuing behind the blocked command.
   const redis = createRedisClient(env.REDIS_URL);
+  const redisConsumer = createRedisClient(env.REDIS_URL);
   try {
-    await redis.connect();
+    await Promise.all([redis.connect(), redisConsumer.connect()]);
   } catch (err) {
     logger.error({ err }, "Failed to connect to Redis — aborting startup");
     process.exit(1);
@@ -118,6 +122,7 @@ async function main(): Promise<void> {
   await ensureConsumerGroup(redis);
 
   // --- Step 7-8: Create Express app and start HTTP server ---
+  // App gets the non-blocking client (for health checks + XADD writes)
   const app = createApp({ sql, redis, apiKey: env.API_KEY });
 
   const server = app.listen(env.PORT, () => {
@@ -131,8 +136,9 @@ async function main(): Promise<void> {
   // --- Step 9: Start event consumer ---
   // Create the handler registry and start the consumer loop that reads from
   // the Redis Stream and dispatches events to the event processor.
+  // Consumer gets its own Redis client (blocking XREADGROUP commands).
   const { registry } = createEventHandler(sql, logger);
-  const consumer = startConsumer({ redis, sql, registry, logger });
+  const consumer = startConsumer({ redis: redisConsumer, sql, registry, logger });
   logger.info(
     { registeredHandlers: registry.listRegisteredTypes() },
     "Event consumer started",
@@ -166,8 +172,9 @@ async function main(): Promise<void> {
       // 2. Stop the Redis Stream consumer loop (waits for current iteration to finish)
       await consumer.stop();
 
-      // 3. Close Redis connection
+      // 3. Close Redis connections (both app + consumer clients)
       redis.disconnect();
+      redisConsumer.disconnect();
 
       // 4. Close Postgres pool
       await sql.end();
