@@ -25,6 +25,7 @@ import { logger } from "./logger.js";
 import { createAuthMiddleware } from "./middleware/auth.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { createHealthRouter } from "./routes/health.js";
+import { createEventsRouter } from "./routes/events.js";
 
 /** Dependencies injected into createApp for testability */
 export interface AppDeps {
@@ -76,7 +77,7 @@ export function createApp(deps: AppDeps): express.Express {
   app.use("/api", createAuthMiddleware(deps.apiKey));
 
   // --- 6. Routes ---
-  // /api/events route will be added in Task 8 (event ingestion)
+  app.use("/api", createEventsRouter({ redis: deps.redis }));
 
   // --- 7. Error handler — MUST be registered last ---
   app.use(errorHandler);
