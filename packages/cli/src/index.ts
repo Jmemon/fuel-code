@@ -9,9 +9,9 @@
  * Available commands:
  *   init    — Initialize fuel-code on this device (Task 5)
  *   status  — Show device info, queue depth, connectivity (Task 5)
+ *   emit    — Emit an event to the backend with local queue fallback (Task 10)
  *
  * Future commands (registered by other tasks):
- *   emit    — Emit an event to the queue (Task 10)
  *   queue   — Manage the local event queue (Task 12)
  *   hooks   — Install/manage git and Claude Code hooks (Task 13)
  */
@@ -20,6 +20,7 @@ import { Command } from "commander";
 import pino from "pino";
 import { createInitCommand } from "./commands/init.js";
 import { createStatusCommand } from "./commands/status.js";
+import { createEmitCommand } from "./commands/emit.js";
 
 // ---------------------------------------------------------------------------
 // Logger — structured JSON logging for debugging and error tracking
@@ -51,8 +52,10 @@ program
 program.addCommand(createInitCommand());
 program.addCommand(createStatusCommand());
 
-// Future commands (Task 10, 12, 13):
-// program.addCommand(createEmitCommand());    // Task 10: emit events
+// Register emit command (Task 10: emit events with local queue fallback)
+program.addCommand(createEmitCommand());
+
+// Future commands (Task 12, 13):
 // program.addCommand(createQueueCommand());   // Task 12: queue management
 // program.addCommand(createHooksCommand());   // Task 13: hook installation
 
