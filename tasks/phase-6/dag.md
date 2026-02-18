@@ -97,7 +97,7 @@ Task 1 → Task 6 → Task 10 → Task 14
 - Task 8 → Task 13 (archival engine needed by archival CLI/API)
 - Task 12 → Task 13 (progress integration provides utilities archival CLI uses)
 - Tasks 5, 6, 7, 8, 9, 10, 11, 12, 13 → Task 14 (E2E tests verify everything)
-- **Cross-phase**: Task 7 requires modification to Phase 1's `POST /api/events/ingest` response format (audit #2). The endpoint must return per-event `results` array in addition to aggregate counts. This should be retrofitted into Phase 1 or done as a Phase 6 prerequisite.
+- **Cross-phase (RESOLVED)**: ~~Task 7 requires per-event `results` array from Phase 1's ingest endpoint.~~ **Already done.** Phase 1's `POST /api/events/ingest` already returns `{ ingested, duplicates, rejected, results: [{ index, status }, ...], errors: [...] }`. No modification needed.
 
 ## Key Design Decisions
 

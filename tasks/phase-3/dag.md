@@ -92,7 +92,16 @@ Every git hook script enforces these invariants:
 - Handler registry pattern (`registry.register("type", handler)`)
 - CC hooks (SessionStart, Stop) with `fuel-code hooks install` command
 - `workspace_devices` table with `git_hooks_installed` boolean column
-- `git_activity` table (exists but empty — no handlers populate it yet)
-- All git event Zod schemas defined in `shared/schemas/`
+- `EVENT_TYPES` array in `shared/src/types/event.ts` already includes all 14 event types (including `git.commit`, `git.push`, `git.checkout`, `git.merge`)
+- Ingest endpoint accepts any event type in `EVENT_TYPES` — git events can flow through the pipeline before Phase 3 handlers exist (they just won't be handler-processed)
+- Payload validation is forward-compatible: events with unregistered payload types pass through without payload validation (`packages/server/src/routes/events.ts` line 91)
 - `normalizeGitRemote()` in `shared/src/canonical.ts`
 - `resolveWorkspace()` helper in `hooks/claude/_helpers/resolve-workspace.ts`
+- `fuel-code emit` CLI command (Phase 3 Task 1 adds `--workspace-id` and `--data-stdin` flags)
+- Session.start and session.end Zod payload schemas in `shared/src/schemas/`
+
+## What Phase 3 Must Create (does NOT already exist)
+- **`git_activity` table** — Phase 1 schema has 5 tables (workspaces, devices, workspace_devices, sessions, events). No `git_activity` table exists. Task 3 must create a migration for it.
+- **Git event Zod payload schemas** — Only `session.start` and `session.end` payload schemas exist. Task 3 must create Zod schemas for `git.commit`, `git.push`, `git.checkout`, `git.merge` payloads and register them in the payload registry.
+- **`--workspace-id` and `--data-stdin` flags on `fuel-code emit`** — Task 1's hook scripts use these flags. They must be added to the emit command.
+- **Prompt tracking columns on `workspace_devices`** — `pending_git_hooks_prompt` and `git_hooks_prompted` columns (Task 4 migration).

@@ -8,7 +8,9 @@
 
 Create two foundational CLI modules that all query commands and TUI views depend on:
 
-1. **`packages/cli/src/lib/api-client.ts`** -- A typed HTTP client wrapping `fetch()`. Handles auth headers, base URL from config, pagination cursors, error classification, and timeout. Every CLI command and TUI component uses this instead of raw `fetch()`. The existing ad-hoc fetch calls in `emit.ts` and `backfill.ts` remain as-is (they have specialized needs like streaming uploads and different timeout constraints).
+1. **`packages/cli/src/lib/api-client.ts`** -- **REPLACES** the existing basic `api-client.ts` from Phase 1. The Phase 1 version has a `createApiClient()` factory that returns an object with only an `ingest()` method — used by `emit.ts` and `drain.ts`. This task replaces it with a comprehensive `ApiClient` class wrapping `fetch()`. Handles auth headers, base URL from config, pagination cursors, error classification, and timeout. Every CLI command and TUI component uses this instead of raw `fetch()`.
+
+   > **IMPORTANT (Phase 1 backward compatibility):** `emit.ts` and `drain.ts` import from `api-client.ts`. The new `ApiClient` class MUST either: (a) export a `createApiClient()` compat shim that wraps the new class, or (b) the new class itself must have an `ingest()` method matching the old signature. Verify `emit.ts` and `drain.ts` still work after replacement. Search for all imports of `api-client` before replacing.
 
 2. **`packages/cli/src/lib/formatters.ts`** -- Table renderer, value formatters (duration, cost, relative time, lifecycle badges), and color coding with `picocolors`. Used by all CLI query commands for consistent stdout output. NOT used by TUI (TUI renders via Ink components). Designed for pipeable, scriptable output.
 
@@ -855,7 +857,7 @@ Pure unit tests with no external dependencies.
 
 ## Relevant Files
 
-- `packages/cli/src/lib/api-client.ts` (create)
+- `packages/cli/src/lib/api-client.ts` (**replace** — Phase 1 version exists with basic createApiClient()/ingest(); must be fully replaced with ApiClient class while preserving backward compat for emit.ts and drain.ts)
 - `packages/cli/src/lib/formatters.ts` (create)
 - `packages/cli/src/lib/__tests__/api-client.test.ts` (create)
 - `packages/cli/src/lib/__tests__/formatters.test.ts` (create)

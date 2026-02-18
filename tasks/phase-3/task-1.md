@@ -439,13 +439,24 @@ done
 exit 0
 ```
 
-### CLI: `--data-stdin` Flag for Emit Command
+### CLI: `--data-stdin` and `--workspace-id` Flags for Emit Command
 
-The hook scripts use `--data-stdin` to avoid shell escaping hell with commit messages containing quotes, backticks, etc. This requires a small addition to the existing `fuel-code emit` command.
+The hook scripts use `--data-stdin` to avoid shell escaping hell with commit messages containing quotes, backticks, etc., and `--workspace-id` to pass the resolved workspace canonical ID. Both require additions to the existing `fuel-code emit` command.
+
+> **Note (Phase 1 context):** Phase 1's `fuel-code emit` command accepts `<event-type>` and `--data <json>` but does NOT have `--data-stdin` or `--workspace-id` flags. Phase 1's CC hooks resolve the workspace inside the TS helper and pass it in the event data payload. The git hooks (being pure bash) need these flags on the emit command itself.
 
 **Modify `packages/cli/src/commands/emit.ts`**:
 
-Add `--data-stdin` option alongside existing `--data`:
+Add `--data-stdin` and `--workspace-id` options:
+```typescript
+// --workspace-id: Override the workspace canonical ID
+// (normally resolved from config, but git hooks resolve it from the repo's remote URL)
+.option('--workspace-id <id>', 'Workspace canonical ID')
+
+// --data-stdin: Read JSON event data from stdin instead of --data argument
+.option('--data-stdin', 'Read event data JSON from stdin')
+```
+
 ```typescript
 // If --data-stdin is set, read JSON from stdin instead of --data argument
 if (opts.dataStdin) {
@@ -453,6 +464,12 @@ if (opts.dataStdin) {
   data = JSON.parse(stdinText);
 } else if (opts.data) {
   data = JSON.parse(opts.data);
+}
+
+// If --workspace-id is set, include it in the event envelope
+// so the server can resolve the workspace without needing the device's config
+if (opts.workspaceId) {
+  event.data.workspace_canonical_id = opts.workspaceId;
 }
 ```
 
@@ -496,7 +513,7 @@ Create a temp git repo and verify hook outputs:
 - `packages/hooks/git/post-checkout` (create)
 - `packages/hooks/git/post-merge` (create)
 - `packages/hooks/git/pre-push` (create)
-- `packages/cli/src/commands/emit.ts` (modify — add `--data-stdin` flag)
+- `packages/cli/src/commands/emit.ts` (modify — add `--data-stdin` and `--workspace-id` flags)
 - `packages/hooks/git/__tests__/resolve-workspace.test.ts` (create)
 - `packages/hooks/git/__tests__/hook-scripts.test.ts` (create)
 

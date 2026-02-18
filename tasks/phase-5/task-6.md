@@ -176,7 +176,16 @@ Illegal transitions throw `InvalidStatusTransitionError extends FuelCodeError`.
 
 ### Migration
 
-Create `packages/server/src/db/migrations/NNNN_create_remote_envs.sql` following existing naming convention. Adds `remote_envs` and `blueprints` tables matching `infra/sql/schema.sql`. Include indexes on `remote_envs(status)`, `remote_envs(workspace_id)`, `remote_envs(device_id)`, and `remote_envs(instance_id)`.
+Create `packages/server/src/db/migrations/NNNN_create_remote_envs.sql` following existing naming convention. This migration creates the `remote_envs` and `blueprints` tables from scratch (they do NOT exist in any prior migration). Include indexes on `remote_envs(status)`, `remote_envs(workspace_id)`, `remote_envs(device_id)`, and `remote_envs(instance_id)`.
+
+> **IMPORTANT (Phase 1 Correction):** Phase 1's `sessions` table already has a `remote_env_id TEXT` column but with NO foreign key constraint. The Phase 1 schema comment reads: `"FK to remote_envs added in Phase 5 migration"`. This migration MUST include:
+> ```sql
+> ALTER TABLE sessions ADD CONSTRAINT fk_sessions_remote_env
+>   FOREIGN KEY (remote_env_id) REFERENCES remote_envs(id);
+> ```
+> This must come AFTER the `CREATE TABLE remote_envs` statement.
+
+> **NOTE:** There is no `infra/sql/schema.sql` file to reference. Define the complete table schema directly in the migration file based on the column specifications in the Phase 5 DAG.
 
 ### ApiClient Extension
 
@@ -250,7 +259,7 @@ async authorizeRemoteIp(id: string, ip: string): Promise<void>;
 4. Ready callback transitions to `ready` and records public_ip and device_id.
 5. List endpoint supports filtering and cursor pagination.
 6. All endpoints require auth.
-7. Migration creates `remote_envs` and `blueprints` tables with indexes.
+7. Migration creates `remote_envs` and `blueprints` tables with indexes, and adds FK constraint on `sessions.remote_env_id` → `remote_envs(id)`.
 8. `ApiClient` has matching methods for all endpoints.
 9. WebSocket `remote.update` broadcasts on status changes.
 10. DB query helpers enforce status transition rules at the data layer.

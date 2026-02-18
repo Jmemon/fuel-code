@@ -124,7 +124,7 @@ The TUI uses `ink` with React components. State management via hooks + WS client
 
 ### Server (packages/server/)
 - Express app with auth middleware, error handling, pino logging
-- `POST /api/events/ingest` — batch event ingestion
+- `POST /api/events/ingest` — batch event ingestion (returns per-event results array)
 - `GET /api/sessions` — list with cursor pagination, filtering (workspace, device, lifecycle, date range, tag)
 - `GET /api/sessions/:id` — full detail with stats
 - `GET /api/sessions/:id/transcript` — parsed messages + content blocks
@@ -135,10 +135,11 @@ The TUI uses `ink` with React components. State management via hooks + WS client
 - `POST /api/sessions/:id/reparse` — re-trigger parsing
 - `POST /api/sessions/:id/transcript/upload` — transcript file upload
 - `GET /api/timeline` — session-grouped activity feed
-- `GET /api/health` — health check
-- Redis Stream consumer + event processor + handler registry
+- `GET /api/health` — health check (mounted BEFORE auth middleware — bypasses auth for Railway probes)
+- Redis Stream consumer (blocking XREADGROUP on dedicated client) + event processor + handler registry
 - Postgres pool, migrations runner, S3 client
-- `packages/server/src/ws/` directory exists (empty placeholder)
+- **Note:** `packages/server/src/ws/` directory does NOT exist. Phase 4 Task 2 must create it.
+- Two Redis clients: one blocking (consumer XREADGROUP), one non-blocking (health checks, XADD)
 
 ### CLI (packages/cli/)
 - `fuel-code init`, `emit`, `hooks install/status`, `backfill`, `queue status/drain/dead-letter`
@@ -147,7 +148,7 @@ The TUI uses `ink` with React components. State management via hooks + WS client
 - Local event queue with drainer
 - Commander entry point (`packages/cli/src/index.ts`)
 - Error hierarchy (FuelCodeError subclasses), pino logger
-- Ad-hoc fetch calls in emit/backfill (NOT a reusable API client)
+- **`packages/cli/src/lib/api-client.ts` exists** (from Phase 1) — basic `createApiClient()` with `ingest()` method, used by `emit.ts` and `drain.ts`. Phase 4 Task 3 REPLACES this with a comprehensive `ApiClient` class while maintaining backward compatibility for `emit.ts` and `drain.ts` imports.
 
 ### Shared (packages/shared/)
 - All types: Event, Session, Workspace, Device, TranscriptMessage, ContentBlock, GitActivity
@@ -157,8 +158,7 @@ The TUI uses `ink` with React components. State management via hooks + WS client
 ### NOT yet built (Phase 4 creates)
 - `GET /api/workspaces`, `GET /api/workspaces/:id`
 - `GET /api/devices`, `GET /api/devices/:id`
-- `WS /api/ws` — WebSocket server
-- `packages/cli/src/lib/api-client.ts`
+- `WS /api/ws` — WebSocket server + `packages/server/src/ws/` directory
 - `packages/cli/src/lib/ws-client.ts`
 - `packages/cli/src/lib/formatters.ts`
 - All CLI query commands (sessions, session detail, timeline, workspaces, status)

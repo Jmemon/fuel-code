@@ -182,17 +182,21 @@ The existing `ApiClient` in `packages/cli/src/lib/api-client.ts` gets new remote
 ### Core (packages/core/)
 - Event processor, transcript parser, summary generator
 - Workspace resolver, session manager, git correlator
-- `blueprint-detector.ts` — placeholder (exists but not implemented)
 
 ### Infrastructure
-- `infra/docker/Dockerfile.remote` — placeholder
-- `infra/docker/scripts/user-data.sh` — placeholder
-- `infra/sql/schema.sql` — includes `remote_envs` and `blueprints` tables
+> **NOTE: No infrastructure files exist yet.** The `infra/` directory, `Dockerfile.remote`, `user-data.sh`, and `schema.sql` do NOT exist from prior phases. Phase 5 creates all of these.
 
-### Database (schema defined, may need migration)
-- `remote_envs` table (id, workspace_id, device_id, status, instance_id, instance_type, region, public_ip, ssh_key_s3_key, blueprint JSONB, ttl_minutes, idle_timeout_minutes, cost_per_hour_usd, total_cost_usd, provisioned_at, ready_at, terminated_at, termination_reason, metadata)
-- `blueprints` table (id, workspace_id, name, source, detected_from, config JSONB, created_at, updated_at)
-- Status enum: provisioning, ready, active, idle, terminated, error
+### Database
+> **NOTE: `remote_envs` and `blueprints` tables do NOT exist.** Phase 1's schema has only 5 tables: `workspaces`, `devices`, `workspace_devices`, `sessions`, `events`. Phase 5 Task 6 MUST create both tables via migration. Additionally, Phase 1's `sessions` table has a `remote_env_id TEXT` column with NO foreign key constraint — Phase 5's migration must `ALTER TABLE sessions ADD CONSTRAINT` to create the FK to `remote_envs`.
+
+### What Phase 5 Must Create (does NOT already exist)
+- `remote_envs` table (via migration in Task 6)
+- `blueprints` table (via migration in Task 6)
+- `ALTER TABLE sessions` to add FK on `remote_env_id` → `remote_envs(id)` (Task 6 migration)
+- `blueprint-detector.ts` (Task 1 — no placeholder exists)
+- `infra/docker/Dockerfile.remote` (Task 5)
+- `infra/docker/scripts/user-data.sh` (Task 5)
+- `packages/server/src/aws/ec2-client.ts` (Task 3)
 
 ### NOT yet built (Phase 5 creates)
 - Blueprint detection logic (implementation)

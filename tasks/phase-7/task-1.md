@@ -10,9 +10,9 @@ Create the Change Request entity — types, Zod schemas, DB migration, and core 
 
 ### DB Migration
 
-**`infra/sql/migrations/007_change_requests.sql`**:
+**`packages/server/src/db/migrations/NNN_change_requests.sql`**:
 
-> **Note:** Migration number `007` is illustrative. Use the next available sequential number based on what exists in `packages/server/src/db/migrations/` at implementation time.
+> **Note:** Migration number is illustrative. Use the next available sequential number based on what exists in `packages/server/src/db/migrations/` at implementation time. All migrations live in `packages/server/src/db/migrations/`, NOT in `infra/sql/` (that directory does not exist).
 
 ```sql
 -- Change Request: orchestration record for Slack-triggered code changes
@@ -173,7 +173,24 @@ export const changeRequestEventSchema = z.object({
 
 ### Event Types
 
-Register new event types in `packages/shared/src/schemas/events.ts` (modify):
+Register new event types in two places:
+
+**1. `packages/shared/src/types/event.ts`** (modify — add to `EVENT_TYPES` array and `EventType` union):
+
+> **IMPORTANT (Phase 1 correction):** Phase 1 defines `EVENT_TYPES` as a closed array of 14 string literals and derives `EventType` from it. You MUST add all 7 `change.*` types to this array, otherwise event validation will reject them.
+
+```typescript
+// Add to the EVENT_TYPES array in packages/shared/src/types/event.ts:
+'change.requested',
+'change.implementing',
+'change.deployed',
+'change.approved',
+'change.rejected',
+'change.merged',
+'change.failed',
+```
+
+**2. `packages/shared/src/schemas/events.ts`** (modify — add payload schemas):
 
 ```typescript
 // Change request events (Phase 7)
@@ -185,6 +202,8 @@ Register new event types in `packages/shared/src/schemas/events.ts` (modify):
 'change.merged'        // Branch merged to target
 'change.failed'        // Something went wrong
 ```
+
+Also register the `changeRequestEventSchema` in the payload registry (`packages/shared/src/schemas/payload-registry.ts`) for all 7 event types.
 
 ### Core CRUD Queries
 
@@ -246,24 +265,26 @@ export function createChangeRequestQueries(sql: postgres.Sql): ChangeRequestQuer
 12. Concurrent transitions: only one succeeds (optimistic locking).
 
 ## Relevant Files
-- `infra/sql/migrations/007_change_requests.sql` (create)
+- `packages/server/src/db/migrations/NNN_change_requests.sql` (create — use next available number)
 - `packages/shared/src/types/change-request.ts` (create)
+- `packages/shared/src/types/event.ts` (modify — add 7 `change.*` types to `EVENT_TYPES` array)
 - `packages/shared/src/schemas/change-request.ts` (create)
-- `packages/shared/src/schemas/events.ts` (modify — add change.* event types)
+- `packages/shared/src/schemas/events.ts` (modify — add change.* payload schemas)
+- `packages/shared/src/schemas/payload-registry.ts` (modify — register change.* payload validators)
 - `packages/shared/src/index.ts` (modify — re-export)
 - `packages/core/src/change-request-queries.ts` (create)
 - `packages/core/src/__tests__/change-request-queries.test.ts` (create)
 - `packages/core/src/index.ts` (modify — re-export)
-- `infra/sql/schema.sql` (modify — add change_requests table to full schema)
 
 ## Success Criteria
-1. Migration creates `change_requests` table with all columns and indexes.
+1. Migration creates `change_requests` table with all columns and indexes (in `packages/server/src/db/migrations/`).
 2. `remote_envs` table has new `change_request_id` column with FK reference.
 3. All Change Request types and Zod schemas are exported from `@fuel-code/shared`.
 4. CRUD queries handle create, read, list with pagination, and status transitions.
 5. Idempotency key prevents duplicate change requests.
 6. Status transitions use optimistic locking (UPDATE ... WHERE status = $expected).
 7. Invalid transitions return `{ success: false, reason }` without throwing.
-8. All 7 change.* event types are registered in the event schema.
-9. Terminal states (merged, rejected) have no outgoing transitions.
-10. Failed state allows retry (transition back to pending).
+8. All 7 `change.*` event types are added to the `EVENT_TYPES` array in `packages/shared/src/types/event.ts` so they pass event validation.
+9. All 7 `change.*` payload schemas are registered in the payload registry.
+10. Terminal states (merged, rejected) have no outgoing transitions.
+11. Failed state allows retry (transition back to pending).

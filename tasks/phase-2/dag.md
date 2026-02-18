@@ -111,12 +111,12 @@ cd packages/core && bun add @anthropic-ai/sdk
 
 ## Audit Notes
 
-### Ingest Response Format (audit #2)
-Phase 6, Task 7 requires per-event responses from the ingest endpoint: `{ results: [{ index, status, error? }, ...] }`. But Phase 1's `POST /api/events/ingest` returns `{ ingested: number, duplicates: number }`. This is a breaking API change. **Resolution**: Extend Phase 1's ingest response NOW to include per-event status, even if Phase 1 callers ignore it. Specifically, the Phase 1 ingest endpoint should return:
+### Ingest Response Format (audit #2) — RESOLVED
+~~Phase 6, Task 7 requires per-event responses from the ingest endpoint.~~ **RESOLVED in Phase 1 implementation.** Phase 1's `POST /api/events/ingest` already returns per-event results:
 ```json
-{ "ingested": 3, "duplicates": 0, "results": [{ "index": 0, "status": "accepted" }, ...] }
+{ "ingested": 3, "duplicates": 0, "rejected": 0, "results": [{ "index": 0, "status": "accepted" }, ...], "errors": [...] }
 ```
-Phase 1 callers use `ingested` count; Phase 6 callers use `results` array. No breaking change.
+Phase 1 callers use `ingested` count; Phase 6 callers use `results` array. No further changes needed.
 
 ### Summary Retry (audit #9)
 Task 7's pipeline has no mechanism to retry failed summaries. Sessions that fail summary generation during rate-limiting permanently lack summaries. A periodic "summarize pending" sweep should be added to Task 7 or Task 10 to find `parsed` sessions without summaries and re-attempt.

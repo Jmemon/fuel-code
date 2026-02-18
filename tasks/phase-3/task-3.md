@@ -1,10 +1,135 @@
-# Task 3: Git Event Handlers + git_activity Population
+# Task 3: Git Event Handlers + git_activity Table + Zod Schemas
 
 ## Parallel Group: A
 
 ## Description
 
-Implement event handlers for `git.commit`, `git.push`, `git.checkout`, and `git.merge` that populate the `git_activity` table and correlate git events with active Claude Code sessions. Register all handlers in the existing handler registry from Phase 1. This is the server-side counterpart to the hook scripts — hooks emit events, handlers process them.
+Create the `git_activity` database table (migration), define Zod payload schemas for all 4 git event types, implement event handlers for `git.commit`, `git.push`, `git.checkout`, and `git.merge` that populate the table and correlate git events with active Claude Code sessions. Register all handlers and payload schemas in the existing registries from Phase 1.
+
+> **IMPORTANT (Phase 1 Correction):** Phase 1 did NOT create a `git_activity` table. The initial migration (`001_initial.sql`) only created: `workspaces`, `devices`, `workspace_devices`, `sessions`, `events`. This task MUST create the `git_activity` table via a new migration before the handlers can work.
+
+> **IMPORTANT (Phase 1 Correction):** Phase 1 only created Zod payload schemas for `session.start` and `session.end`. This task MUST create Zod payload schemas for `git.commit`, `git.push`, `git.checkout`, `git.merge` and register them in `packages/shared/src/schemas/payload-registry.ts`.
+
+### Database Migration
+
+**Create `packages/server/src/db/migrations/NNN_create_git_activity.sql`** (use next sequential number):
+
+```sql
+-- git_activity: Stores processed git events with session correlation.
+-- Populated by git event handlers (git.commit, git.push, git.checkout, git.merge).
+-- session_id is nullable: git events outside an active CC session are "orphan" workspace-level activity.
+
+CREATE TABLE git_activity (
+  id TEXT PRIMARY KEY,                            -- same ULID as the event
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  device_id TEXT NOT NULL REFERENCES devices(id),
+  session_id TEXT REFERENCES sessions(id),        -- nullable: orphan git events have NULL
+  type TEXT NOT NULL CHECK (type IN ('commit', 'push', 'checkout', 'merge')),
+  branch TEXT,
+  commit_sha TEXT,
+  message TEXT,
+  files_changed INTEGER,
+  insertions INTEGER,
+  deletions INTEGER,
+  timestamp TIMESTAMPTZ NOT NULL,
+  data JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Indexes for common query patterns
+CREATE INDEX idx_git_activity_workspace ON git_activity(workspace_id);
+CREATE INDEX idx_git_activity_session ON git_activity(session_id) WHERE session_id IS NOT NULL;
+CREATE INDEX idx_git_activity_timestamp ON git_activity(timestamp DESC);
+CREATE INDEX idx_git_activity_type ON git_activity(type);
+CREATE INDEX idx_git_activity_workspace_time ON git_activity(workspace_id, timestamp DESC);
+```
+
+### Git Event Payload Zod Schemas
+
+**Create `packages/shared/src/schemas/git-commit.ts`**:
+
+```typescript
+import { z } from 'zod';
+
+export const gitCommitPayloadSchema = z.object({
+  hash: z.string(),
+  message: z.string(),
+  author_name: z.string(),
+  author_email: z.string().optional(),
+  branch: z.string(),
+  files_changed: z.number().int().min(0),
+  insertions: z.number().int().min(0),
+  deletions: z.number().int().min(0),
+  file_list: z.array(z.object({
+    path: z.string(),
+    status: z.string(),
+  })).optional(),
+});
+
+export type GitCommitPayload = z.infer<typeof gitCommitPayloadSchema>;
+```
+
+**Create `packages/shared/src/schemas/git-push.ts`**:
+
+```typescript
+import { z } from 'zod';
+
+export const gitPushPayloadSchema = z.object({
+  branch: z.string(),
+  remote: z.string(),
+  commit_count: z.number().int().min(0),
+  commits: z.array(z.string()).optional(),
+});
+
+export type GitPushPayload = z.infer<typeof gitPushPayloadSchema>;
+```
+
+**Create `packages/shared/src/schemas/git-checkout.ts`**:
+
+```typescript
+import { z } from 'zod';
+
+export const gitCheckoutPayloadSchema = z.object({
+  from_ref: z.string(),
+  to_ref: z.string(),
+  from_branch: z.string().nullable(),
+  to_branch: z.string().nullable(),
+});
+
+export type GitCheckoutPayload = z.infer<typeof gitCheckoutPayloadSchema>;
+```
+
+**Create `packages/shared/src/schemas/git-merge.ts`**:
+
+```typescript
+import { z } from 'zod';
+
+export const gitMergePayloadSchema = z.object({
+  merge_commit: z.string(),
+  message: z.string(),
+  merged_branch: z.string(),
+  into_branch: z.string(),
+  files_changed: z.number().int().min(0),
+  had_conflicts: z.boolean(),
+});
+
+export type GitMergePayload = z.infer<typeof gitMergePayloadSchema>;
+```
+
+**Modify `packages/shared/src/schemas/payload-registry.ts`**: Register the 4 new schemas:
+
+```typescript
+import { gitCommitPayloadSchema } from './git-commit';
+import { gitPushPayloadSchema } from './git-push';
+import { gitCheckoutPayloadSchema } from './git-checkout';
+import { gitMergePayloadSchema } from './git-merge';
+
+// In the registry initialization:
+registry.set('git.commit', gitCommitPayloadSchema);
+registry.set('git.push', gitPushPayloadSchema);
+registry.set('git.checkout', gitCheckoutPayloadSchema);
+registry.set('git.merge', gitMergePayloadSchema);
+```
 
 ### Session-Git Correlation
 
@@ -291,6 +416,13 @@ export function createHandlerRegistry(): EventHandlerRegistry {
 11. Handler registration: `registry.listRegisteredTypes()` includes all 4 git types.
 
 ## Relevant Files
+- `packages/server/src/db/migrations/NNN_create_git_activity.sql` (create — git_activity table migration)
+- `packages/shared/src/schemas/git-commit.ts` (create — Zod payload schema)
+- `packages/shared/src/schemas/git-push.ts` (create — Zod payload schema)
+- `packages/shared/src/schemas/git-checkout.ts` (create — Zod payload schema)
+- `packages/shared/src/schemas/git-merge.ts` (create — Zod payload schema)
+- `packages/shared/src/schemas/payload-registry.ts` (modify — register 4 git schemas)
+- `packages/shared/src/index.ts` (modify — re-export git schemas)
 - `packages/core/src/git-correlator.ts` (create)
 - `packages/core/src/handlers/git-commit.ts` (create)
 - `packages/core/src/handlers/git-push.ts` (create)
@@ -302,13 +434,16 @@ export function createHandlerRegistry(): EventHandlerRegistry {
 - `packages/core/src/__tests__/git-handlers.test.ts` (create)
 
 ## Success Criteria
-1. All 4 git event types have handlers registered in the handler registry.
-2. `handleGitCommit` inserts into `git_activity` with type='commit', correct commit_sha, branch, message, files_changed, insertions, deletions.
-3. `handleGitPush` inserts with type='push', branch, and data containing remote, commit_count, commits.
-4. `handleGitCheckout` inserts with type='checkout', branch set to `to_branch` (or `to_ref` for detached HEAD).
-5. `handleGitMerge` inserts with type='merge', merge_commit, into_branch, files_changed, and data containing merged_branch, had_conflicts.
-6. Session-git correlation works: active `capturing` session for same (workspace, device) is found and linked.
-7. Git events without an active session get `session_id = NULL` (no error).
-8. `events.session_id` is updated when correlation is found.
-9. Duplicate event IDs are handled gracefully (`ON CONFLICT DO NOTHING`).
-10. `createHandlerRegistry()` returns registry with `session.start`, `session.end`, `git.commit`, `git.push`, `git.checkout`, `git.merge`.
+1. **Migration creates `git_activity` table** with all columns (id, workspace_id, device_id, session_id, type, branch, commit_sha, message, files_changed, insertions, deletions, timestamp, data) and indexes.
+2. **Zod payload schemas exist** for `git.commit`, `git.push`, `git.checkout`, `git.merge` in `packages/shared/src/schemas/`.
+3. **Payload schemas registered** in `payload-registry.ts` — events with these types now get payload validation at ingest.
+4. All 4 git event types have handlers registered in the handler registry.
+5. `handleGitCommit` inserts into `git_activity` with type='commit', correct commit_sha, branch, message, files_changed, insertions, deletions.
+6. `handleGitPush` inserts with type='push', branch, and data containing remote, commit_count, commits.
+7. `handleGitCheckout` inserts with type='checkout', branch set to `to_branch` (or `to_ref` for detached HEAD).
+8. `handleGitMerge` inserts with type='merge', merge_commit, into_branch, files_changed, and data containing merged_branch, had_conflicts.
+9. Session-git correlation works: active `capturing` session for same (workspace, device) is found and linked.
+10. Git events without an active session get `session_id = NULL` (no error).
+11. `events.session_id` is updated when correlation is found.
+12. Duplicate event IDs are handled gracefully (`ON CONFLICT DO NOTHING`).
+13. `createHandlerRegistry()` returns registry with `session.start`, `session.end`, `git.commit`, `git.push`, `git.checkout`, `git.merge`.
