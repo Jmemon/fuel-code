@@ -1,0 +1,16 @@
+{
+  "name": "@fuel-code/core",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@fuel-code/shared": "workspace:*",
+    "pino": "^10.3.1",
+    "postgres": "^3.4.8"
+  }
+}

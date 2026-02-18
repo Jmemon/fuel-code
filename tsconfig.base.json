@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "paths": {
+      "@fuel-code/shared": ["./packages/shared/src"],
+      "@fuel-code/shared/*": ["./packages/shared/src/*"],
+      "@fuel-code/core": ["./packages/core/src"],
+      "@fuel-code/core/*": ["./packages/core/src/*"],
+      "@fuel-code/cli": ["./packages/cli/src"],
+      "@fuel-code/cli/*": ["./packages/cli/src/*"]
+    }
+  }
+}

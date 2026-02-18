@@ -1,0 +1,15 @@
+{
+  "name": "@fuel-code/shared",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "ulidx": "^2.4.1",
+    "zod": "3"
+  }
+}
