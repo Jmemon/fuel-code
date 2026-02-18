@@ -28,6 +28,8 @@ import { createRedisClient } from "./redis/client.js";
 import { ensureConsumerGroup } from "./redis/stream.js";
 import { createApp } from "./app.js";
 import { logger } from "./logger.js";
+import { createEventHandler } from "./pipeline/wire.js";
+import { startConsumer } from "./pipeline/consumer.js";
 
 /** Graceful shutdown timeout — force exit if cleanup takes longer than this */
 const SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -127,7 +129,14 @@ async function main(): Promise<void> {
   });
 
   // --- Step 9: Start event consumer ---
-  // Consumer started in Task 11
+  // Create the handler registry and start the consumer loop that reads from
+  // the Redis Stream and dispatches events to the event processor.
+  const { registry } = createEventHandler(sql, logger);
+  const consumer = startConsumer({ redis, sql, registry, logger });
+  logger.info(
+    { registeredHandlers: registry.listRegisteredTypes() },
+    "Event consumer started",
+  );
 
   // --- Graceful shutdown ---
   let isShuttingDown = false;
@@ -154,7 +163,8 @@ async function main(): Promise<void> {
         server.close((err) => (err ? reject(err) : resolve()));
       });
 
-      // 2. Stop consumer (Task 11 will wire this)
+      // 2. Stop the Redis Stream consumer loop (waits for current iteration to finish)
+      await consumer.stop();
 
       // 3. Close Redis connection
       redis.disconnect();
