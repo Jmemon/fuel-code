@@ -264,3 +264,5 @@ console.error(formatError(error));
 8. The CLI top-level error handler uses `formatError()`.
 9. The error catalog is in `packages/shared/` so server-side code can also reference it if needed.
 10. All catalog entries have actionable, specific fix instructions — not generic "contact support".
+
+> **Known limitation:** Existing error sites from Phases 1-5 will produce generic error messages. Error codes will be added incrementally as errors are encountered and improved. No retrofit task is needed.

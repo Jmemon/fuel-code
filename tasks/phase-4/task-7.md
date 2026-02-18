@@ -284,4 +284,5 @@ Test approach: Create a local `ws.Server` (from the `ws` package) in each test a
 16. Invalid JSON from server is handled gracefully (error emitted, no crash).
 17. Unknown server message types are silently ignored (forward-compatible).
 18. `send()` is a no-op when not connected (does not throw).
-19. All tests pass (`bun test`).
+19. WsClient must support `.off(event, listener)` and `.destroy()` methods for proper cleanup by consumers.
+20. All tests pass (`bun test`).

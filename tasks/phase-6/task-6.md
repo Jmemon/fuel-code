@@ -188,3 +188,4 @@ Replace the hardcoded 2-second timeout with a more generous default since retrie
 8. Default timeout increased from 2s to 10s per individual attempt.
 9. Retry logging uses pino at debug level — visible in verbose mode, not in normal output.
 10. All existing ApiClient tests still pass with the new retry behavior.
+11. Update any Phase 4 timeout-sensitive tests to use the new 10s default or make them configurable.

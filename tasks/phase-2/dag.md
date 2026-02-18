@@ -109,6 +109,21 @@ cd packages/server && bun add @aws-sdk/client-s3 @aws-sdk/s3-request-presigner
 cd packages/core && bun add @anthropic-ai/sdk
 ```
 
+## Audit Notes
+
+### Ingest Response Format (audit #2)
+Phase 6, Task 7 requires per-event responses from the ingest endpoint: `{ results: [{ index, status, error? }, ...] }`. But Phase 1's `POST /api/events/ingest` returns `{ ingested: number, duplicates: number }`. This is a breaking API change. **Resolution**: Extend Phase 1's ingest response NOW to include per-event status, even if Phase 1 callers ignore it. Specifically, the Phase 1 ingest endpoint should return:
+```json
+{ "ingested": 3, "duplicates": 0, "results": [{ "index": 0, "status": "accepted" }, ...] }
+```
+Phase 1 callers use `ingested` count; Phase 6 callers use `results` array. No breaking change.
+
+### Summary Retry (audit #9)
+Task 7's pipeline has no mechanism to retry failed summaries. Sessions that fail summary generation during rate-limiting permanently lack summaries. A periodic "summarize pending" sweep should be added to Task 7 or Task 10 to find `parsed` sessions without summaries and re-attempt.
+
+### EventHandlerContext Growth (audit #5)
+Adding `pipelineDeps` to the shared handler context creates a growing bag of dependencies. Acceptable for Phase 2 but should be refactored to per-handler DI before Phase 3+ adds more handlers.
+
 ## Test Infrastructure
 
 Extend `docker-compose.test.yml` with LocalStack for S3:

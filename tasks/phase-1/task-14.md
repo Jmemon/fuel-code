@@ -122,7 +122,19 @@ Uses a running server instance (started in beforeAll).
 7. Assert: queue is empty.
 8. Assert: event is in Postgres.
 
-**Test 10: emit wall-clock time with dead backend**:
+**Test 10: Queue drain with server reconnection (full offline path)**:
+1. Start the server + consumer. Verify health endpoint.
+2. Stop the server (simulate backend going down).
+3. Run `fuel-code emit session.start --data '...'` (should fail HTTP, fall back to queue).
+4. Assert: event file exists in `~/.fuel-code/queue/`.
+5. Restart the server + consumer.
+6. Run `fuel-code queue drain`.
+7. Assert: queue is empty (all files drained).
+8. `waitFor` event to appear in `events` table.
+9. Assert: event, session, workspace, device rows all exist in Postgres.
+10. This verifies the complete resilience path: emit → queue fallback → drain → pipeline → Postgres.
+
+**Test 11: emit wall-clock time with dead backend**:
 1. Do NOT start the server.
 2. Time `fuel-code emit session.start --data '...'`.
 3. Assert: completes in < 3000ms (2s timeout + overhead).
@@ -158,14 +170,15 @@ echo "=== All checks passed ==="
 
 ## Success Criteria
 1. All 7 server integration tests pass.
-2. All 3 CLI integration tests pass.
+2. All 4 CLI integration tests pass.
 3. Test 1 verifies the complete pipeline: POST → Redis → Processor → Postgres with all tables populated correctly.
 4. Test 2 verifies session lifecycle: detected → ended.
 5. Test 3 verifies deduplication: same ULID produces exactly one row.
 6. Test 5 verifies payload validation: invalid data is rejected before reaching Redis.
 7. Test 9 verifies the offline fallback: emit → queue → drain → Postgres.
-8. Test 10 proves wall-clock time < 3 seconds with dead backend.
-9. Tests are isolated: running twice produces the same results (cleanup between tests).
-10. `docker-compose.test.yml` starts Postgres and Redis on non-standard ports (5433, 6380) to avoid conflicts.
-11. All tests can run with `bun test packages/server/src/__tests__/e2e/ && bun test packages/cli/src/__tests__/e2e/`.
-12. The manual verification script works as a smoke test.
+8. Test 10 verifies the full resilience path: server up → server down → queue fallback → server restart → drain → Postgres.
+9. Test 11 proves wall-clock time < 3 seconds with dead backend.
+10. Tests are isolated: running twice produces the same results (cleanup between tests).
+11. `docker-compose.test.yml` starts Postgres and Redis on non-standard ports (5433, 6380) to avoid conflicts.
+12. All tests can run with `bun test packages/server/src/__tests__/e2e/ && bun test packages/cli/src/__tests__/e2e/`.
+13. The manual verification script works as a smoke test.

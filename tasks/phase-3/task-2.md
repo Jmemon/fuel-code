@@ -18,6 +18,7 @@ The current `fuel-code hooks install` only handles CC hooks (writing to `~/.clau
 fuel-code hooks install              # Install both CC hooks and git hooks
 fuel-code hooks install --cc-only    # Install only CC hooks (Phase 1 behavior)
 fuel-code hooks install --git-only   # Install only git hooks
+fuel-code hooks install --per-repo   # Install git hooks only in current repo's .git/hooks/ (safe with Husky/Lefthook)
 ```
 
 Default behavior (no flags): install both CC and git hooks. This is the recommended path for new users.
@@ -38,6 +39,7 @@ interface GitHookInstallResult {
 async function installGitHooks(options?: {
   force?: boolean;               // overwrite without chaining
   hooksDir?: string;             // override for testing
+  perRepo?: boolean;             // install to current repo's .git/hooks/ instead of global
 }): Promise<GitHookInstallResult>
 ```
 
@@ -53,6 +55,33 @@ Algorithm:
    - If empty/unset: no existing hooks to chain. Proceed.
    - If set to `~/.fuel-code/git-hooks/`: already installed. Check if hook files are current (compare content). Update if needed. Return early.
    - If set to another path: hooks exist. Proceed to backup and chain.
+3b. **Detect competing hook managers** (audit #3 safety check):
+   Before overriding core.hooksPath, check for known hook management tools:
+   ```typescript
+   // Check for Husky (repo-level core.hooksPath via .husky/)
+   const huskyCheck = execSync('git config --local core.hooksPath 2>/dev/null || true', { encoding: 'utf8' }).trim();
+
+   // Check for Lefthook
+   const hasLefthook = fs.existsSync(path.join(process.cwd(), 'lefthook.yml')) ||
+                       fs.existsSync(path.join(process.cwd(), '.lefthook.yml'));
+
+   // Check for pre-commit (Python)
+   const hasPreCommit = fs.existsSync(path.join(process.cwd(), '.pre-commit-config.yaml'));
+   ```
+
+   If any are detected AND not using `--force`:
+   - Print a clear warning:
+     ```
+     ⚠ Detected hook manager: Husky (core.hooksPath set to .husky/ in this repo)
+
+     Setting global core.hooksPath will override Husky's hooks for ALL repos,
+     silently disabling pre-commit checks, linting, and formatting hooks.
+
+     Options:
+       1. Run with --force to override (fuel-code will chain existing hooks)
+       2. Use --per-repo to install hooks only in the current repo's .git/hooks/
+     ```
+   - Exit with code 1 (do NOT silently override).
 4. **Backup existing hooks** (if `core.hooksPath` was set to another dir):
    - Create backup dir: `~/.fuel-code/git-hooks-backup/<ISO-timestamp>/`
    - Copy all files from existing hooks path to backup dir.
@@ -82,6 +111,18 @@ Algorithm:
    All git repos on this machine will now report activity.
    To opt out a specific repo: create .fuel-code/config.yaml with git_enabled: false
    ```
+
+### Per-Repo Installation Mode (--per-repo)
+
+When `--per-repo` is specified:
+1. Must be run inside a git repository. If not: error "Not in a git repo."
+2. Target directory: `.git/hooks/` in the current repo.
+3. Does NOT modify global core.hooksPath.
+4. Backs up existing .git/hooks/ scripts as `<hook-name>.user`.
+5. Writes fuel-code hook scripts to `.git/hooks/`.
+6. Only affects the current repository.
+7. Safe to use alongside Husky, Lefthook, and pre-commit.
+8. Downside: must be run per-repo (no automatic tracking of new repos).
 
 ### Extending `fuel-code hooks status`
 
@@ -166,6 +207,10 @@ All tests use a temp HOME directory to avoid modifying the real system.
 11. `hooks install` (no flags): installs both CC and git hooks.
 12. Install when git is not available: errors clearly.
 13. Install when fuel-code not initialized: errors "Run fuel-code init first."
+14. Install with Husky detected (repo-level core.hooksPath): prints warning and exits 1 (does not override).
+15. Install with --force when Husky detected: proceeds with installation (overrides with chaining).
+16. Install with --per-repo: writes hooks to .git/hooks/, does NOT modify global core.hooksPath.
+17. Install with --per-repo outside a git repo: errors "Not in a git repo."
 
 **`packages/cli/src/lib/__tests__/git-hook-installer.test.ts`**:
 
@@ -198,3 +243,6 @@ Unit tests for the installer logic:
 13. Error message when git is not installed.
 14. Error message when fuel-code not initialized (`~/.fuel-code/` doesn't exist).
 15. `workspace_devices.git_hooks_installed` updated (best-effort, not required for success).
+16. Competing hook managers (Husky, Lefthook, pre-commit) are detected before installation.
+17. If competing manager detected, installation aborts with clear warning unless --force used.
+18. `--per-repo` installs hooks to `.git/hooks/` without modifying global core.hooksPath.

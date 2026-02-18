@@ -88,8 +88,12 @@ if (result.stoppedEarly) {
 
 ### backfill: Transcript Parsing Progress
 
+> **Note:** Backfill is a one-time operation that becomes inert after initial run. Exclude backfill from progress indicator scope. Focus progress integration on `drain`, `remote up`, and `archival` which are recurring operations. The example below is retained for reference only — do not implement progress for backfill.
+
 ```typescript
 // packages/cli/src/commands/backfill.ts
+// NOT in scope for progress integration — backfill is a one-time operation.
+// Retained for reference only.
 
 const progress = createProgressReporter();
 const sessions = await getSessionsNeedingBackfill();

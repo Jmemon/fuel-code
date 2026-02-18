@@ -63,6 +63,9 @@ export interface Ec2Operations {
   // Add SSH ingress rule (TCP port 22 from ip/32). Idempotent — ignores duplicate.
   authorizeIngress(sgId: string, ip: string): Promise<void>;
 
+  // Add a generic ingress rule for any port/CIDR. Idempotent — ignores duplicate.
+  authorizeSecurityGroupIngress(params: { groupId: string; port: number; cidr: string }): Promise<void>;
+
   // Remove SSH ingress rule. Idempotent — ignores missing rule.
   revokeIngress(sgId: string, ip: string): Promise<void>;
 
@@ -98,7 +101,7 @@ Key implementation details:
 - **Retry logic**: `ThrottlingException`, `RequestLimitExceeded`, `InternalError` → retry with exponential backoff (1s, 2s, 4s). Max 3 retries.
 - **Error mapping**: All AWS errors are caught and re-thrown as `AwsError extends FuelCodeError` with the original error as `cause`.
 - **Logging**: debug level for API calls, info level for results, error level for failures.
-- **AMI lookup**: `DescribeImages` with filters `owner-alias=amazon`, `name=al2023-ami-*-x86_64`, sort by creation date, take latest. Cache result in-memory for 24 hours.
+- **AMI lookup**: `DescribeImages` with filters `owner-alias=amazon`, `name=al2023-ami-*-x86_64`, sort by creation date, take latest. Cache result in-memory for 24 hours. AMI cache TTL is configurable via `ami_cache_ttl_ms` config option with a default of 24 hours.
 - **Security group**: Name `fuel-code-remote`, description `SSH access for fuel-code remote dev environments`, tagged `fuel-code:managed=true`.
 - **waitForRunning**: Poll every 5 seconds. Throw `TimeoutError` if not running within timeout.
 

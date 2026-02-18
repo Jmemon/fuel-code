@@ -76,13 +76,27 @@ async function runSessionPipeline(
 
 8. **Upload parsed backup to S3** (best-effort): `s3.upload(buildParsedBackupKey(...), JSON.stringify(parseResult), "application/json")`. Log and ignore errors.
 
-**Concurrency semaphore**: Use a simple in-memory counter limiting concurrent active pipelines to 3. This prevents a burst of session.end events from overwhelming Postgres/S3/Anthropic.
+9. **Summary retry gap (audit #9)**: If summary generation fails (e.g., Anthropic rate-limit during a burst of session.end events), the session stays at `parsed` permanently without a summary. Neither reparse nor any periodic job fills this gap. **Mitigation**: Add a periodic job (or extend the reparse endpoint in Task 10) that finds sessions with `lifecycle = 'parsed'` and `summary IS NULL` and `updated_at < now() - interval '10 minutes'`, then re-attempts summary generation only (no re-parse). This should be a lightweight background sweep, not a full pipeline re-run.
+
+**Concurrency queue**: Use a bounded async work queue limiting concurrent active pipelines to 3. IMPORTANT: Do NOT use a blocking semaphore — if `acquire()` blocks inside the Redis consumer's event handler, it stalls ALL event processing (git events, session.start, everything), not just session.end events. Instead: the handler enqueues the session ID (fire-and-forget, returns immediately), and a separate worker loop consumes from the queue with a concurrency limit of 3. If the queue overflows (>50 pending), log a warning and drop — the recovery mechanism (Task 10) catches missed sessions on next startup.
 
 ```typescript
-// Semaphore for limiting concurrent pipeline executions
-function createPipelineSemaphore(maxConcurrent: number): {
-  acquire(): Promise<void>;
-  release(): void;
+// Bounded async work queue for pipeline executions.
+// IMPORTANT: Do NOT use a blocking semaphore — if acquire() blocks inside
+// the Redis consumer's event handler, ALL event processing stalls (not just
+// session.end events). Instead, use fire-and-forget with a bounded queue:
+// the handler pushes to the queue, and a separate worker loop consumes
+// from it with concurrency limiting.
+function createPipelineQueue(maxConcurrent: number): {
+  // Enqueue a pipeline run. Returns immediately. If the queue is full
+  // (> 50 pending), logs a warning and drops (recovery mechanism catches it later).
+  enqueue(sessionId: string): void;
+  // Start the worker loop that processes enqueued items.
+  start(deps: PipelineDeps): void;
+  // Gracefully stop: finish in-flight pipelines, discard pending.
+  stop(): Promise<void>;
+  // Current queue depth (for monitoring).
+  depth(): number;
 }
 ```
 
@@ -127,6 +141,12 @@ async function handleSessionEnd(ctx: EventHandlerContext): Promise<void> {
 **Modify `packages/core/src/event-processor.ts`**: Extend `EventHandlerContext` to include pipeline dependencies:
 
 ```typescript
+// NOTE (audit #5): Adding pipelineDeps to EventHandlerContext means every handler
+// receives S3 clients, summary config, etc. — even handlers that don't use them.
+// This is the "growing context bag" anti-pattern. Consider migrating to per-handler
+// dependency injection via the registry in a future refactor:
+//   registry.register("session.end", handleSessionEnd, { pipelineDeps })
+// For now this is acceptable — Phase 1+2 have only 2-3 handlers.
 interface EventHandlerContext {
   sql: postgres.Sql;
   event: Event;
@@ -159,6 +179,7 @@ interface EventHandlerContext {
 8. Empty transcript (0 messages): session advances to `parsed` with zero stats.
 9. Batch insert handles 1000+ messages without hitting Postgres param limits.
 10. Semaphore limits concurrent executions (verify with mock delays).
+11. Periodic summary retry: session stuck at `parsed` without summary for >10 min is found and summary is re-attempted.
 
 ## Relevant Files
 - `packages/core/src/session-pipeline.ts` (create)

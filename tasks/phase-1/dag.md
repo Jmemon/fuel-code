@@ -86,3 +86,24 @@ Task 1 → Task 2 → Task 3 → Task 7 → Task 9 → Task 11 → Task 14
 3. **Error hierarchy**: All packages use FuelCodeError subclasses (ConfigError, NetworkError, ValidationError, StorageError) for structured error handling.
 4. **Atomic writes**: Queue files use write-to-tmp-then-rename pattern to prevent corruption.
 5. **Hook architecture**: Bash wrapper → TS helper script → fuel-code emit. All parsing happens in TypeScript, not bash.
+
+## Known Limitations and Early Validations
+
+### TEXT Primary Keys (audit #11)
+ULIDs are stored as TEXT in Postgres. At 100K+ events, string comparisons for foreign key joins will be measurably slower than binary UUID storage. This is a known tradeoff — acceptable for V1, but expensive to migrate later. All tables and indexes use this pattern.
+
+### Database Connection Pool Sizing (audit #12)
+postgres.js defaults to 10 connections. The event processor, API endpoints, and consumer all share the same pool. Under load, connection starvation is possible. No query timeout is configured. For Phase 1 this is acceptable (single-user, low concurrency), but should be addressed before production scale. Consider: explicit pool sizing (e.g., `max: 20`), query timeouts (e.g., `idle_timeout: 30, connect_timeout: 10`), and separate pools for the consumer vs API if contention arises.
+
+### Bun + Ink Compatibility (audit #13)
+Phase 4's TUI depends on Ink (React for terminals). Ink relies on Node.js's TTY stream handling internals. Bun's compatibility is good but not perfect — edge cases around raw mode, cursor positioning, and stdin handling can break Ink components. **Recommendation**: Add a minimal Ink smoke test to Phase 1 (or early Phase 4) that verifies basic rendering under bun, gating Phase 4's viability early.
+
+### WebSocket Auth via Query Parameter (audit #14)
+Phase 4's `wss://<backend>/api/ws?token=<api_key>` puts the key in the URL. This appears in server access logs, proxy logs, and error reporting. For single-user this is acceptable, but worth noting. Standard practice would be to authenticate via the first message after connection or a short-lived upgrade token.
+
+### Performance Criteria (audit #8)
+No phase specifies performance targets. Recommended baselines for future validation:
+- Hook-to-Postgres latency: <5s
+- Max transcript size without timeout: 144MB (observed max)
+- Max concurrent WebSocket connections: 50+
+- Queue drain should keep pace with ingestion rate under normal load

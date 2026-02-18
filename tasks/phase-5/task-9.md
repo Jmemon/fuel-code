@@ -64,7 +64,13 @@ runLifecycleCheck():
 2. For each environment:
 
    a. PROVISIONING TIMEOUT:
-      If status = 'provisioning' and now() - provisioned_at > 10 minutes:
+      // NOTE (audit #7): Originally 10 minutes, increased to 20 minutes.
+      // Cold pulls of large Docker images + repo clones with heavy deps
+      // (bun install, npm install) can legitimately take 15-20 minutes.
+      // A 10-minute timeout kills legitimate provisioning and frustrates users.
+      // Future improvement: have user-data script emit progress heartbeats
+      // that reset the timeout, allowing shorter timeouts for truly stuck instances.
+      If status = 'provisioning' and now() - provisioned_at > 20 minutes:
         → Set status to 'error' with reason 'provision-timeout'
         → Call terminateRemoteEnv(id, 'provision-timeout')
         → Log at warn level
@@ -175,8 +181,8 @@ process.on('SIGTERM', async () => {
 6. Environment that was idle, then got a session.start → back to `active` (tested via DB state, not the enforcer itself — enforcer just skips it).
 
 **Provisioning timeout tests:**
-7. Environment stuck in `provisioning` for >10 minutes → set to `error`, terminated with reason `provision-timeout`.
-8. Environment in `provisioning` for <10 minutes → not touched.
+7. Environment stuck in `provisioning` for >20 minutes → set to `error`, terminated with reason `provision-timeout`.
+8. Environment in `provisioning` for <20 minutes → not touched.
 
 **Orphan tests:**
 9. AWS instance tagged as fuel-code-managed, no DB record → terminated via EC2.
@@ -199,7 +205,7 @@ process.on('SIGTERM', async () => {
 
 1. TTL termination: environments older than `ttl_minutes` from provisioning are terminated.
 2. Idle detection uses two steps: first → `idle` (warning), next cycle → terminate.
-3. Provisioning timeout: environments stuck in `provisioning` for >10 min are marked `error`.
+3. Provisioning timeout: environments stuck in `provisioning` for >20 min are marked `error`.
 4. Orphan detection cross-references AWS instances with DB records and cleans up discrepancies.
 5. Each check is resilient: one failed termination does not block others.
 6. `runLifecycleCheck()` and `runOrphanSweep()` enable deterministic testing.

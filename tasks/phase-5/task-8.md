@@ -279,6 +279,10 @@ router.post('/', async (req, res) => {
 14. `terminateRemoteEnv` handles missing instance_id gracefully (env never fully launched).
 15. Orchestrator does not block the API response (fire-and-forget pattern).
 
+### Known Limitations
+
+- Provisioning orchestration is in-memory. A server restart loses in-progress provisioning operations. The lifecycle enforcer's provisioning timeout (20 min) handles cleanup of orphaned resources.
+
 ### Success Criteria
 
 1. Orchestrator executes all provisioning steps in sequence.

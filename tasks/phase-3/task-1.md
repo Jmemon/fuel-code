@@ -97,7 +97,10 @@ if [ -x "$USER_HOOK" ]; then
 fi
 
 # Check if fuel-code is available
-command -v fuel-code >/dev/null 2>&1 || exit 0
+if ! command -v fuel-code >/dev/null 2>&1; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [post-commit] fuel-code binary not found in PATH" >> ~/.fuel-code/hook-errors.log 2>/dev/null
+  exit 0
+fi
 
 # Per-repo opt-out
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
@@ -165,7 +168,9 @@ FILE_LIST+="]"
   "file_list": $FILE_LIST
 }
 FUELCODE_EOF
-) >/dev/null 2>&1 &
+) 2>&1 | while read -r line; do
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [post-commit] $line" >> ~/.fuel-code/hook-errors.log 2>/dev/null
+done &
 
 exit 0
 ```
@@ -186,7 +191,10 @@ if [ -x "$USER_HOOK" ]; then
   "$USER_HOOK" "$@" || true
 fi
 
-command -v fuel-code >/dev/null 2>&1 || exit 0
+if ! command -v fuel-code >/dev/null 2>&1; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [post-checkout] fuel-code binary not found in PATH" >> ~/.fuel-code/hook-errors.log 2>/dev/null
+  exit 0
+fi
 
 # Only track branch checkouts, not file checkouts
 if [ "${3:-0}" != "1" ]; then
@@ -228,7 +236,9 @@ TO_BRANCH_JSON="null"
   "to_branch": $TO_BRANCH_JSON
 }
 FUELCODE_EOF
-) >/dev/null 2>&1 &
+) 2>&1 | while read -r line; do
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [post-checkout] $line" >> ~/.fuel-code/hook-errors.log 2>/dev/null
+done &
 
 exit 0
 ```
@@ -247,7 +257,10 @@ if [ -x "$USER_HOOK" ]; then
   "$USER_HOOK" "$@" || true
 fi
 
-command -v fuel-code >/dev/null 2>&1 || exit 0
+if ! command -v fuel-code >/dev/null 2>&1; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [post-merge] fuel-code binary not found in PATH" >> ~/.fuel-code/hook-errors.log 2>/dev/null
+  exit 0
+fi
 
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 if [ -n "$REPO_ROOT" ] && [ -f "$REPO_ROOT/.fuel-code/config.yaml" ]; then
@@ -309,7 +322,9 @@ fi
   "had_conflicts": $HAD_CONFLICTS
 }
 FUELCODE_EOF
-) >/dev/null 2>&1 &
+) 2>&1 | while read -r line; do
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [post-merge] $line" >> ~/.fuel-code/hook-errors.log 2>/dev/null
+done &
 
 exit 0
 ```
@@ -343,7 +358,10 @@ if [ -x "$USER_HOOK" ]; then
   fi
 fi
 
-command -v fuel-code >/dev/null 2>&1 || exit 0
+if ! command -v fuel-code >/dev/null 2>&1; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [pre-push] fuel-code binary not found in PATH" >> ~/.fuel-code/hook-errors.log 2>/dev/null
+  exit 0
+fi
 
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 if [ -n "$REPO_ROOT" ] && [ -f "$REPO_ROOT/.fuel-code/config.yaml" ]; then
@@ -413,7 +431,9 @@ printf '%b' "$PUSH_REFS" | while IFS=' ' read -r local_ref local_sha remote_ref 
   "commits": $COMMITS_JSON
 }
 FUELCODE_EOF
-  ) >/dev/null 2>&1 &
+  ) 2>&1 | while read -r line; do
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [pre-push] $line" >> ~/.fuel-code/hook-errors.log 2>/dev/null
+  done &
 done
 
 exit 0
@@ -498,3 +518,4 @@ Create a temp git repo and verify hook outputs:
 15. All hooks suppress stdout/stderr (`>/dev/null 2>&1`).
 16. `--data-stdin` flag works on `fuel-code emit` command.
 17. JSON payloads are valid even with special characters in commit messages.
+18. When `fuel-code emit` fails (binary missing, bun not in PATH, or command error), append timestamp + error to `~/.fuel-code/hook-errors.log`. Do not block git operations.

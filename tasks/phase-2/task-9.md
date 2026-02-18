@@ -31,6 +31,8 @@ Query parameters (all optional):
 - `tag` — filter sessions containing this tag
 - `limit` — max results, default 50, max 250. Values > 250 clamped.
 - `cursor` — opaque pagination cursor (base64-encoded `{ s: started_at, i: id }`)
+- `ended_before` — ISO-8601 timestamp, filters on `sessions.ended_at`
+- `ended_after` — ISO-8601 timestamp, filters on `sessions.ended_at`
 
 Query construction (dynamic WHERE clauses):
 ```sql
@@ -215,3 +217,4 @@ Response: `200 { session: updatedSession }`
 10. All endpoints return 404 for non-existent sessions.
 11. Auth enforced on all endpoints.
 12. Invalid cursor returns 400 with descriptive error.
+13. `GET /api/sessions` supports `ended_before` and `ended_after` query parameters filtering on `sessions.ended_at`.

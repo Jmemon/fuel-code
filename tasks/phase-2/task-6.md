@@ -141,3 +141,4 @@ function extractInitialPrompt(
 8. Rate limit (429) includes `retryAfterSeconds` from response.
 9. Timeout is 30 seconds.
 10. `extractInitialPrompt` returns the first user message text (first 1000 chars, truncated).
+11. Server requires `ANTHROPIC_API_KEY` environment variable. Startup fails with clear error if missing. Added to Railway environment variable list.

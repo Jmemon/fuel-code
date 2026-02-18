@@ -41,7 +41,7 @@ Flow:
 4. If lifecycle is `detected` or `capturing`: the session hasn't ended yet. But we can still accept the upload (it may arrive before the session.end event). Store the file and set the s3_key. The pipeline will trigger when session.end fires and sees the s3_key.
 5. Get workspace canonical ID: `SELECT canonical_id FROM workspaces WHERE id = $workspaceId`.
 6. Build S3 key: `buildTranscriptKey(canonicalId, sessionId)`.
-7. Read request body as a stream. Upload to S3: `s3.upload(key, body, "application/x-ndjson")`.
+7. Pipe request stream directly to S3 using `@aws-sdk/lib-storage`'s `Upload` class: `new Upload({ client: s3Client, params: { Bucket, Key: key, Body: req, ContentType: 'application/x-ndjson' } })`. This handles multipart upload for large files automatically and never buffers the full body in memory.
 8. Update session: `UPDATE sessions SET transcript_s3_key = $1, updated_at = now() WHERE id = $2`.
 9. If session lifecycle is `ended` (session.end already processed): trigger pipeline asynchronously.
    ```typescript
@@ -51,14 +51,15 @@ Flow:
    ```
 10. Return `202 { status: "uploaded", s3_key: key, size_bytes: size, pipeline_triggered: lifecycle === "ended" }`.
 
-**Request size limit**: Configure Express body parser for this route to accept up to 200MB (transcripts can be very large). Use streaming — do NOT buffer the entire body in memory.
+**Request size limit**: This route must handle transcripts up to 200MB. Do NOT use `express.raw()` or any body-parsing middleware — `express.raw()` buffers the entire request body into a `Buffer` in memory, which will OOM Railway's constrained containers on concurrent uploads. Instead, skip all body parsing middleware for this route and pipe `req` (the `IncomingMessage` stream) directly to S3 using `@aws-sdk/lib-storage`'s `Upload` class (which handles multipart upload automatically for large files). The route handler receives the raw Node.js request stream and pipes it to S3 without buffering.
 
 ```typescript
-// Use raw body parser with high limit, stream directly to S3
-app.post("/api/sessions/:id/transcript/upload",
-  express.raw({ type: "application/octet-stream", limit: "200mb" }),
-  handler
-);
+// IMPORTANT: Do NOT use express.raw() — it buffers the entire body in memory.
+// For 200MB transcripts on Railway's constrained containers, this will OOM.
+// Instead, pipe req directly to S3 using @aws-sdk/lib-storage's Upload class.
+app.post("/api/sessions/:id/transcript/upload", handler);
+// The handler reads from req (IncomingMessage stream) directly.
+// No body-parsing middleware on this route.
 ```
 
 **Mount** in `packages/server/src/app.ts`.

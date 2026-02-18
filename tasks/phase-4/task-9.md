@@ -284,7 +284,7 @@ For sessions with `lifecycle === 'capturing'`:
 1. **WS subscription**: Subscribe to `session_id` via `wsClient.subscribe({ session_id: sessionId })` on mount. Unsubscribe on unmount.
 2. **`session.update` messages**: Update the session header in real-time — refresh `lifecycle`, `summary`, `stats` (tokens, cost, duration).
 3. **Elapsed time counter**: For capturing sessions, the Duration field in the header increments every second using a `setInterval`. Shows live elapsed time: "12m", "13m", etc.
-4. **Transcript refresh for live sessions**: Since WS does not stream individual transcript messages (that would require deep integration with the CC hook), poll `apiClient.getSessionTranscript(sessionId)` every 5 seconds for live sessions to pick up new messages. If new messages arrive, append them. If user is scrolled to bottom, auto-scroll.
+4. **Transcript for live sessions**: For active sessions, show a "Session in progress — transcript available after session ends" placeholder. Do not poll for transcript updates during active sessions (transcripts only upload to S3 when the session ends). Polling is only used for completed sessions.
 
 On unmount (navigating back): unsubscribe from the session_id WS channel and clear all intervals.
 
@@ -292,7 +292,7 @@ On unmount (navigating back): unsubscribe from the session_id WS channel and cle
 
 ```typescript
 // Fetches all session detail data in parallel on mount.
-// For live sessions, subscribes via WS and polls transcript.
+// For live sessions, subscribes via WS for header updates (no transcript polling).
 // Returns all data + loading/error state.
 
 export function useSessionDetail(
@@ -313,7 +313,7 @@ export function useSessionDetail(
 
 Implementation:
 1. On mount: `Promise.all([getSession, getTranscript, getSessionGit])`. Set state on resolve.
-2. If session is live: subscribe to `session_id` on WS. Set up 5-second transcript polling interval.
+2. If session is live: subscribe to `session_id` on WS. Do not poll for transcript (transcripts only upload to S3 when the session ends).
 3. On `session.update` WS message matching this session: update `session` state fields.
 4. `fetchEvents()`: called when user switches to events tab for the first time. Fetches `getSessionEvents(sessionId)`.
 5. On unmount: unsubscribe from WS, clear intervals.
@@ -466,7 +466,7 @@ Mock `ApiClient` returns canned session, transcript, and git data. Mock `WsClien
 20. Live (capturing) sessions: subscribe to `session_id` via WsClient on mount, unsubscribe on unmount.
 21. Live sessions: WS `session.update` updates header fields (lifecycle, summary, stats) in real-time.
 22. Live sessions: elapsed time counter in Duration field increments every second.
-23. Live sessions: transcript polls every 5 seconds for new messages; auto-scrolls if user is at bottom.
+23. Live sessions: transcript shows "Session in progress — transcript available after session ends" placeholder instead of polling (transcripts only upload to S3 when the session ends).
 24. Empty states handled: no transcript → "Transcript not yet available (status: <lifecycle>)"; no git → "No git activity"; no tools → "No tool usage recorded"; no files → "No files modified".
 25. Loading state shows spinner while initial data loads.
 26. API errors display an error message within the view (no unhandled crash).

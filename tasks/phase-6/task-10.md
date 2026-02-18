@@ -109,12 +109,14 @@ async function remoteUp(shutdownManager: ShutdownManager) {
 // packages/cli/src/commands/drain.ts
 
 async function drain(shutdownManager: ShutdownManager) {
+  // NOTE: Acquire the lock BEFORE pushing cleanup, so we don't release
+  // a lock we never acquired if Ctrl-C fires between push and acquire.
+  await acquireDrainLock();
+
   const lockDispose = shutdownManager.push({
     label: 'Release drain lock',
     fn: async () => { await releaseDrainLock(); },
   });
-
-  await acquireDrainLock();
 
   try {
     await drainWithBackoff(apiClient, queue, logger);

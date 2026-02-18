@@ -17,6 +17,9 @@ The `archived` state already exists in the session lifecycle CHECK constraint (f
 
 import type postgres from 'postgres';
 import type pino from 'pino';
+// NOTE: The S3 client (Phase 2 Task 3) must export an `S3Operations` interface
+// that the `FuelCodeS3Client` class implements. Import as `S3Operations` for
+// type references and testability.
 import type { S3Operations } from '../aws/s3-client.js';
 
 export interface ArchivalEngineDeps {

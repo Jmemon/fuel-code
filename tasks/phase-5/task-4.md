@@ -40,13 +40,37 @@ export class SshKeyManager {
 
   // Download private key from S3. Returns the key string.
   // Called by the SSH key download API endpoint.
-  async downloadPrivateKey(remoteEnvId: string): Promise<string>;
+  //
+  // IMPORTANT (audit #6): The original design marked keys as consumed (410 Gone)
+  // after first download. If the download fails mid-transfer, the user loses
+  // the key permanently. Instead: allow downloads within a 5-minute window
+  // after first access. Track first_accessed_at on the remote_envs record.
+  // After 5 minutes from first access, return 410 Gone.
+  // This gives retry safety for network blips without leaving keys
+  // accessible indefinitely.
+  async downloadPrivateKey(remoteEnvId: string): Promise<{ key: string; firstAccess: boolean }>;
 
   // Delete both keys from S3. Called on environment termination.
   // Idempotent — does not throw if keys are already deleted.
   async deleteKeyPair(remoteEnvId: string): Promise<void>;
 }
 ```
+
+### SSH Key Download Window (audit #6 fix)
+
+Instead of one-time download (410 Gone on second request), use a 5-minute download window:
+
+1. On first download request:
+   - Set `remote_envs.ssh_key_first_accessed_at = now()` if not already set.
+   - Return the private key.
+2. On subsequent download requests:
+   - If `now() - ssh_key_first_accessed_at < 5 minutes`: return the key again (retry safety).
+   - If `now() - ssh_key_first_accessed_at >= 5 minutes`: return 410 Gone.
+3. On environment termination: delete keys from S3 regardless of download state.
+
+This handles the case where a download fails mid-transfer due to a network blip — the user can retry within 5 minutes without having to terminate and re-provision the entire environment.
+
+The `remote_envs` table needs a new column: `ssh_key_first_accessed_at TIMESTAMPTZ DEFAULT NULL`.
 
 ### Key Generation Details
 
@@ -111,6 +135,9 @@ Both uploaded with `ServerSideEncryption: 'AES256'` and `ContentType: 'text/plai
 11. `deleteKeyPair` deletes both keys from S3.
 12. `deleteKeyPair` is idempotent — does not throw on missing keys (S3 DeleteObject is already idempotent).
 13. S3 client methods are called with correct bucket, key, and options.
+14. `downloadPrivateKey` sets first_accessed_at on first download.
+15. `downloadPrivateKey` allows re-download within 5-minute window.
+16. `downloadPrivateKey` returns 410-equivalent after 5-minute window expires.
 
 ### Success Criteria
 
@@ -122,3 +149,5 @@ Both uploaded with `ServerSideEncryption: 'AES256'` and `ContentType: 'text/plai
 6. Temporary files use unique names (remoteEnvId + timestamp) to avoid conflicts.
 7. Key comment includes the remote env ID for identification.
 8. Uses existing S3 client — no new S3 dependency needed.
+9. SSH key download allows retries within a 5-minute window after first access.
+10. After 5-minute window, subsequent downloads are rejected.

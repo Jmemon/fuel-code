@@ -41,7 +41,9 @@ For each AWS instance tagged fuel-code:managed=true:
 
   CHECK 5: No active session on matching device_id
     → If DB record exists, get device_id from remote_env.
-    → Check sessions table for lifecycle='capturing' on that device_id.
+    → Check sessions table for lifecycle IN ('detected', 'capturing') on that device_id.
+    → NOTE: The `detected` state (SessionStart fired, not yet capturing) is also active.
+      Without including it, an env in `detected` state could be falsely terminated.
     → If an active session exists → NOT an orphan (actively in use).
 
   ALL FIVE checks pass → classify as orphan, terminate.

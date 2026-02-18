@@ -55,7 +55,7 @@ Implementation:
 3. Call `apiClient.terminateRemoteEnv(id, 'manual')`.
 4. Poll `GET /api/remote/:id` until status is `terminated` (or timeout).
 5. Print "Terminated. EC2 instance shutting down."
-6. Clean up local SSH key: delete `~/.fuel-code/ssh-keys/{id}/`.
+6. On `remote down`, delete the local SSH key directory at `~/.fuel-code/ssh-keys/{env-id}/` for the terminated environment.
 
 Options:
 - `--force` → skips confirmation prompt.

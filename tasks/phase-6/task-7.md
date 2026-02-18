@@ -19,6 +19,30 @@ drain():
   5. If any event has _attempts >= 100 → move to dead-letter
 ```
 
+### IMPORTANT: Server API Prerequisite (audit #2)
+
+This task requires the server's `POST /api/events/ingest` to return per-event results:
+```json
+{ "results": [{ "index": 0, "status": "accepted" }, { "index": 1, "status": "rejected", "error": "validation failed" }] }
+```
+
+Phase 1's endpoint currently returns `{ ingested: number, duplicates: number }`. This is a **breaking change** that must be addressed before this task can be implemented.
+
+**Resolution**: Modify Phase 1's ingest endpoint to return BOTH formats for backward compatibility:
+```json
+{
+  "ingested": 3,
+  "duplicates": 0,
+  "results": [
+    { "index": 0, "status": "accepted" },
+    { "index": 1, "status": "accepted" },
+    { "index": 2, "status": "accepted" }
+  ]
+}
+```
+
+Phase 1 callers continue using `ingested` count. Phase 6 callers use the `results` array. This should be done as part of Phase 1 Task 8 (ingest endpoint) or as a Phase 6 prerequisite step within this task.
+
 ### New Behavior (Phase 6)
 
 ```

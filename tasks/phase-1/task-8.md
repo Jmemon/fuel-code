@@ -31,11 +31,17 @@ Processing flow:
      "ingested": <number of successfully published>,
      "duplicates": 0,
      "rejected": <number rejected>,
+     "results": [
+       { "index": 0, "status": "accepted" },
+       { "index": 1, "status": "accepted" },
+       { "index": 2, "status": "duplicate" }
+     ],
      "errors": [
        { "index": 2, "error": "session.start payload validation failed: missing field 'cwd'" }
      ]
    }
    ```
+   - The `results` array provides per-event status for callers that need it (e.g., Phase 6 queue drain robustness). Existing callers can continue using `ingested`/`duplicates` counts.
    - `duplicates` is always 0 at this layer. Dedup happens downstream at Postgres INSERT (ON CONFLICT DO NOTHING). The response is optimistic.
 
 Mount the route on the Express app in `packages/server/src/app.ts`.
@@ -91,3 +97,4 @@ Use the `createApp()` from Task 6 with a test Redis and supertest (or direct fet
 10. After successful ingest, `XLEN events:incoming` shows the events in the stream.
 11. Mixed batch (2 valid + 1 invalid payload) returns 202 with `ingested: 2, rejected: 1`.
 12. `duplicates` field is always 0 at this layer (dedup is downstream).
+13. Response includes `results` array with per-event `{ index, status }` entries (status: `"accepted"`, `"rejected"`, or `"duplicate"`). The `results` array provides per-event status for callers that need it (e.g., Phase 6 queue drain robustness). Existing callers can continue using `ingested`/`duplicates` counts.

@@ -416,4 +416,5 @@ All tests use mock `ApiClient` and `WsClient` instances that return canned data.
 22. API errors show `ErrorBanner` with a user-friendly message (no React error boundary crash).
 23. Loading state shows `Spinner` while initial data is being fetched.
 24. Dynamic import of TUI module ensures `ink`/`react` are not loaded for non-TUI commands (e.g., `fuel-code sessions`).
-25. All tests pass (`bun test`).
+25. `useWsConnection` hook must return a cleanup function in `useEffect` that calls `.off()` for all registered listeners, and `.destroy()` on unmount. Ink components can re-render rapidly — listener leaks must be prevented.
+26. All tests pass (`bun test`).

@@ -97,6 +97,7 @@ Task 1 → Task 6 → Task 10 → Task 14
 - Task 8 → Task 13 (archival engine needed by archival CLI/API)
 - Task 12 → Task 13 (progress integration provides utilities archival CLI uses)
 - Tasks 5, 6, 7, 8, 9, 10, 11, 12, 13 → Task 14 (E2E tests verify everything)
+- **Cross-phase**: Task 7 requires modification to Phase 1's `POST /api/events/ingest` response format (audit #2). The endpoint must return per-event `results` array in addition to aggregate counts. This should be retrofitted into Phase 1 or done as a Phase 6 prerequisite.
 
 ## Key Design Decisions
 
@@ -139,6 +140,12 @@ The cost map covers ~20 common instance types with approximate US East on-demand
 ### 10. Progress Indicators Adapt to Terminal Context
 
 `createProgressReporter()` checks `process.stdout.isTTY` and `--json` to choose output strategy: spinner+elapsed for TTY, timestamped lines for piped, no output for `--json`. Used by provisioning, drain, backfill, and archival.
+
+### 11. `_unassociated` Workspace Management (audit #15)
+Sessions in the `_unassociated` workspace (canonical_id unknown at capture time) have no mechanism to be retrospectively assigned to a workspace. A future enhancement should allow `PATCH /api/sessions/:id` to accept a `workspace_id` change, moving sessions out of `_unassociated` when the user identifies which workspace they belong to.
+
+### 12. Archived → Summarized Backward Transition (audit #16)
+Phase 6 Task 13 introduces `archived → summarized` restoration, which is a backward lifecycle transition. All consumers that assume sessions only move forward (TUI lifecycle badges, query filters, future analysis) must handle this edge case. The lifecycle state machine in `packages/core/` should explicitly document this reverse transition and its implications.
 
 ## What Already Exists (from Phases 1-5)
 

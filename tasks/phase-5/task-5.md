@@ -93,7 +93,8 @@ docker exec fuel-code-remote bash -c '
     --backend-url "$FUEL_CODE_BACKEND_URL" --api-key "$FUEL_CODE_API_KEY"
 
   # Install Claude Code
-  bun install -g @anthropic-ai/claude-code || npm install -g @anthropic-ai/claude-code || true
+  # Uses bun since the container runtime is bun-based; npm may not be available.
+  bun install -g @anthropic-ai/claude-code
 
   # Install hooks
   fuel-code hooks install

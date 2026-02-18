@@ -56,8 +56,15 @@ Git hooks are pure bash scripts (not bash wrapper → TS helper like CC hooks). 
 4. Workspace resolution (normalize git remote URL) is simple enough in bash
 5. Calls `fuel-code emit` with `&` — the emit command handles queuing/transport
 
-### Global core.hooksPath
+### Global core.hooksPath (with Safety Checks)
 `git config --global core.hooksPath ~/.fuel-code/git-hooks/` makes ALL repos tracked automatically. This is opt-out (per-repo) rather than opt-in (per-repo). Matches CORE.md.
+
+**IMPORTANT (audit #3)**: Global core.hooksPath will silently break Husky, Lefthook, and Python's pre-commit framework for ALL repos on the machine. The installer MUST detect competing hook managers before overriding:
+- If Husky detected (repo-level `core.hooksPath` set to `.husky/`): warn and abort unless `--force`
+- If Lefthook detected (`lefthook.yml` exists): warn and abort unless `--force`
+- If pre-commit detected (`.pre-commit-config.yaml` exists): warn and abort unless `--force`
+
+A `--per-repo` mode is available as a safe alternative that installs hooks to `.git/hooks/` without touching global config. Safer but requires per-repo setup.
 
 ### Hook Chaining
 If the user has existing git hooks (via a prior `core.hooksPath`), fuel-code:
