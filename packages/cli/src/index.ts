@@ -21,6 +21,8 @@ import pino from "pino";
 import { createInitCommand } from "./commands/init.js";
 import { createStatusCommand } from "./commands/status.js";
 import { createEmitCommand } from "./commands/emit.js";
+import { createQueueCommand } from "./commands/queue.js";
+import { createHooksCommand } from "./commands/hooks.js";
 
 // ---------------------------------------------------------------------------
 // Logger — structured JSON logging for debugging and error tracking
@@ -55,9 +57,11 @@ program.addCommand(createStatusCommand());
 // Register emit command (Task 10: emit events with local queue fallback)
 program.addCommand(createEmitCommand());
 
-// Future commands (Task 12, 13):
-// program.addCommand(createQueueCommand());   // Task 12: queue management
-// program.addCommand(createHooksCommand());   // Task 13: hook installation
+// Register queue management command (Task 12: queue drainer)
+program.addCommand(createQueueCommand());
+
+// Register hooks command (Task 13: Claude Code hook installation and management)
+program.addCommand(createHooksCommand());
 
 // ---------------------------------------------------------------------------
 // Global error handling
