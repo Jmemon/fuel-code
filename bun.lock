@@ -39,6 +39,9 @@
     "packages/hooks": {
       "name": "@fuel-code/hooks",
       "version": "0.1.0",
+      "dependencies": {
+        "@fuel-code/shared": "workspace:*",
+      },
     },
     "packages/server": {
       "name": "@fuel-code/server",
