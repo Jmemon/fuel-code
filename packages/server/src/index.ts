@@ -163,6 +163,24 @@ async function main(): Promise<void> {
     "Event consumer started",
   );
 
+  // --- Step 11: Delayed recovery for stuck sessions ---
+  // Wait 5 seconds after startup before scanning for stuck sessions to avoid
+  // competing with sessions that were legitimately in-flight during a restart.
+  setTimeout(async () => {
+    try {
+      const { recoverStuckSessions } = await import("@fuel-code/core");
+      const result = await recoverStuckSessions(sql, pipelineDeps);
+      if (result.found > 0) {
+        logger.info(result, "Session recovery completed on startup");
+      }
+    } catch (err) {
+      logger.error(
+        { error: err instanceof Error ? (err as Error).message : String(err) },
+        "Session recovery failed on startup",
+      );
+    }
+  }, 5000);
+
   // --- Graceful shutdown ---
   let isShuttingDown = false;
 

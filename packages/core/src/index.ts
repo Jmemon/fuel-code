@@ -75,3 +75,6 @@ export {
   type PipelineResult,
   type S3Client,
 } from "./session-pipeline.js";
+
+// Stuck session recovery: find and re-trigger stuck pipeline sessions
+export { recoverStuckSessions, type RecoveryResult } from "./session-recovery.js";

@@ -29,6 +29,7 @@ import { errorHandler } from "./middleware/error-handler.js";
 import { createHealthRouter } from "./routes/health.js";
 import { createEventsRouter } from "./routes/events.js";
 import { createTranscriptUploadRouter } from "./routes/transcript-upload.js";
+import { createSessionActionsRouter } from "./routes/session-actions.js";
 import { createSessionsRouter } from "./routes/sessions.js";
 
 /** Dependencies injected into createApp for testability */
@@ -98,6 +99,16 @@ export function createApp(deps: AppDeps): express.Express {
       logger,
     });
     app.use("/api/sessions", uploadRouter);
+  }
+
+  // --- 6c. Session actions route (reparse) ---
+  // Only mounted when pipeline deps are available (Phase 2+).
+  if (deps.pipelineDeps) {
+    app.use("/api", createSessionActionsRouter({
+      sql: deps.sql,
+      pipelineDeps: deps.pipelineDeps,
+      logger,
+    }));
   }
 
   // --- 6d. Session query/mutation routes (Task 9) ---
