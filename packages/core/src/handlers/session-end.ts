@@ -1,20 +1,23 @@
 /**
  * Handler for "session.end" events.
  *
- * When a Claude Code session terminates, this handler updates the existing
- * session row to lifecycle="ended" and fills in ended_at, end_reason, and
- * duration_ms.
+ * When a Claude Code session terminates, this handler:
+ *   1. Uses transitionSession (with optimistic locking) to move the session
+ *      from detected/capturing -> ended, setting ended_at, end_reason, duration_ms.
+ *   2. If pipelineDeps are available AND the session already has a transcript_s3_key
+ *      (backfill path), triggers the post-processing pipeline asynchronously.
  *
- * The WHERE clause restricts updates to sessions in "detected" or "capturing"
- * states — sessions that have already ended or progressed further won't be
- * regressed. If no rows are updated, a warning is logged (likely the session
- * was never started or already ended).
+ * The WHERE clause (via transitionSession) restricts updates to sessions in
+ * "detected" or "capturing" states -- sessions that have already ended or
+ * progressed further won't be regressed.
  */
 
 import type { EventHandlerContext } from "../event-processor.js";
+import { transitionSession } from "../session-lifecycle.js";
 
 /**
- * Handle a session.end event by updating the session row.
+ * Handle a session.end event by transitioning the session lifecycle and
+ * optionally triggering the post-processing pipeline.
  *
  * Extracts from event.data:
  *   - cc_session_id: identifies which session to update
@@ -31,25 +34,45 @@ export async function handleSessionEnd(ctx: EventHandlerContext): Promise<void> 
 
   logger.info({ ccSessionId, endReason, durationMs }, "Ending session");
 
-  // Update the session row — only if it's in a state that can be ended.
-  // "detected" and "capturing" are the valid pre-end states.
-  const result = await sql`
-    UPDATE sessions
-    SET lifecycle = 'ended',
-        ended_at = ${event.timestamp},
-        end_reason = ${endReason},
-        duration_ms = ${durationMs},
-        updated_at = now()
-    WHERE id = ${ccSessionId}
-      AND lifecycle IN ('detected', 'capturing')
-  `;
+  // Use transitionSession with optimistic locking instead of raw SQL.
+  // Accepts both "detected" and "capturing" as valid source states.
+  const result = await transitionSession(
+    sql,
+    ccSessionId,
+    ["detected", "capturing"],
+    "ended",
+    {
+      ended_at: event.timestamp,
+      end_reason: endReason,
+      duration_ms: durationMs,
+    },
+  );
 
-  // result.count is the number of rows affected by the UPDATE.
-  // If 0, the session either doesn't exist or was already in a terminal state.
-  if (result.count === 0) {
+  if (!result.success) {
     logger.warn(
-      { ccSessionId },
-      "No session updated — session may not exist or was already ended",
+      { ccSessionId, reason: result.reason },
+      "session.end: lifecycle transition failed",
     );
+    return;
+  }
+
+  // Phase 2: If pipeline deps are available, check if transcript_s3_key is
+  // already set (backfill path — transcript was uploaded before session ended).
+  // If so, trigger the pipeline asynchronously (fire-and-forget).
+  if (ctx.pipelineDeps) {
+    const session = await sql`
+      SELECT transcript_s3_key FROM sessions WHERE id = ${ccSessionId}
+    `;
+
+    if (session[0]?.transcript_s3_key) {
+      // Dynamic import to avoid circular dependency at module load time
+      const { runSessionPipeline } = await import("../session-pipeline.js");
+      runSessionPipeline(ctx.pipelineDeps, ccSessionId).catch((err) => {
+        logger.error(
+          { sessionId: ccSessionId, error: err instanceof Error ? err.message : String(err) },
+          "session.end: pipeline trigger failed",
+        );
+      });
+    }
   }
 }

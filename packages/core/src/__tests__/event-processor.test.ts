@@ -42,6 +42,8 @@ interface SqlCall {
  */
 function createMockSql(resultSets: (Record<string, unknown>[] & { count?: number })[]) {
   const calls: SqlCall[] = [];
+  /** Separate tracker for sql.unsafe calls */
+  const unsafeCalls: Array<{ query: string; values: unknown[] }> = [];
   let callIndex = 0;
 
   const sqlFn = (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -55,7 +57,17 @@ function createMockSql(resultSets: (Record<string, unknown>[] & { count?: number
     return Promise.resolve(result);
   };
 
-  return { sql: sqlFn as any, calls };
+  // Add sql.unsafe method for transitionSession compatibility.
+  // Uses the same callIndex counter so unsafe calls consume result sets in order.
+  sqlFn.unsafe = (query: string, values: unknown[]) => {
+    unsafeCalls.push({ query, values });
+    const idx = Math.min(callIndex, resultSets.length - 1);
+    callIndex++;
+    const result = resultSets[idx] ?? [];
+    return Promise.resolve(result);
+  };
+
+  return { sql: sqlFn as any, calls, unsafeCalls };
 }
 
 /**
@@ -315,20 +327,21 @@ describe("processEvent", () => {
     expect(calls).toHaveLength(4);
   });
 
-  test("processes session.end after start: handler updates session", async () => {
+  test("processes session.end after start: handler transitions session via transitionSession", async () => {
     const event = makeSessionEndEvent();
     const registry = createHandlerRegistry();
     const logger = createMockLogger();
 
-    // The UPDATE result needs a `.count` property to indicate rows affected
-    const updateResult = Object.assign([], { count: 1 });
+    // transitionSession uses sql.unsafe, which returns rows on success.
+    // The handler (via transitionSession) will call sql.unsafe once for the UPDATE.
+    const transitionResult = [{ lifecycle: "ended" }];
 
-    const { sql, calls } = createMockSql([
+    const { sql, calls, unsafeCalls } = createMockSql([
       [{ id: "ws-ulid-001" }],   // resolveOrCreateWorkspace
       [{ id: "device-abc" }],     // resolveOrCreateDevice
       [],                         // ensureWorkspaceDeviceLink
       [{ id: event.id }],         // INSERT event (new)
-      updateResult,               // UPDATE session (handler)
+      transitionResult,           // transitionSession sql.unsafe UPDATE
     ]);
 
     const result = await processEvent(sql, event, registry, logger);
@@ -338,18 +351,18 @@ describe("processEvent", () => {
     expect(result.handlerResults[0].type).toBe("session.end");
     expect(result.handlerResults[0].success).toBe(true);
 
-    // Verify UPDATE SQL call from handler
-    const updateCall = calls[4];
-    const queryText = updateCall.strings.join("$");
-    expect(queryText).toContain("UPDATE sessions");
-    expect(queryText).toContain("lifecycle");
-    expect(queryText).toContain("ended");
+    // Verify transitionSession called sql.unsafe with UPDATE
+    expect(unsafeCalls.length).toBeGreaterThanOrEqual(1);
+    const unsafeCall = unsafeCalls[0];
+    expect(unsafeCall.query).toContain("UPDATE sessions");
 
-    // Verify the values passed to UPDATE
-    expect(updateCall.values[0]).toBe(event.timestamp);       // ended_at
-    expect(updateCall.values[1]).toBe("exit");                 // end_reason
-    expect(updateCall.values[2]).toBe(5400000);                // duration_ms
-    expect(updateCall.values[3]).toBe("cc-sess-001");          // WHERE id
+    // Verify values: $1=newLifecycle, $2=sessionId, $3=fromStates, $4+=updates
+    expect(unsafeCall.values[0]).toBe("ended");                           // new lifecycle
+    expect(unsafeCall.values[1]).toBe("cc-sess-001");                     // session id
+    expect(unsafeCall.values[2]).toEqual(["detected", "capturing"]);      // from states
+    expect(unsafeCall.values[3]).toBe(event.timestamp);                   // ended_at
+    expect(unsafeCall.values[4]).toBe("exit");                            // end_reason
+    expect(unsafeCall.values[5]).toBe(5400000);                           // duration_ms
   });
 
   test("unknown event type: event row created, no handler error", async () => {
@@ -552,15 +565,21 @@ describe("handleSessionStart", () => {
 
 // ---------------------------------------------------------------------------
 // handleSessionEnd tests (isolated)
+//
+// NOTE: The Phase 2 handler uses transitionSession (which calls sql.unsafe)
+// instead of a raw tagged template UPDATE. The mock SQL must support .unsafe().
+// transitionSession returns success if the unsafe call returns rows (RETURNING),
+// and does a follow-up SELECT on failure to diagnose.
 // ---------------------------------------------------------------------------
 
 describe("handleSessionEnd", () => {
-  test("updates session with ended lifecycle and duration", async () => {
+  test("transitions session to ended with correct fields via transitionSession", async () => {
     const event = makeSessionEndEvent();
     const logger = createMockLogger();
 
-    const updateResult = Object.assign([], { count: 1 });
-    const { sql, calls } = createMockSql([updateResult]);
+    // transitionSession calls sql.unsafe(...) which must return a row to indicate success
+    const transitionResult = [{ lifecycle: "ended" }];
+    const { sql, unsafeCalls } = createMockSql([transitionResult]);
 
     await handleSessionEnd({
       sql,
@@ -569,29 +588,33 @@ describe("handleSessionEnd", () => {
       logger,
     });
 
-    expect(calls).toHaveLength(1);
+    // transitionSession should have called sql.unsafe once
+    expect(unsafeCalls).toHaveLength(1);
 
-    const [call] = calls;
-    // Values: ended_at, end_reason, duration_ms, session_id
-    expect(call.values[0]).toBe("2024-06-15T11:30:00.000Z"); // ended_at = event.timestamp
-    expect(call.values[1]).toBe("exit");                       // end_reason
-    expect(call.values[2]).toBe(5400000);                      // duration_ms
-    expect(call.values[3]).toBe("cc-sess-001");                // WHERE id
+    // Verify the unsafe call contains the expected UPDATE query and values
+    const call = unsafeCalls[0];
+    expect(call.query).toContain("UPDATE sessions");
+    expect(call.query).toContain("lifecycle");
 
-    // SQL should restrict to valid pre-end states
-    const queryText = call.strings.join("$");
-    expect(queryText).toContain("UPDATE sessions");
-    expect(queryText).toContain("detected");
-    expect(queryText).toContain("capturing");
+    // Values for transitionSession: [newLifecycle, sessionId, fromStates, ...updates]
+    // $1 = "ended", $2 = "cc-sess-001", $3 = ["detected", "capturing"], $4+ = updates
+    expect(call.values[0]).toBe("ended");                          // new lifecycle
+    expect(call.values[1]).toBe("cc-sess-001");                    // session id
+    expect(call.values[2]).toEqual(["detected", "capturing"]);     // from states
+    expect(call.values[3]).toBe("2024-06-15T11:30:00.000Z");      // ended_at
+    expect(call.values[4]).toBe("exit");                           // end_reason
+    expect(call.values[5]).toBe(5400000);                          // duration_ms
   });
 
-  test("logs warning when no session rows were updated", async () => {
+  test("logs warning when lifecycle transition fails", async () => {
     const event = makeSessionEndEvent();
     const logger = createMockLogger();
 
-    // count=0 means the WHERE clause matched nothing
-    const updateResult = Object.assign([], { count: 0 });
-    const { sql } = createMockSql([updateResult]);
+    // transitionSession: sql.unsafe returns empty (no rows matched) ->
+    // then it does a SELECT to diagnose. Provide the SELECT result as well.
+    const emptyTransitionResult: Record<string, unknown>[] = [];
+    const selectResult = [{ lifecycle: "ended" }]; // session already ended
+    const { sql } = createMockSql([emptyTransitionResult, selectResult]);
 
     await handleSessionEnd({
       sql,
@@ -600,16 +623,17 @@ describe("handleSessionEnd", () => {
       logger,
     });
 
-    // Should have logged a warning
+    // Should have logged a warning about the failed transition
     expect(logger.warn).toHaveBeenCalled();
   });
 
-  test("does not warn when session was successfully updated", async () => {
+  test("does not warn when transition succeeds", async () => {
     const event = makeSessionEndEvent();
     const logger = createMockLogger();
 
-    const updateResult = Object.assign([], { count: 1 });
-    const { sql } = createMockSql([updateResult]);
+    // Successful transition: sql.unsafe returns a row
+    const transitionResult = [{ lifecycle: "ended" }];
+    const { sql } = createMockSql([transitionResult]);
 
     await handleSessionEnd({
       sql,

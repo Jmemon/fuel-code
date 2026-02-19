@@ -66,3 +66,12 @@ export {
 
 // Summary config loader
 export { loadSummaryConfig } from "./summary-config.js";
+
+// Session pipeline orchestrator: post-processing after session ends
+export {
+  runSessionPipeline,
+  createPipelineQueue,
+  type PipelineDeps,
+  type PipelineResult,
+  type S3Client,
+} from "./session-pipeline.js";

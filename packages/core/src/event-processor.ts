@@ -21,6 +21,7 @@ import type { Event, EventType } from "@fuel-code/shared";
 import { resolveOrCreateWorkspace } from "./workspace-resolver.js";
 import { resolveOrCreateDevice } from "./device-resolver.js";
 import { ensureWorkspaceDeviceLink } from "./workspace-device-link.js";
+import type { PipelineDeps } from "./session-pipeline.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -36,6 +37,8 @@ export interface EventHandlerContext {
   workspaceId: string;
   /** Pino logger scoped to this event */
   logger: Logger;
+  /** Pipeline dependencies for post-processing — added in Phase 2, optional for backward compat */
+  pipelineDeps?: PipelineDeps;
 }
 
 /** An event handler function — receives context and performs type-specific logic */
@@ -122,6 +125,7 @@ function extractHints(
  * @param event - The fully validated Event to process
  * @param registry - Handler registry for type-specific dispatch
  * @param logger - Pino logger (will be child-scoped per event)
+ * @param pipelineDeps - Optional pipeline dependencies for Phase 2 post-processing
  * @returns ProcessResult with status and per-handler outcomes
  */
 export async function processEvent(
@@ -129,6 +133,7 @@ export async function processEvent(
   event: Event,
   registry: EventHandlerRegistry,
   logger: Logger,
+  pipelineDeps?: PipelineDeps,
 ): Promise<ProcessResult> {
   const log = logger.child({ eventId: event.id, eventType: event.type });
 
@@ -183,6 +188,7 @@ export async function processEvent(
         event,
         workspaceId: resolvedWorkspaceId,
         logger: log,
+        pipelineDeps,
       });
       handlerResults.push({ type: event.type, success: true });
     } catch (err) {

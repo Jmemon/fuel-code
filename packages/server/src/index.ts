@@ -30,6 +30,9 @@ import { createApp } from "./app.js";
 import { logger } from "./logger.js";
 import { createEventHandler } from "./pipeline/wire.js";
 import { startConsumer } from "./pipeline/consumer.js";
+import { createS3Client } from "./aws/s3.js";
+import { loadS3Config } from "./aws/s3-config.js";
+import { loadSummaryConfig } from "@fuel-code/core";
 
 /** Graceful shutdown timeout — force exit if cleanup takes longer than this */
 const SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -133,11 +136,26 @@ async function main(): Promise<void> {
     );
   });
 
-  // --- Step 9: Start event consumer ---
+  // --- Step 9: Build pipeline dependencies for Phase 2 post-processing ---
+  // S3 client for transcript download/upload, summary config for LLM generation.
+  // These are optional in the sense that the system works without them (Phase 1),
+  // but Phase 2 session.end handler uses them to trigger transcript parsing.
+  const s3Config = loadS3Config();
+  const s3 = createS3Client(s3Config, logger);
+  const summaryConfig = loadSummaryConfig();
+  const pipelineDeps = { sql, s3, summaryConfig, logger };
+
+  logger.info(
+    { s3Bucket: s3Config.bucket, summaryEnabled: summaryConfig.enabled },
+    "Pipeline dependencies initialized",
+  );
+
+  // --- Step 10: Start event consumer ---
   // Create the handler registry and start the consumer loop that reads from
   // the Redis Stream and dispatches events to the event processor.
   // Consumer gets its own Redis client (blocking XREADGROUP commands).
-  const { registry } = createEventHandler(sql, logger);
+  // Pipeline deps are passed through so session.end can trigger post-processing.
+  const { registry } = createEventHandler(sql, logger, pipelineDeps);
   const consumer = startConsumer({ redis: redisConsumer, sql, registry, logger });
   logger.info(
     { registeredHandlers: registry.listRegisteredTypes() },
