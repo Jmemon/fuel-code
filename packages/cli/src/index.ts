@@ -24,6 +24,7 @@ import { createEmitCommand } from "./commands/emit.js";
 import { createQueueCommand } from "./commands/queue.js";
 import { createHooksCommand } from "./commands/hooks.js";
 import { createTranscriptCommand } from "./commands/transcript.js";
+import { createBackfillCommand } from "./commands/backfill.js";
 
 // ---------------------------------------------------------------------------
 // Logger — structured JSON logging for debugging and error tracking
@@ -66,6 +67,9 @@ program.addCommand(createHooksCommand());
 
 // Register transcript command (Task 8: transcript upload for session post-processing)
 program.addCommand(createTranscriptCommand());
+
+// Register backfill command (Task 11: historical session discovery and ingestion)
+program.addCommand(createBackfillCommand());
 
 // ---------------------------------------------------------------------------
 // Global error handling

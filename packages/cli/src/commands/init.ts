@@ -17,6 +17,7 @@
 import { Command } from "commander";
 import * as os from "node:os";
 import { generateId, ConfigError } from "@fuel-code/shared";
+import { scanForSessions } from "@fuel-code/core";
 import {
   configExists,
   loadConfig,
@@ -211,4 +212,24 @@ export async function runInit(opts: InitOptions): Promise<void> {
     );
   }
   console.log("");
+
+  // Auto-trigger: scan for historical Claude Code sessions and start background backfill
+  try {
+    console.error("Scanning for historical Claude Code sessions...");
+    const scanResult = await scanForSessions();
+    if (scanResult.discovered.length > 0) {
+      console.error(
+        `Found ${scanResult.discovered.length} historical sessions. Starting background backfill...`,
+      );
+      // Spawn detached background process so init doesn't block
+      Bun.spawn(["fuel-code", "backfill"], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+    } else {
+      console.error("No historical sessions found.");
+    }
+  } catch {
+    // Backfill scan failure should never block init
+  }
 }

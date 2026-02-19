@@ -78,3 +78,22 @@ export {
 
 // Stuck session recovery: find and re-trigger stuck pipeline sessions
 export { recoverStuckSessions, type RecoveryResult } from "./session-recovery.js";
+
+// Session backfill: discover and ingest historical Claude Code sessions
+export {
+  scanForSessions,
+  ingestBackfillSessions,
+  projectDirToPath,
+  type DiscoveredSession,
+  type ScanResult,
+  type BackfillProgress,
+  type IngestDeps,
+} from "./session-backfill.js";
+
+// Backfill state persistence: track backfill runs for status/resume
+export {
+  loadBackfillState,
+  saveBackfillState,
+  type BackfillState,
+  type BackfillResult,
+} from "./backfill-state.js";
