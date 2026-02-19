@@ -21,5 +21,8 @@ export * from "./ulid.js";
 // Git remote normalization and workspace canonical ID derivation
 export * from "./canonical.js";
 
+// S3 key construction utilities
+export * from "./s3-keys.js";
+
 // Structured error classes
 export * from "./errors.js";

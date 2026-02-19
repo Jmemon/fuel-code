@@ -14,6 +14,7 @@ import { z } from "zod";
 import type { EventType } from "../types/event.js";
 import { sessionStartPayloadSchema } from "./session-start.js";
 import { sessionEndPayloadSchema } from "./session-end.js";
+import { sessionCompactPayloadSchema } from "./session-compact.js";
 
 /**
  * Registry mapping event types to their payload Zod schemas.
@@ -22,6 +23,7 @@ import { sessionEndPayloadSchema } from "./session-end.js";
 export const PAYLOAD_SCHEMAS: Partial<Record<EventType, z.ZodSchema>> = {
   "session.start": sessionStartPayloadSchema,
   "session.end": sessionEndPayloadSchema,
+  "session.compact": sessionCompactPayloadSchema,
 };
 
 /**

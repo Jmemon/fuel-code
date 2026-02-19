@@ -6,3 +6,4 @@ export * from "./event.js";
 export * from "./workspace.js";
 export * from "./device.js";
 export * from "./session.js";
+export * from "./transcript.js";

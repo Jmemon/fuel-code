@@ -5,4 +5,5 @@
 export * from "./event-base.js";
 export * from "./session-start.js";
 export * from "./session-end.js";
+export * from "./session-compact.js";
 export * from "./payload-registry.js";
