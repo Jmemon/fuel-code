@@ -246,7 +246,8 @@ describe("hooks status", () => {
     });
 
     const output = lines.join("\n");
-    expect(output).toContain("not found");
+    // CC hooks should show "not installed" when settings.json is missing
+    expect(output).toContain("not installed");
   });
 
   it("reports installed after hooks install", async () => {
@@ -258,12 +259,18 @@ describe("hooks status", () => {
 
     const output = lines.join("\n");
     expect(output).toContain("SessionStart:");
-    expect(output).toContain("installed");
     expect(output).toContain("Stop:");
-    // Both should say "installed", not "not installed"
-    // Count occurrences of "not installed" vs "installed"
-    const notInstalledCount = (output.match(/not installed/g) || []).length;
-    expect(notInstalledCount).toBe(0);
+    // The CC hooks section should show "installed" for both CC hooks.
+    // Git hooks section may show "not installed" since we only installed CC hooks.
+    // Check that SessionStart and Stop lines specifically say "installed" (not "not installed")
+    const ccLines = output.split("\n").filter(
+      (l) => l.includes("SessionStart:") || l.includes("Stop:"),
+    );
+    expect(ccLines).toHaveLength(2);
+    for (const line of ccLines) {
+      expect(line).toContain("installed");
+      expect(line).not.toContain("not installed");
+    }
   });
 
   it("reports not installed when settings.json has no hooks", async () => {
