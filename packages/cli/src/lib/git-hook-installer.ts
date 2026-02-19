@@ -468,7 +468,9 @@ export function writeHookScripts(targetDir: string): string[] {
 
 /**
  * Backup existing hooks from a previous hooksPath directory.
- * Copies them to the target directory as <hook>.user files for chaining.
+ * Copies them to the target directory as <hook>.user files for chaining,
+ * and also stores a pristine copy in a timestamped backup subdirectory
+ * under ~/.fuel-code/git-hooks-backup/<ISO-timestamp>/.
  * Returns the list of hook names that were backed up.
  */
 export function backupExistingHooks(
@@ -481,6 +483,11 @@ export function backupExistingHooks(
     return backedUp;
   }
 
+  // Create a timestamped subdirectory for this backup snapshot
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const snapshotDir = path.join(getBackupDir(), timestamp);
+  fs.mkdirSync(snapshotDir, { recursive: true });
+
   for (const name of GIT_HOOK_NAMES) {
     const existing = path.join(previousDir, name);
     if (fs.existsSync(existing)) {
@@ -488,6 +495,10 @@ export function backupExistingHooks(
       const userHook = path.join(targetDir, `${name}.user`);
       fs.copyFileSync(existing, userHook);
       fs.chmodSync(userHook, 0o755);
+
+      // Also copy the original hook file into the timestamped backup dir
+      fs.copyFileSync(existing, path.join(snapshotDir, name));
+
       backedUp.push(name);
     }
   }
@@ -528,21 +539,64 @@ function backupInPlaceHooks(targetDir: string): string[] {
 }
 
 /**
- * Save backup metadata to meta.json.
+ * Save backup metadata to meta.json inside a timestamped subdirectory.
+ * The timestamped dir may already exist (created by backupExistingHooks);
+ * if so, we find the most recent one and write meta.json there.
+ * Otherwise we create a new timestamped subdirectory.
  */
 function saveBackupMeta(meta: BackupMeta): void {
   const backupDir = getBackupDir();
   fs.mkdirSync(backupDir, { recursive: true });
-  const metaPath = path.join(backupDir, "meta.json");
+
+  // Find the most recent timestamped subdirectory, or create one
+  const snapshotDir = getMostRecentSnapshotDir() ?? createSnapshotDir(backupDir);
+  const metaPath = path.join(snapshotDir, "meta.json");
   fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2) + "\n", "utf-8");
 }
 
 /**
- * Load backup metadata from meta.json, or null if not found.
+ * Create a new timestamped snapshot subdirectory under the backup dir.
+ */
+function createSnapshotDir(backupDir: string): string {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const snapshotDir = path.join(backupDir, timestamp);
+  fs.mkdirSync(snapshotDir, { recursive: true });
+  return snapshotDir;
+}
+
+/**
+ * Find the most recent timestamped subdirectory under the backup dir.
+ * Returns the full path, or null if none exist.
+ */
+function getMostRecentSnapshotDir(): string | null {
+  const backupDir = getBackupDir();
+  if (!fs.existsSync(backupDir)) {
+    return null;
+  }
+
+  const entries = fs.readdirSync(backupDir, { withFileTypes: true });
+  const dirs = entries
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort(); // ISO timestamps sort lexicographically
+
+  if (dirs.length === 0) {
+    return null;
+  }
+
+  return path.join(backupDir, dirs[dirs.length - 1]);
+}
+
+/**
+ * Load backup metadata from the most recent timestamped subdirectory's
+ * meta.json, or null if no backup snapshots exist.
  */
 export function loadBackupMeta(): BackupMeta | null {
-  const backupDir = getBackupDir();
-  const metaPath = path.join(backupDir, "meta.json");
+  const snapshotDir = getMostRecentSnapshotDir();
+  if (!snapshotDir) {
+    return null;
+  }
+  const metaPath = path.join(snapshotDir, "meta.json");
   if (!fs.existsSync(metaPath)) {
     return null;
   }
