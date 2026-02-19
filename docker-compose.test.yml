@@ -19,3 +19,14 @@ services:
     image: redis:7-alpine
     ports:
       - "6380:6379"    # non-standard port to avoid conflicts
+
+  # LocalStack provides a local S3-compatible service for transcript storage tests.
+  # Phase 2 E2E tests use this to verify upload, download, and presigned URL flows
+  # without requiring a real AWS account.
+  localstack:
+    image: localstack/localstack:latest
+    environment:
+      SERVICES: s3           # only start S3 (faster startup)
+      DEFAULT_REGION: us-east-1
+    ports:
+      - "4566:4566"          # LocalStack gateway port
