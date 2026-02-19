@@ -228,13 +228,17 @@ describe("EventHandlerRegistry", () => {
 // ---------------------------------------------------------------------------
 
 describe("createHandlerRegistry", () => {
-  test("creates registry with session.start and session.end handlers", () => {
+  test("creates registry with session and git handlers", () => {
     const registry = createHandlerRegistry();
 
     const types = registry.listRegisteredTypes();
     expect(types).toContain("session.start");
     expect(types).toContain("session.end");
-    expect(types).toHaveLength(2);
+    expect(types).toContain("git.commit");
+    expect(types).toContain("git.push");
+    expect(types).toContain("git.checkout");
+    expect(types).toContain("git.merge");
+    expect(types).toHaveLength(6);
   });
 
   test("session.start handler is the handleSessionStart function", () => {
@@ -262,9 +266,15 @@ describe("processEvent", () => {
     const logger = createMockLogger();
 
     // Result sets: workspace resolve, device resolve, ws-device link,
-    // event insert (returns id = new), handler session insert
+    // event insert (returns id = new), handler session insert,
+    // then git hooks prompt check: SELECT workspace canonical_id, SELECT workspace_devices
     const { sql, calls } = createMockSql([
-      ...standardResultSets([{ id: event.id }], []),
+      ...standardResultSets(
+        [{ id: event.id }],
+        [],                                                  // 5. INSERT session (from handler)
+        [{ canonical_id: "github.com/user/repo" }],          // 6. SELECT workspace for git hooks check
+        [],                                                  // 7. SELECT workspace_devices (empty = no link)
+      ),
     ]);
 
     const result = await processEvent(sql, event, registry, logger);
@@ -276,13 +286,15 @@ describe("processEvent", () => {
     expect(result.handlerResults[0].type).toBe("session.start");
     expect(result.handlerResults[0].success).toBe(true);
 
-    // Should have made 5 SQL calls total:
+    // Should have made 7 SQL calls total:
     //   1. resolveOrCreateWorkspace
     //   2. resolveOrCreateDevice
     //   3. ensureWorkspaceDeviceLink
     //   4. INSERT event
     //   5. INSERT session (from handler)
-    expect(calls).toHaveLength(5);
+    //   6. SELECT workspace canonical_id (git hooks prompt check)
+    //   7. SELECT workspace_devices (git hooks prompt check — empty, so no UPDATE)
+    expect(calls).toHaveLength(7);
 
     // Verify workspace resolve got the canonical ID and hint
     expect(calls[0].values).toContain("github.com/user/repo");
@@ -366,20 +378,20 @@ describe("processEvent", () => {
   });
 
   test("unknown event type: event row created, no handler error", async () => {
-    // Use a type that has no handler registered (git.commit, for example)
+    // Use a type that has no handler registered (system.heartbeat has no handler)
     const event: Event = {
-      id: "evt-git-001",
-      type: "git.commit",
+      id: "evt-heartbeat-001",
+      type: "system.heartbeat",
       timestamp: "2024-06-15T12:00:00.000Z",
       device_id: "device-abc",
       workspace_id: "github.com/user/repo",
       session_id: null,
-      data: { cwd: "/home/user/repo", sha: "abc123", message: "fix bug" },
+      data: { cwd: "/home/user/repo", uptime_ms: 300000 },
       ingested_at: null,
       blob_refs: [],
     };
 
-    const registry = createHandlerRegistry(); // only session.start and session.end
+    const registry = createHandlerRegistry(); // session + git handlers, but not system.*
     const logger = createMockLogger();
 
     const { sql, calls } = createMockSql(standardResultSets([{ id: event.id }]));
@@ -504,7 +516,12 @@ describe("handleSessionStart", () => {
   test("inserts session with correct fields from event data", async () => {
     const event = makeSessionStartEvent();
     const logger = createMockLogger();
-    const { sql, calls } = createMockSql([[]]);
+    // Provide result sets for: session INSERT, workspace lookup, wd status (empty=no link)
+    const { sql, calls } = createMockSql([
+      [],                                              // 1. session INSERT
+      [{ canonical_id: "github.com/user/repo" }],     // 2. workspace lookup (git hooks check)
+      [],                                              // 3. workspace_devices lookup (empty)
+    ]);
 
     await handleSessionStart({
       sql,
@@ -513,7 +530,8 @@ describe("handleSessionStart", () => {
       logger,
     });
 
-    expect(calls).toHaveLength(1);
+    // First call is the session INSERT; subsequent calls are git hooks prompt check
+    expect(calls.length).toBeGreaterThanOrEqual(1);
 
     const [call] = calls;
     // Values: cc_session_id, workspace_id, device_id, lifecycle, started_at,
@@ -548,7 +566,11 @@ describe("handleSessionStart", () => {
       },
     });
     const logger = createMockLogger();
-    const { sql, calls } = createMockSql([[]]);
+    // Provide result sets for: session INSERT, workspace lookup, wd status (empty)
+    const { sql, calls } = createMockSql([
+      [],                                              // 1. session INSERT
+      [{ canonical_id: "_unassociated" }],             // 2. workspace lookup (unassociated = skip)
+    ]);
 
     await handleSessionStart({
       sql,

@@ -38,12 +38,12 @@ const AUTH_HEADER = `Bearer ${TEST_API_KEY}`;
 function makeEvent(overrides: Partial<Event> = {}): Event {
   return {
     id: generateId(),
-    type: "git.commit",
+    type: "system.heartbeat",
     timestamp: new Date().toISOString(),
     device_id: "device-test-1",
     workspace_id: "ws-test-1",
     session_id: null,
-    data: { message: "test commit" },
+    data: { status: "alive" },
     ingested_at: null,
     blob_refs: [],
     ...overrides,
@@ -361,9 +361,9 @@ describe("POST /api/events/ingest", () => {
   });
 
   test("event with unregistered type (no schema) → accepted (forward-compatible)", async () => {
-    // git.push has no registered payload schema — should pass through
+    // system.heartbeat has no registered payload schema — should pass through
     const event = makeEvent({
-      type: "git.push",
+      type: "system.heartbeat",
       data: { remote: "origin", branch: "main", arbitrary_field: true },
     });
     mockSuccessfulPublish(mockRedis, 1);

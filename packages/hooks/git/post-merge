@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# fuel-code: post-merge hook
+# Emits git.merge event after merge completes.
+# Args: $1 = squash flag (1 if squash merge, 0 otherwise)
+# SAFETY: Always exits 0.
+
+USER_HOOK="$(dirname "$0")/post-merge.user"
+if [ -x "$USER_HOOK" ]; then
+  "$USER_HOOK" "$@" || true
+fi
+
+if ! command -v fuel-code >/dev/null 2>&1; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [post-merge] fuel-code binary not found in PATH" >> ~/.fuel-code/hook-errors.log 2>/dev/null
+  exit 0
+fi
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -n "$REPO_ROOT" ] && [ -f "$REPO_ROOT/.fuel-code/config.yaml" ]; then
+  if grep -q "git_enabled: false" "$REPO_ROOT/.fuel-code/config.yaml" 2>/dev/null; then
+    exit 0
+  fi
+fi
+
+WORKSPACE_ID=$("$(dirname "$0")/resolve-workspace.sh" 2>/dev/null)
+if [ -z "$WORKSPACE_ID" ]; then
+  exit 0
+fi
+
+MERGE_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+MESSAGE=$(git log -1 --pretty=%B HEAD 2>/dev/null | head -c 4096)
+INTO_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "HEAD")
+
+# Determine merged branch: try MERGE_HEAD first, then parse commit message
+MERGED_BRANCH="unknown"
+GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
+if [ -n "$GIT_DIR" ] && [ -f "$GIT_DIR/MERGE_HEAD" ]; then
+  MERGE_HEAD=$(head -1 "$GIT_DIR/MERGE_HEAD" 2>/dev/null)
+  if [ -n "$MERGE_HEAD" ]; then
+    MERGED_BRANCH=$(git name-rev --name-only "$MERGE_HEAD" 2>/dev/null | sed 's|^remotes/[^/]*/||' || echo "unknown")
+  fi
+fi
+# Fallback: parse "Merge branch 'feature'" from commit message (bash regex, macOS-safe)
+if [ "$MERGED_BRANCH" = "unknown" ]; then
+  if [[ "$MESSAGE" =~ Merge\ branch\ \'([^\']+)\' ]]; then
+    MERGED_BRANCH="${BASH_REMATCH[1]}"
+  fi
+fi
+
+# Diff stats: compare HEAD^1 to HEAD
+FILES_CHANGED=0
+PARENT=$(git rev-parse HEAD^1 2>/dev/null)
+if [ -n "$PARENT" ]; then
+  NUMSTAT=$(git diff --numstat "$PARENT" HEAD 2>/dev/null)
+  if [ -n "$NUMSTAT" ]; then
+    FILES_CHANGED=$(echo "$NUMSTAT" | wc -l | tr -d '[:space:]')
+  fi
+fi
+
+# Conflict detection: check MERGE_MSG for "Conflicts:" section
+HAD_CONFLICTS=false
+if [ -n "$GIT_DIR" ] && [ -f "$GIT_DIR/MERGE_MSG" ]; then
+  if grep -q "^Conflicts:" "$GIT_DIR/MERGE_MSG" 2>/dev/null; then
+    HAD_CONFLICTS=true
+  fi
+fi
+
+(fuel-code emit git.merge \
+  --workspace-id "$WORKSPACE_ID" \
+  --data-stdin <<FUELCODE_EOF
+{
+  "merge_commit": "$MERGE_COMMIT",
+  "message": $(printf '%s' "$MESSAGE" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo '""'),
+  "merged_branch": "$MERGED_BRANCH",
+  "into_branch": "$INTO_BRANCH",
+  "files_changed": $FILES_CHANGED,
+  "had_conflicts": $HAD_CONFLICTS
+}
+FUELCODE_EOF
+) 2>&1 | while read -r line; do
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [post-merge] $line" >> ~/.fuel-code/hook-errors.log 2>/dev/null
+done &
+
+exit 0

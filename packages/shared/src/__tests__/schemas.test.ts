@@ -200,8 +200,8 @@ describe("validateEventPayload", () => {
     expect(result.success).toBe(false);
   });
 
-  test("unregistered event type (git.commit) passes through — no schema", () => {
-    const result = validateEventPayload("git.commit", { any: "data" });
+  test("unregistered event type (device.connected) passes through — no schema", () => {
+    const result = validateEventPayload("device.connected", { any: "data" });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data).toEqual({ any: "data" });

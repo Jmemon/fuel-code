@@ -15,6 +15,10 @@ import type { EventType } from "../types/event.js";
 import { sessionStartPayloadSchema } from "./session-start.js";
 import { sessionEndPayloadSchema } from "./session-end.js";
 import { sessionCompactPayloadSchema } from "./session-compact.js";
+import { gitCommitPayloadSchema } from "./git-commit.js";
+import { gitPushPayloadSchema } from "./git-push.js";
+import { gitCheckoutPayloadSchema } from "./git-checkout.js";
+import { gitMergePayloadSchema } from "./git-merge.js";
 
 /**
  * Registry mapping event types to their payload Zod schemas.
@@ -24,6 +28,10 @@ export const PAYLOAD_SCHEMAS: Partial<Record<EventType, z.ZodSchema>> = {
   "session.start": sessionStartPayloadSchema,
   "session.end": sessionEndPayloadSchema,
   "session.compact": sessionCompactPayloadSchema,
+  "git.commit": gitCommitPayloadSchema,
+  "git.push": gitPushPayloadSchema,
+  "git.checkout": gitCheckoutPayloadSchema,
+  "git.merge": gitMergePayloadSchema,
 };
 
 /**

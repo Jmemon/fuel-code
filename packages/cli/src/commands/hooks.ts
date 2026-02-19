@@ -1,14 +1,21 @@
 /**
  * `fuel-code hooks` command group.
  *
- * Manages Claude Code hook installation for fuel-code session tracking.
- * The hooks are bash scripts that delegate to TypeScript helpers, which
- * parse CC context and call `fuel-code emit` to record session events.
+ * Manages both Claude Code (CC) hook installation and git hook installation
+ * for fuel-code activity tracking.
+ *
+ * CC hooks: bash scripts registered in ~/.claude/settings.json that fire
+ * on SessionStart/Stop events.
+ *
+ * Git hooks: bash scripts installed via core.hooksPath (global) or
+ * .git/hooks/ (per-repo) that fire on post-commit, post-checkout,
+ * post-merge, and pre-push events.
  *
  * Subcommands:
- *   install  — Register fuel-code hooks in ~/.claude/settings.json
- *   status   — Check if fuel-code hooks are installed
- *   test     — Emit a synthetic session.start event to verify the pipeline
+ *   install   — Install CC hooks, git hooks, or both
+ *   uninstall — Remove CC hooks, git hooks, or both (with optional restore)
+ *   status    — Check installation state of all hooks
+ *   test      — Emit a synthetic session.start event to verify the pipeline
  */
 
 import { Command } from "commander";
@@ -17,6 +24,12 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as crypto from "node:crypto";
 import { scanForSessions } from "@fuel-code/core";
+import {
+  installGitHooks,
+  uninstallGitHooks,
+  GIT_HOOK_NAMES,
+} from "../lib/git-hook-installer.js";
+import { getGitHookStatus } from "../lib/git-hook-status.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -80,14 +93,15 @@ function getSettingsPath(): string {
 
 /**
  * Create the `hooks` command group for the fuel-code CLI.
- * Returns a Commander Command instance with install/status/test subcommands.
+ * Returns a Commander Command instance with install/uninstall/status/test subcommands.
  */
 export function createHooksCommand(): Command {
   const cmd = new Command("hooks").description(
-    "Manage Claude Code hooks for session tracking",
+    "Manage Claude Code and git hooks for activity tracking",
   );
 
   cmd.addCommand(createInstallSubcommand());
+  cmd.addCommand(createUninstallSubcommand());
   cmd.addCommand(createStatusSubcommand());
   cmd.addCommand(createTestSubcommand());
 
@@ -100,17 +114,58 @@ export function createHooksCommand(): Command {
 
 function createInstallSubcommand(): Command {
   return new Command("install")
-    .description("Register fuel-code hooks in ~/.claude/settings.json")
-    .action(async () => {
-      await runInstall();
+    .description("Install fuel-code hooks (CC hooks + git hooks)")
+    .option("--cc-only", "Install only Claude Code hooks (Phase 1 behavior)")
+    .option("--git-only", "Install only git hooks")
+    .option("--per-repo", "Install git hooks only in current repo's .git/hooks/")
+    .option("--force", "Override competing hook manager warnings")
+    .action(async (opts) => {
+      const ccOnly = opts.ccOnly ?? false;
+      const gitOnly = opts.gitOnly ?? false;
+      const perRepo = opts.perRepo ?? false;
+      const force = opts.force ?? false;
+
+      // Determine what to install. Default (no flags) = both.
+      const installCC = !gitOnly;
+      const installGit = !ccOnly;
+
+      // Install CC hooks
+      if (installCC) {
+        await runCCInstall();
+      }
+
+      // Install git hooks
+      if (installGit) {
+        try {
+          const result = await installGitHooks({ force, perRepo });
+
+          console.log("\nGit hooks installed successfully.");
+          console.log(`  Hooks dir:  ${result.hooksDir}`);
+          console.log(`  Installed:  ${result.installed.join(", ")}`);
+          if (result.chained.length > 0) {
+            console.log(`  Chained:    ${result.chained.join(", ")}`);
+          }
+          if (result.backedUp.length > 0) {
+            console.log(`  Backed up:  ${result.backedUp.join(", ")}`);
+          }
+          if (result.previousHooksPath) {
+            console.log(`  Previous hooksPath: ${result.previousHooksPath}`);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`\nError installing git hooks: ${msg}`);
+          process.exit(1);
+        }
+      }
     });
 }
 
 /**
- * Core install logic. Reads (or creates) ~/.claude/settings.json and upserts
- * fuel-code hooks for SessionStart and Stop events.
+ * Install Claude Code hooks into ~/.claude/settings.json.
+ * This is the original install logic from Phase 1, extracted into its own function
+ * so the install subcommand can orchestrate CC + git installs together.
  */
-export async function runInstall(): Promise<void> {
+export async function runCCInstall(): Promise<void> {
   const settingsPath = getSettingsPath();
   const settingsDir = path.dirname(settingsPath);
 
@@ -179,7 +234,7 @@ export async function runInstall(): Promise<void> {
   fs.chmodSync(sessionStartScript, 0o755);
   fs.chmodSync(sessionEndScript, 0o755);
 
-  console.log("fuel-code hooks installed successfully.");
+  console.log("Claude Code hooks installed successfully.");
   console.log(`  SessionStart → ${sessionStartScript}`);
   console.log(`  Stop         → ${sessionEndScript}`);
   console.log(`  Settings     → ${settingsPath}`);
@@ -205,28 +260,62 @@ export async function runInstall(): Promise<void> {
   }
 }
 
+/**
+ * Legacy wrapper: installs both CC and git hooks (default behavior).
+ * Kept for backward compatibility with existing tests that call runInstall().
+ */
+export async function runInstall(): Promise<void> {
+  await runCCInstall();
+}
+
 // ---------------------------------------------------------------------------
-// Subcommand: status
+// Subcommand: uninstall
 // ---------------------------------------------------------------------------
 
-function createStatusSubcommand(): Command {
-  return new Command("status")
-    .description("Check if fuel-code hooks are installed in Claude Code")
-    .action(async () => {
-      await runStatus();
+function createUninstallSubcommand(): Command {
+  return new Command("uninstall")
+    .description("Remove fuel-code hooks")
+    .option("--cc-only", "Remove only Claude Code hooks")
+    .option("--git-only", "Remove only git hooks")
+    .option("--restore", "Restore previous git hooksPath from backup")
+    .action(async (opts) => {
+      const ccOnly = opts.ccOnly ?? false;
+      const gitOnly = opts.gitOnly ?? false;
+      const restore = opts.restore ?? false;
+
+      // Default (no flags) = uninstall both
+      const uninstallCC = !gitOnly;
+      const uninstallGit = !ccOnly;
+
+      if (uninstallCC) {
+        await runCCUninstall();
+      }
+
+      if (uninstallGit) {
+        try {
+          await uninstallGitHooks({ restore });
+          console.log("Git hooks uninstalled successfully.");
+          if (restore) {
+            console.log("  Previous hooksPath restored from backup.");
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`Error uninstalling git hooks: ${msg}`);
+          process.exit(1);
+        }
+      }
     });
 }
 
 /**
- * Core status logic. Reads ~/.claude/settings.json and reports which
- * fuel-code hooks are installed.
+ * Remove fuel-code CC hooks from ~/.claude/settings.json.
+ * Removes the SessionStart and Stop hook entries that contain fuel-code markers.
  */
-export async function runStatus(): Promise<void> {
+async function runCCUninstall(): Promise<void> {
   const settingsPath = getSettingsPath();
 
   if (!fs.existsSync(settingsPath)) {
-    console.log("Claude Code settings not found. Hooks are not installed.");
-    console.log(`  Expected: ${settingsPath}`);
+    console.log("Claude Code settings not found. Nothing to uninstall.");
     return;
   }
 
@@ -240,18 +329,106 @@ export async function runStatus(): Promise<void> {
     return;
   }
 
-  const hooks = settings.hooks ?? {};
+  if (!settings.hooks) {
+    console.log("No hooks found in Claude Code settings.");
+    return;
+  }
 
-  const sessionStartInstalled = hasHook(hooks, "SessionStart");
-  const stopInstalled = hasHook(hooks, "Stop");
+  // Remove fuel-code entries from SessionStart and Stop
+  removeHook(settings.hooks, "SessionStart");
+  removeHook(settings.hooks, "Stop");
 
-  console.log("fuel-code hook status:");
-  console.log(
-    `  SessionStart: ${sessionStartInstalled ? "installed" : "not installed"}`,
-  );
-  console.log(
-    `  Stop:         ${stopInstalled ? "installed" : "not installed"}`,
-  );
+  // Write back
+  const tmpPath = settingsPath + `.tmp-${crypto.randomUUID()}`;
+  fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+  fs.renameSync(tmpPath, settingsPath);
+
+  console.log("Claude Code hooks uninstalled successfully.");
+}
+
+// ---------------------------------------------------------------------------
+// Subcommand: status
+// ---------------------------------------------------------------------------
+
+function createStatusSubcommand(): Command {
+  return new Command("status")
+    .description("Check if fuel-code hooks are installed")
+    .action(async () => {
+      await runStatus();
+    });
+}
+
+/**
+ * Core status logic. Reports both CC hooks and git hooks state.
+ */
+export async function runStatus(): Promise<void> {
+  // -- CC hooks status --
+  const settingsPath = getSettingsPath();
+
+  console.log("Claude Code hooks:");
+
+  if (!fs.existsSync(settingsPath)) {
+    console.log("  SessionStart: not installed");
+    console.log("  Stop:         not installed");
+  } else {
+    let settings: ClaudeSettings;
+    try {
+      settings = JSON.parse(
+        fs.readFileSync(settingsPath, "utf-8"),
+      ) as ClaudeSettings;
+    } catch {
+      console.error(`  Error: ${settingsPath} is not valid JSON.`);
+      settings = {};
+    }
+
+    const hooks = settings.hooks ?? {};
+    const sessionStartInstalled = hasHook(hooks, "SessionStart");
+    const stopInstalled = hasHook(hooks, "Stop");
+
+    console.log(
+      `  SessionStart: ${sessionStartInstalled ? "installed" : "not installed"}`,
+    );
+    console.log(
+      `  Stop:         ${stopInstalled ? "installed" : "not installed"}`,
+    );
+  }
+
+  // -- Git hooks status --
+  console.log("");
+  console.log("Git hooks:");
+
+  try {
+    const gitStatus = await getGitHookStatus();
+
+    console.log(
+      `  core.hooksPath: ${gitStatus.hooksPath ?? "(not set)"}`,
+    );
+
+    for (const name of GIT_HOOK_NAMES) {
+      const hookInfo = gitStatus.hooks[name];
+      if (!hookInfo) continue;
+
+      let statusStr: string;
+      if (!hookInfo.exists) {
+        statusStr = "not installed";
+      } else if (!hookInfo.executable) {
+        statusStr = "installed (not executable)";
+      } else {
+        statusStr = "installed";
+      }
+
+      // Append chained info if applicable
+      if (hookInfo.chained) {
+        statusStr += ` (chained: ${name}.user)`;
+      }
+
+      // Pad hook name for alignment
+      const paddedName = (name + ":").padEnd(16);
+      console.log(`  ${paddedName}${statusStr}`);
+    }
+  } catch {
+    console.log("  (unable to check git hook status)");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -395,6 +572,43 @@ function upsertHook(
   } else {
     // All existing configs have matchers — add a new catch-all config
     configs.push({ matcher: "", hooks: [newEntry] });
+  }
+}
+
+/**
+ * Remove fuel-code hook entries from a CC hook event slot.
+ * Preserves non-fuel-code hooks. Removes empty config blocks.
+ *
+ * @param hooks - The hooks object from settings.json
+ * @param eventName - CC hook event name (e.g., "SessionStart", "Stop")
+ */
+function removeHook(
+  hooks: Record<string, ClaudeHookConfig[]>,
+  eventName: string,
+): void {
+  const configs = hooks[eventName];
+  if (!Array.isArray(configs)) return;
+
+  for (const config of configs) {
+    if (!config.hooks || !Array.isArray(config.hooks)) continue;
+
+    config.hooks = config.hooks.filter(
+      (h) =>
+        !h.command ||
+        (!h.command.includes(FUEL_CODE_HOOK_MARKER) &&
+          !h.command.includes("SessionStart.sh") &&
+          !h.command.includes("SessionEnd.sh")),
+    );
+  }
+
+  // Remove empty config blocks
+  hooks[eventName] = configs.filter(
+    (c) => c.hooks && c.hooks.length > 0,
+  );
+
+  // Remove the event key entirely if no configs remain
+  if (hooks[eventName].length === 0) {
+    delete hooks[eventName];
   }
 }
 

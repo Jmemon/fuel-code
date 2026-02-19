@@ -51,6 +51,7 @@ export function createEmitCommand(): Command {
     .description("Emit an event to the backend (used by hooks)")
     .argument("<event-type>", "Event type (e.g., git.commit, session.start)")
     .option("--data <json>", "Event payload as JSON string", "{}")
+    .option("--data-stdin", "Read event data JSON from stdin instead of --data")
     .option("--session-id <id>", "Session ID this event belongs to")
     .option(
       "--workspace-id <id>",
@@ -71,6 +72,7 @@ export function createEmitCommand(): Command {
 /** Options parsed by Commander for the emit command */
 interface EmitOptions {
   data: string;
+  dataStdin?: boolean;
   sessionId?: string;
   workspaceId: string;
 }
@@ -98,22 +100,44 @@ export async function runEmit(
     logger.warn("Config not found — will attempt to queue event with hardcoded path");
   }
 
-  // 2. Parse --data JSON. If invalid, wrap as { _raw: theString }.
+  // 2. Parse event data — from stdin (--data-stdin) or from --data argument.
   let data: Record<string, unknown>;
-  try {
-    const parsed = JSON.parse(opts.data);
-    // Ensure it's an object, not a primitive or array
-    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-      data = parsed as Record<string, unknown>;
-    } else {
-      // Valid JSON but not an object — wrap it
-      logger.warn({ rawData: opts.data }, "Event data is valid JSON but not an object — wrapping as { _raw }");
+
+  if (opts.dataStdin) {
+    // Read JSON from stdin (used by git hooks via heredoc piping)
+    // Declare stdinText outside try so the catch block can wrap it as _raw
+    let stdinText = "";
+    try {
+      stdinText = await Bun.stdin.text();
+      const parsed = JSON.parse(stdinText);
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        data = parsed as Record<string, unknown>;
+      } else {
+        // Valid JSON but not an object — wrap it
+        data = { _raw: stdinText };
+      }
+    } catch {
+      // Not valid JSON — wrap the raw stdin text (consistent with --data path)
+      logger.warn("Failed to parse stdin as JSON — wrapping as { _raw }");
+      data = { _raw: stdinText };
+    }
+  } else {
+    // Parse --data argument JSON. If invalid, wrap as { _raw: theString }.
+    try {
+      const parsed = JSON.parse(opts.data);
+      // Ensure it's an object, not a primitive or array
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        data = parsed as Record<string, unknown>;
+      } else {
+        // Valid JSON but not an object — wrap it
+        logger.warn({ rawData: opts.data }, "Event data is valid JSON but not an object — wrapping as { _raw }");
+        data = { _raw: opts.data };
+      }
+    } catch {
+      // Not valid JSON — wrap the raw string
+      logger.warn({ rawData: opts.data }, "Event data is not valid JSON — wrapping as { _raw }");
       data = { _raw: opts.data };
     }
-  } catch {
-    // Not valid JSON — wrap the raw string
-    logger.warn({ rawData: opts.data }, "Event data is not valid JSON — wrapping as { _raw }");
-    data = { _raw: opts.data };
   }
 
   // 3. Construct the Event object

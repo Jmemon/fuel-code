@@ -456,9 +456,15 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
           return;
         }
 
-        // Git activity tracking is implemented in Phase 3.
-        // Return an empty array for now so the API contract is stable.
-        res.json({ git_activity: [] });
+        // Query git_activity table for all git events correlated to this session.
+        // LIMIT 500 as a defensive upper bound to prevent unbounded result sets.
+        const gitActivity = await sql`
+          SELECT * FROM git_activity
+          WHERE session_id = ${id}
+          ORDER BY timestamp ASC
+          LIMIT 500
+        `;
+        res.json({ git_activity: gitActivity });
       } catch (err) {
         next(err);
       }
