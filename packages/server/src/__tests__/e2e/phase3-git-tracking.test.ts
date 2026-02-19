@@ -924,6 +924,22 @@ describe("Phase 3 E2E: Git Tracking Pipeline", () => {
     for (const ga of sessionBItem.git_activity) {
       expect(ga.type).toBe("commit");
     }
+
+    // Filter by after=<timestamp>: only sessions AFTER the cutoff should appear.
+    // Session A is at `now`, session B is at `now + 1000`. Use `now + 500` as cutoff.
+    const afterTs = new Date(now + 500).toISOString();
+    const afterRes = await fetch(
+      `${baseUrl}/api/timeline?after=${encodeURIComponent(afterTs)}`,
+      { headers: { Authorization: `Bearer ${API_KEY}` } },
+    );
+    expect(afterRes.status).toBe(200);
+    const afterBody = await afterRes.json();
+    // Only session B (started at now+1000) should appear; session A (at now) is before cutoff
+    const afterSessionIds = afterBody.items
+      .filter((item: any) => item.type === "session")
+      .map((item: any) => item.session.id);
+    expect(afterSessionIds).toContain(ccSessionB);
+    expect(afterSessionIds).not.toContain(ccSessionA);
   }, 30_000);
 
   // -----------------------------------------------------------------------
