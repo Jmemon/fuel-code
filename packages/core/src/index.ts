@@ -38,6 +38,16 @@ export {
 export { createHandlerRegistry } from "./handlers/index.js";
 export { handleSessionStart } from "./handlers/session-start.js";
 export { handleSessionEnd } from "./handlers/session-end.js";
+export { handleGitCommit } from "./handlers/git-commit.js";
+export { handleGitPush } from "./handlers/git-push.js";
+export { handleGitCheckout } from "./handlers/git-checkout.js";
+export { handleGitMerge } from "./handlers/git-merge.js";
+
+// Git-session correlation: link git events to active CC sessions
+export {
+  correlateGitEventToSession,
+  type CorrelationResult,
+} from "./git-correlator.js";
 
 // Session lifecycle state machine: transitions, guards, recovery
 export {

@@ -228,13 +228,17 @@ describe("EventHandlerRegistry", () => {
 // ---------------------------------------------------------------------------
 
 describe("createHandlerRegistry", () => {
-  test("creates registry with session.start and session.end handlers", () => {
+  test("creates registry with session and git handlers", () => {
     const registry = createHandlerRegistry();
 
     const types = registry.listRegisteredTypes();
     expect(types).toContain("session.start");
     expect(types).toContain("session.end");
-    expect(types).toHaveLength(2);
+    expect(types).toContain("git.commit");
+    expect(types).toContain("git.push");
+    expect(types).toContain("git.checkout");
+    expect(types).toContain("git.merge");
+    expect(types).toHaveLength(6);
   });
 
   test("session.start handler is the handleSessionStart function", () => {
@@ -366,20 +370,20 @@ describe("processEvent", () => {
   });
 
   test("unknown event type: event row created, no handler error", async () => {
-    // Use a type that has no handler registered (git.commit, for example)
+    // Use a type that has no handler registered (system.heartbeat has no handler)
     const event: Event = {
-      id: "evt-git-001",
-      type: "git.commit",
+      id: "evt-heartbeat-001",
+      type: "system.heartbeat",
       timestamp: "2024-06-15T12:00:00.000Z",
       device_id: "device-abc",
       workspace_id: "github.com/user/repo",
       session_id: null,
-      data: { cwd: "/home/user/repo", sha: "abc123", message: "fix bug" },
+      data: { cwd: "/home/user/repo", uptime_ms: 300000 },
       ingested_at: null,
       blob_refs: [],
     };
 
-    const registry = createHandlerRegistry(); // only session.start and session.end
+    const registry = createHandlerRegistry(); // session + git handlers, but not system.*
     const logger = createMockLogger();
 
     const { sql, calls } = createMockSql(standardResultSets([{ id: event.id }]));
