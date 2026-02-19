@@ -10,6 +10,8 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.993.0",
+    "@aws-sdk/s3-request-presigner": "^3.993.0",
     "@fuel-code/core": "workspace:*",
     "@fuel-code/shared": "workspace:*",
     "cors": "^2.8.6",
