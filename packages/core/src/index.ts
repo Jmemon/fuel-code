@@ -38,3 +38,31 @@ export {
 export { createHandlerRegistry } from "./handlers/index.js";
 export { handleSessionStart } from "./handlers/session-start.js";
 export { handleSessionEnd } from "./handlers/session-end.js";
+
+// Session lifecycle state machine: transitions, guards, recovery
+export {
+  TRANSITIONS,
+  isValidTransition,
+  transitionSession,
+  failSession,
+  resetSessionForReparse,
+  getSessionState,
+  findStuckSessions,
+  type SessionLifecycle,
+  type TransitionResult,
+} from "./session-lifecycle.js";
+
+// Transcript parser: JSONL → structured messages + content blocks
+export { parseTranscript, type ParseOptions } from "./transcript-parser.js";
+
+// Summary generator: LLM-powered session summaries
+export {
+  generateSummary,
+  renderTranscriptForSummary,
+  extractInitialPrompt,
+  type SummaryConfig,
+  type SummaryResult,
+} from "./summary-generator.js";
+
+// Summary config loader
+export { loadSummaryConfig } from "./summary-config.js";
