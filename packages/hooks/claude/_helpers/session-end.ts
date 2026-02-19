@@ -78,6 +78,28 @@ import { resolveWorkspace } from "./resolve-workspace.js";
 
     // Wait for the emit process (has its own 2s timeout)
     await proc.exited;
+
+    // After the emit completes, spawn a background transcript upload.
+    // This runs detached so the hook script can exit immediately.
+    // The upload command handles all errors internally and always exits 0.
+    if (transcriptPath) {
+      Bun.spawn(
+        [
+          "fuel-code",
+          "transcript",
+          "upload",
+          "--session-id",
+          sessionId,
+          "--file",
+          transcriptPath,
+        ],
+        {
+          stdout: "ignore",
+          stderr: "ignore",
+          // Don't wait — runs in background after this script exits
+        },
+      );
+    }
   } catch {
     // Swallow all errors — hooks must never fail
   }

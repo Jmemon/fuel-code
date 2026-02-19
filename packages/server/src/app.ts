@@ -21,11 +21,14 @@ import pinoHttp from "pino-http";
 import type postgres from "postgres";
 import type Redis from "ioredis";
 
+import type { FuelCodeS3Client } from "./aws/s3.js";
+import type { PipelineDeps } from "@fuel-code/core";
 import { logger } from "./logger.js";
 import { createAuthMiddleware } from "./middleware/auth.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { createHealthRouter } from "./routes/health.js";
 import { createEventsRouter } from "./routes/events.js";
+import { createTranscriptUploadRouter } from "./routes/transcript-upload.js";
 
 /** Dependencies injected into createApp for testability */
 export interface AppDeps {
@@ -35,6 +38,10 @@ export interface AppDeps {
   redis: Redis;
   /** API key for Bearer token auth */
   apiKey: string;
+  /** S3 client for transcript uploads (Phase 2 — optional for backwards compat) */
+  s3?: FuelCodeS3Client;
+  /** Pipeline dependencies for post-processing (Phase 2 — optional for backwards compat) */
+  pipelineDeps?: PipelineDeps;
 }
 
 /**
@@ -78,6 +85,19 @@ export function createApp(deps: AppDeps): express.Express {
 
   // --- 6. Routes ---
   app.use("/api", createEventsRouter({ redis: deps.redis }));
+
+  // --- 6b. Transcript upload route (Phase 2) ---
+  // Only mounted when S3 and pipeline deps are available. The route uses
+  // express.raw() inline (not globally) to handle large binary uploads.
+  if (deps.s3 && deps.pipelineDeps) {
+    const uploadRouter = createTranscriptUploadRouter({
+      sql: deps.sql,
+      s3: deps.s3,
+      pipelineDeps: deps.pipelineDeps,
+      logger,
+    });
+    app.use("/api/sessions", uploadRouter);
+  }
 
   // --- 7. Error handler — MUST be registered last ---
   app.use(errorHandler);

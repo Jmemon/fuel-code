@@ -124,22 +124,10 @@ async function main(): Promise<void> {
   // --- Step 6: Ensure consumer group exists on the events stream ---
   await ensureConsumerGroup(redis);
 
-  // --- Step 7-8: Create Express app and start HTTP server ---
-  // App gets the non-blocking client (for health checks + XADD writes)
-  const app = createApp({ sql, redis, apiKey: env.API_KEY });
-
-  const server = app.listen(env.PORT, () => {
-    const elapsedMs = Math.round(performance.now() - startMs);
-    logger.info(
-      { elapsed_ms: elapsedMs, port: env.PORT },
-      `Server started in ${elapsedMs}ms. DB: ok. Redis: ok. Port: ${env.PORT}.`,
-    );
-  });
-
-  // --- Step 9: Build pipeline dependencies for Phase 2 post-processing ---
+  // --- Step 7: Build pipeline dependencies for Phase 2 post-processing ---
   // S3 client for transcript download/upload, summary config for LLM generation.
-  // These are optional in the sense that the system works without them (Phase 1),
-  // but Phase 2 session.end handler uses them to trigger transcript parsing.
+  // Built before createApp so they can be passed as optional deps for the
+  // transcript upload route (Phase 2 Task 8).
   const s3Config = loadS3Config();
   const s3 = createS3Client(s3Config, logger);
   const summaryConfig = loadSummaryConfig();
@@ -150,7 +138,20 @@ async function main(): Promise<void> {
     "Pipeline dependencies initialized",
   );
 
-  // --- Step 10: Start event consumer ---
+  // --- Step 8: Create Express app and start HTTP server ---
+  // App gets the non-blocking client (for health checks + XADD writes).
+  // s3 and pipelineDeps are passed through for the transcript upload route.
+  const app = createApp({ sql, redis, apiKey: env.API_KEY, s3, pipelineDeps });
+
+  const server = app.listen(env.PORT, () => {
+    const elapsedMs = Math.round(performance.now() - startMs);
+    logger.info(
+      { elapsed_ms: elapsedMs, port: env.PORT },
+      `Server started in ${elapsedMs}ms. DB: ok. Redis: ok. Port: ${env.PORT}.`,
+    );
+  });
+
+  // --- Step 9: Start event consumer ---
   // Create the handler registry and start the consumer loop that reads from
   // the Redis Stream and dispatches events to the event processor.
   // Consumer gets its own Redis client (blocking XREADGROUP commands).

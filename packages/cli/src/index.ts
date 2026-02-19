@@ -23,6 +23,7 @@ import { createStatusCommand } from "./commands/status.js";
 import { createEmitCommand } from "./commands/emit.js";
 import { createQueueCommand } from "./commands/queue.js";
 import { createHooksCommand } from "./commands/hooks.js";
+import { createTranscriptCommand } from "./commands/transcript.js";
 
 // ---------------------------------------------------------------------------
 // Logger — structured JSON logging for debugging and error tracking
@@ -62,6 +63,9 @@ program.addCommand(createQueueCommand());
 
 // Register hooks command (Task 13: Claude Code hook installation and management)
 program.addCommand(createHooksCommand());
+
+// Register transcript command (Task 8: transcript upload for session post-processing)
+program.addCommand(createTranscriptCommand());
 
 // ---------------------------------------------------------------------------
 // Global error handling
