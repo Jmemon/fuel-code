@@ -31,6 +31,7 @@ import { createEventsRouter } from "./routes/events.js";
 import { createTranscriptUploadRouter } from "./routes/transcript-upload.js";
 import { createSessionActionsRouter } from "./routes/session-actions.js";
 import { createSessionsRouter } from "./routes/sessions.js";
+import { createTimelineRouter } from "./routes/timeline.js";
 
 /** Dependencies injected into createApp for testability */
 export interface AppDeps {
@@ -114,6 +115,10 @@ export function createApp(deps: AppDeps): express.Express {
   // --- 6d. Session query/mutation routes (Task 9) ---
   // List, detail, transcript, events, git activity, and tag/summary updates.
   app.use("/api", createSessionsRouter({ sql: deps.sql, s3: deps.s3, logger }));
+
+  // --- 6e. Timeline endpoint (Task 5) ---
+  // Unified activity feed: sessions with embedded git highlights + orphan git events.
+  app.use("/api", createTimelineRouter({ sql: deps.sql, logger }));
 
   // --- 7. Error handler — MUST be registered last ---
   app.use(errorHandler);

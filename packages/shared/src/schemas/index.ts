@@ -12,3 +12,4 @@ export * from "./git-checkout.js";
 export * from "./git-merge.js";
 export * from "./payload-registry.js";
 export * from "./session-query.js";
+export * from "./timeline-query.js";
