@@ -37,7 +37,7 @@ export const timelineQuerySchema = z.object({
   /** Comma-separated git activity types to filter (e.g., "commit,push") — transformed to array */
   types: z.string().optional().transform(val => val ? val.split(',') : null),
   /** Number of session-level items per page (default 20, max 100) */
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  limit: z.coerce.number().int().min(1).default(20).transform(v => Math.min(v, 100)),
   /** Opaque pagination cursor — base64-encoded JSON { s: started_at, i: session_id } */
   cursor: z.string().optional(),
 });
