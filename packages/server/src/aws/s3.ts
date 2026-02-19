@@ -58,6 +58,8 @@ export interface HealthCheckResult {
 export interface FuelCodeS3Client {
   /** Upload a Buffer or string body to S3 */
   upload(key: string, body: Buffer | string, contentType?: string): Promise<UploadResult>;
+  /** Stream a readable (e.g., HTTP request body) directly to S3 without buffering */
+  uploadStream(key: string, stream: import("node:stream").Readable, contentLength: number, contentType?: string): Promise<UploadResult>;
   /** Stream a file from disk to S3 without buffering the entire file in memory */
   uploadFile(key: string, filePath: string, contentType?: string): Promise<UploadResult>;
   /** Download an object and return its contents as a string */
@@ -127,6 +129,41 @@ export function createS3Client(config: S3Config, logger: pino.Logger): FuelCodeS
           `S3 upload failed for key "${key}": ${message}`,
           "STORAGE_S3_UPLOAD_FAILED",
           { key, size },
+        );
+      }
+    },
+
+    /**
+     * Stream a Readable (e.g., Express req) directly to S3 without buffering.
+     * The caller must provide the content length from the Content-Length header.
+     * AWS SDK v3 accepts Node Readable streams as Body.
+     */
+    async uploadStream(
+      key: string,
+      stream: import("node:stream").Readable,
+      contentLength: number,
+      contentType: string = "application/octet-stream",
+    ): Promise<UploadResult> {
+      try {
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            Body: stream as any,
+            ContentType: contentType,
+            ContentLength: contentLength,
+          }),
+        );
+
+        logger.info({ key, size: contentLength }, `S3 stream upload: ${key} (${contentLength} bytes)`);
+        return { key, size: contentLength };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error({ key, error: message }, `S3 stream upload failed: ${key}`);
+        throw new StorageError(
+          `S3 stream upload failed for key "${key}": ${message}`,
+          "STORAGE_S3_UPLOAD_FAILED",
+          { key, size: contentLength },
         );
       }
     },

@@ -58,21 +58,25 @@ export async function handleSessionEnd(ctx: EventHandlerContext): Promise<void> 
 
   // Phase 2: If pipeline deps are available, check if transcript_s3_key is
   // already set (backfill path — transcript was uploaded before session ended).
-  // If so, trigger the pipeline asynchronously (fire-and-forget).
+  // If so, trigger the pipeline via the bounded queue (or direct fallback).
   if (ctx.pipelineDeps) {
     const session = await sql`
       SELECT transcript_s3_key FROM sessions WHERE id = ${ccSessionId}
     `;
 
     if (session[0]?.transcript_s3_key) {
-      // Dynamic import to avoid circular dependency at module load time
-      const { runSessionPipeline } = await import("../session-pipeline.js");
-      runSessionPipeline(ctx.pipelineDeps, ccSessionId).catch((err) => {
-        logger.error(
-          { sessionId: ccSessionId, error: err instanceof Error ? err.message : String(err) },
-          "session.end: pipeline trigger failed",
-        );
-      });
+      if (ctx.pipelineDeps.enqueueSession) {
+        ctx.pipelineDeps.enqueueSession(ccSessionId);
+      } else {
+        // Fallback for tests without queue: dynamic import to avoid circular dep
+        const { runSessionPipeline } = await import("../session-pipeline.js");
+        runSessionPipeline(ctx.pipelineDeps, ccSessionId).catch((err) => {
+          logger.error(
+            { sessionId: ccSessionId, error: err instanceof Error ? err.message : String(err) },
+            "session.end: pipeline trigger failed",
+          );
+        });
+      }
     }
   }
 }

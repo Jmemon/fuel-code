@@ -17,6 +17,7 @@
 import type { Sql } from "postgres";
 import type { Logger } from "pino";
 import type { TranscriptStats, TranscriptMessage, ParsedContentBlock } from "@fuel-code/shared";
+import { buildParsedBackupKey } from "@fuel-code/shared";
 import { parseTranscript } from "./transcript-parser.js";
 import { generateSummary, extractInitialPrompt, type SummaryConfig } from "./summary-generator.js";
 import { transitionSession, failSession, type SessionLifecycle } from "./session-lifecycle.js";
@@ -45,6 +46,12 @@ export interface PipelineDeps {
   s3: S3Client;
   summaryConfig: SummaryConfig;
   logger: Logger;
+  /**
+   * Queue-based pipeline trigger. When set, callers should use this instead
+   * of calling runSessionPipeline() directly, to respect concurrency limits.
+   * Wired up by server startup via createPipelineQueue().
+   */
+  enqueueSession?: (sessionId: string) => void;
 }
 
 /** Result of a pipeline run — always returned, never throws */
@@ -283,9 +290,11 @@ export async function runSessionPipeline(
   // -------------------------------------------------------------------------
 
   try {
-    // Derive backup key from the transcript key by replacing raw.jsonl with parsed.json
+    // Derive backup key using the shared utility instead of fragile regex replacement.
+    // The transcript key format is: transcripts/{canonicalId}/{sessionId}/raw.jsonl
     const transcriptKey = session.transcript_s3_key as string;
-    const backupKey = transcriptKey.replace(/raw\.jsonl$/, "parsed.json");
+    const keyParts = transcriptKey.split("/");
+    const backupKey = buildParsedBackupKey(keyParts[1], sessionId);
 
     await s3.upload(
       backupKey,

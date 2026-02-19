@@ -154,6 +154,11 @@ function createMockS3() {
         uploads.push({ key, size, contentType: contentType ?? "application/octet-stream" });
         return { key, size };
       }),
+      // uploadStream: accepts a Readable stream and streams directly to S3
+      uploadStream: mock(async (key: string, _stream: any, contentLength: number, contentType?: string) => {
+        uploads.push({ key, size: contentLength, contentType: contentType ?? "application/octet-stream" });
+        return { key, size: contentLength };
+      }),
       uploadFile: mock(async () => ({ key: "mock", size: 0 })),
       download: mock(async () => ""),
       downloadStream: mock(async () => new ReadableStream()),
@@ -326,6 +331,7 @@ describe("POST /api/sessions/:id/transcript/upload", () => {
     expect(res.status).toBe(400);
 
     const body = await res.json();
-    expect(body.error).toContain("Empty request body");
+    // With streaming upload, empty body is caught via Content-Length check
+    expect(body.error).toContain("Content-Length");
   });
 });

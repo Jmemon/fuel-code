@@ -23,6 +23,23 @@ import {
   type PipelineDeps,
 } from "@fuel-code/core";
 
+/**
+ * Trigger the pipeline for a session, preferring the bounded queue when
+ * available and falling back to a direct fire-and-forget call (tests).
+ */
+function triggerPipeline(pipelineDeps: PipelineDeps, sessionId: string, logger: Logger): void {
+  if (pipelineDeps.enqueueSession) {
+    pipelineDeps.enqueueSession(sessionId);
+  } else {
+    runSessionPipeline(pipelineDeps, sessionId).catch((err) => {
+      logger.error(
+        { sessionId, error: err instanceof Error ? err.message : String(err) },
+        "Pipeline trigger failed (direct)",
+      );
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Router factory
 // ---------------------------------------------------------------------------
@@ -101,14 +118,8 @@ export function createSessionActionsRouter(deps: {
           return;
         }
 
-        // --- Step 8: Trigger pipeline asynchronously ---
-        // Fire-and-forget: pipeline runs in the background, errors logged internally.
-        runSessionPipeline(pipelineDeps, sessionId).catch((err) => {
-          logger.error(
-            { sessionId, error: err instanceof Error ? err.message : String(err) },
-            "Pipeline trigger failed after reparse request",
-          );
-        });
+        // --- Step 8: Trigger pipeline asynchronously via bounded queue ---
+        triggerPipeline(pipelineDeps, sessionId, logger);
 
         // --- Step 9: Return 202 — reparse initiated ---
         res.status(202).json({

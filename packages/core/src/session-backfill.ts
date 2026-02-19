@@ -482,15 +482,10 @@ export async function ingestBackfillSessions(
         continue;
       }
 
-      // Step 2: Upload transcript file to the server
-      await uploadTranscript(
-        baseUrl,
-        deps.apiKey,
-        session.sessionId,
-        session.transcriptPath,
-      );
-
-      // Step 3: Build synthetic session.start and session.end events
+      // Step 2: Build and emit synthetic session.start event FIRST.
+      // The session must exist in the DB before we can upload a transcript,
+      // because the upload endpoint requires the session row to exist (for
+      // the workspace lookup that builds the S3 key).
       const now = new Date().toISOString();
 
       const startEvent: Event = {
@@ -514,7 +509,22 @@ export async function ingestBackfillSessions(
         blob_refs: [],
       };
 
-      // Calculate approximate duration from timestamps
+      // Flush session.start immediately so the session row is created
+      await flushEventBatch(baseUrl, deps.apiKey, [startEvent]);
+
+      // Step 3: Upload transcript file with retry (session.start event may
+      // still be processing through Redis → consumer → handler). Retry on
+      // 404 with exponential backoff since there's a small race window.
+      await uploadTranscriptWithRetry(
+        baseUrl,
+        deps.apiKey,
+        session.sessionId,
+        session.transcriptPath,
+      );
+
+      // Step 4: Build and queue session.end event for batched delivery.
+      // The transcript is uploaded, so when session.end is processed and
+      // finds transcript_s3_key already set, it triggers the pipeline.
       let durationMs = 0;
       if (session.firstTimestamp && session.lastTimestamp) {
         durationMs = Math.max(
@@ -541,9 +551,9 @@ export async function ingestBackfillSessions(
         blob_refs: [],
       };
 
-      eventBatch.push(startEvent, endEvent);
+      eventBatch.push(endEvent);
 
-      // Step 4: Flush batch if it's full
+      // Step 5: Flush batch if it's full
       if (eventBatch.length >= batchSize) {
         await flushEventBatch(baseUrl, deps.apiKey, eventBatch);
         eventBatch = [];
@@ -774,6 +784,34 @@ async function checkSessionExists(
   } catch {
     // Network error or timeout — treat as "not exists" to allow ingestion
     return false;
+  }
+}
+
+/**
+ * Upload a transcript with retry logic to handle the race condition where the
+ * session.start event hasn't been fully processed yet (session row not in DB).
+ * Retries up to 3 times with exponential backoff on 404 responses.
+ */
+async function uploadTranscriptWithRetry(
+  baseUrl: string,
+  apiKey: string,
+  sessionId: string,
+  transcriptPath: string,
+  maxRetries = 3,
+): Promise<void> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      await uploadTranscript(baseUrl, apiKey, sessionId, transcriptPath);
+      return;
+    } catch (err) {
+      // Retry on 404 — the session.start event may not be processed yet
+      const is404 = err instanceof Error && err.message.includes("404");
+      if (is404 && attempt < maxRetries) {
+        await sleep(1000 * (attempt + 1));
+        continue;
+      }
+      throw err;
+    }
   }
 }
 

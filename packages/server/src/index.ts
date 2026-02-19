@@ -32,7 +32,7 @@ import { createEventHandler } from "./pipeline/wire.js";
 import { startConsumer } from "./pipeline/consumer.js";
 import { createS3Client } from "./aws/s3.js";
 import { loadS3Config } from "./aws/s3-config.js";
-import { loadSummaryConfig } from "@fuel-code/core";
+import { loadSummaryConfig, createPipelineQueue } from "@fuel-code/core";
 
 /** Graceful shutdown timeout — force exit if cleanup takes longer than this */
 const SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -133,6 +133,14 @@ async function main(): Promise<void> {
   const summaryConfig = loadSummaryConfig();
   const pipelineDeps = { sql, s3, summaryConfig, logger };
 
+  // --- Step 7b: Create bounded pipeline queue (max 3 concurrent, 50 pending) ---
+  // The queue prevents unbounded concurrent pipeline runs during backfill or
+  // high-throughput periods. Wire enqueueSession into pipelineDeps so all callers
+  // (transcript upload, session.end handler, reparse, recovery) route through it.
+  const pipelineQueue = createPipelineQueue(3);
+  pipelineQueue.start(pipelineDeps);
+  pipelineDeps.enqueueSession = (sessionId: string) => pipelineQueue.enqueue(sessionId);
+
   logger.info(
     { s3Bucket: s3Config.bucket, summaryEnabled: summaryConfig.enabled },
     "Pipeline dependencies initialized",
@@ -168,10 +176,18 @@ async function main(): Promise<void> {
   // competing with sessions that were legitimately in-flight during a restart.
   setTimeout(async () => {
     try {
-      const { recoverStuckSessions } = await import("@fuel-code/core");
-      const result = await recoverStuckSessions(sql, pipelineDeps);
-      if (result.found > 0) {
-        logger.info(result, "Session recovery completed on startup");
+      const { recoverStuckSessions, recoverUnsummarizedSessions } = await import("@fuel-code/core");
+
+      // Recover sessions stuck in intermediate parsing states
+      const stuckResult = await recoverStuckSessions(sql, pipelineDeps);
+      if (stuckResult.found > 0) {
+        logger.info(stuckResult, "Stuck session recovery completed on startup");
+      }
+
+      // Recover sessions that completed parsing but failed summary generation
+      const summaryResult = await recoverUnsummarizedSessions(sql, pipelineDeps);
+      if (summaryResult.found > 0) {
+        logger.info(summaryResult, "Summary retry recovery completed on startup");
       }
     } catch (err) {
       logger.error(
@@ -206,14 +222,17 @@ async function main(): Promise<void> {
         server.close((err) => (err ? reject(err) : resolve()));
       });
 
-      // 2. Stop the Redis Stream consumer loop (waits for current iteration to finish)
+      // 2. Drain the pipeline queue (stop accepting new work, wait for in-flight)
+      await pipelineQueue.stop();
+
+      // 3. Stop the Redis Stream consumer loop (waits for current iteration to finish)
       await consumer.stop();
 
-      // 3. Close Redis connections (both app + consumer clients)
+      // 4. Close Redis connections (both app + consumer clients)
       redis.disconnect();
       redisConsumer.disconnect();
 
-      // 4. Close Postgres pool
+      // 5. Close Postgres pool
       await sql.end();
 
       logger.info("Shutdown complete");

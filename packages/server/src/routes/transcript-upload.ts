@@ -2,19 +2,19 @@
  * Transcript upload endpoint for fuel-code.
  *
  * POST /api/sessions/:id/transcript/upload — accepts raw JSONL transcript body
- * and stores it in S3. Designed to be called by the CLI's `transcript upload`
- * command after a Claude Code session ends.
+ * and streams it directly to S3 without buffering the full body in memory.
+ * Designed to be called by the CLI's `transcript upload` command after a
+ * Claude Code session ends.
  *
  * Key behaviors:
  *   - Idempotent: if transcript_s3_key is already set, returns 200 (no re-upload)
  *   - Accepts uploads for sessions in any lifecycle state (detected, capturing, ended)
  *   - Triggers the post-processing pipeline if the session lifecycle is 'ended'
- *   - Uses express.raw() middleware ONLY on this route (not globally)
- *   - Body limit: 200MB (large transcripts from long CC sessions)
+ *   - Streams req body directly to S3 (no express.raw() buffering)
+ *   - Body limit: 200MB enforced via Content-Length check
  */
 
 import { Router } from "express";
-import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import type { Sql } from "postgres";
 import type { Logger } from "pino";
@@ -22,6 +22,26 @@ import { buildTranscriptKey } from "@fuel-code/shared";
 import type { FuelCodeS3Client } from "../aws/s3.js";
 import type { PipelineDeps } from "@fuel-code/core";
 import { runSessionPipeline } from "@fuel-code/core";
+
+/** Maximum upload size: 200MB (large transcripts from long CC sessions) */
+const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
+
+/**
+ * Trigger the pipeline for a session, preferring the bounded queue when
+ * available and falling back to a direct fire-and-forget call (tests).
+ */
+function triggerPipeline(pipelineDeps: PipelineDeps, sessionId: string, logger: Logger): void {
+  if (pipelineDeps.enqueueSession) {
+    pipelineDeps.enqueueSession(sessionId);
+  } else {
+    runSessionPipeline(pipelineDeps, sessionId).catch((err) => {
+      logger.error(
+        { sessionId, error: err instanceof Error ? err.message : String(err) },
+        "Pipeline trigger failed (direct)",
+      );
+    });
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Router factory
@@ -48,20 +68,33 @@ export function createTranscriptUploadRouter(deps: {
   /**
    * POST /:id/transcript/upload
    *
-   * Receives raw JSONL transcript body, stores it in S3, and optionally
+   * Streams the raw JSONL transcript body directly to S3 and optionally
    * triggers the post-processing pipeline if the session has already ended.
    *
-   * The express.raw() middleware is applied inline so it only affects this
-   * route — the rest of the app continues to use express.json().
+   * No express.raw() middleware — the request body stream is piped directly
+   * to the S3 PutObject command, keeping memory usage constant regardless
+   * of transcript size.
    */
   router.post(
     "/:id/transcript/upload",
-    express.raw({ type: "*/*", limit: "200mb" }),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const sessionId = req.params.id;
 
-        // --- Step 1: Validate session exists ---
+        // --- Step 1: Validate Content-Length is present and within limits ---
+        const contentLength = parseInt(req.headers["content-length"] || "0", 10);
+        if (!contentLength || contentLength === 0) {
+          res.status(400).json({ error: "Content-Length header required" });
+          return;
+        }
+        if (contentLength > MAX_UPLOAD_BYTES) {
+          res.status(413).json({
+            error: `Upload too large: ${contentLength} bytes exceeds ${MAX_UPLOAD_BYTES} byte limit`,
+          });
+          return;
+        }
+
+        // --- Step 2: Validate session exists ---
         const sessionRows = await sql`
           SELECT id, lifecycle, workspace_id, transcript_s3_key
           FROM sessions
@@ -75,7 +108,7 @@ export function createTranscriptUploadRouter(deps: {
 
         const session = sessionRows[0];
 
-        // --- Step 2: Idempotency — if transcript already uploaded, return early ---
+        // --- Step 3: Idempotency — if transcript already uploaded, return early ---
         if (session.transcript_s3_key) {
           res.status(200).json({
             status: "already_uploaded",
@@ -84,7 +117,7 @@ export function createTranscriptUploadRouter(deps: {
           return;
         }
 
-        // --- Step 3: Get workspace canonical ID for building the S3 key ---
+        // --- Step 4: Get workspace canonical ID for building the S3 key ---
         const workspaceRows = await sql`
           SELECT canonical_id
           FROM workspaces
@@ -98,47 +131,36 @@ export function createTranscriptUploadRouter(deps: {
 
         const canonicalId = workspaceRows[0].canonical_id as string;
 
-        // --- Step 4: Build the S3 key ---
+        // --- Step 5: Build the S3 key ---
         const s3Key = buildTranscriptKey(canonicalId, sessionId);
 
-        // --- Step 5: Collect request body and upload to S3 ---
-        // express.raw() provides req.body as a Buffer
-        const body = req.body as Buffer;
-
-        if (!body || body.length === 0) {
-          res.status(400).json({ error: "Empty request body — no transcript data" });
-          return;
-        }
-
         logger.info(
-          { sessionId, s3Key, bodySize: body.length },
-          `Uploading transcript for session ${sessionId} (${body.length} bytes)`,
+          { sessionId, s3Key, contentLength },
+          `Streaming transcript upload for session ${sessionId} (${contentLength} bytes)`,
         );
 
-        await s3.upload(s3Key, body, "application/x-ndjson");
+        // --- Step 6: Stream request body directly to S3 ---
+        // The req object is a Node Readable stream. By not using express.raw(),
+        // the body hasn't been buffered into memory — we pipe it straight to S3.
+        await s3.uploadStream(s3Key, req, contentLength, "application/x-ndjson");
 
-        // --- Step 6: Update session with the S3 key ---
+        // --- Step 7: Update session with the S3 key ---
         await sql`
           UPDATE sessions
           SET transcript_s3_key = ${s3Key}, updated_at = now()
           WHERE id = ${sessionId}
         `;
 
-        // --- Step 7: Trigger pipeline if session has already ended ---
+        // --- Step 8: Trigger pipeline if session has already ended ---
         const lifecycle = session.lifecycle as string;
         const pipelineTriggered = lifecycle === "ended";
 
         if (pipelineTriggered) {
-          // Fire-and-forget: pipeline runs asynchronously, errors are logged internally
-          runSessionPipeline(pipelineDeps, sessionId).catch((err) => {
-            logger.error(
-              { sessionId, error: err instanceof Error ? err.message : String(err) },
-              "Pipeline trigger failed after transcript upload",
-            );
-          });
+          // Route through the bounded pipeline queue for concurrency control
+          triggerPipeline(pipelineDeps, sessionId, logger);
         }
 
-        // --- Step 8: Return success response ---
+        // --- Step 9: Return success response ---
         res.status(202).json({
           status: "uploaded",
           s3_key: s3Key,

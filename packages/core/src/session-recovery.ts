@@ -18,7 +18,7 @@
 
 import type { Sql } from "postgres";
 import type { Logger } from "pino";
-import { findStuckSessions, failSession } from "./session-lifecycle.js";
+import { findStuckSessions, failSession, resetSessionForReparse } from "./session-lifecycle.js";
 import { runSessionPipeline, type PipelineDeps } from "./session-pipeline.js";
 
 // ---------------------------------------------------------------------------
@@ -123,13 +123,17 @@ export async function recoverStuckSessions(
           WHERE id = ${session.id}
         `;
 
-        // Fire-and-forget: pipeline runs asynchronously with its own error handling
-        runSessionPipeline(pipelineDeps, session.id).catch((err) => {
-          logger.error(
-            { sessionId: session.id, error: err instanceof Error ? err.message : String(err) },
-            "Recovery pipeline trigger failed",
-          );
-        });
+        // Route through the bounded queue if available, else direct call
+        if (pipelineDeps.enqueueSession) {
+          pipelineDeps.enqueueSession(session.id);
+        } else {
+          runSessionPipeline(pipelineDeps, session.id).catch((err) => {
+            logger.error(
+              { sessionId: session.id, error: err instanceof Error ? err.message : String(err) },
+              "Recovery pipeline trigger failed",
+            );
+          });
+        }
 
         result.retried++;
         logger.info(
@@ -157,6 +161,108 @@ export async function recoverStuckSessions(
         { sessionId: session.id, error: errorMsg },
         "Error recovering stuck session",
       );
+    }
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Summary retry for sessions stuck at 'parsed' without a summary
+// ---------------------------------------------------------------------------
+
+/** Result of a summary retry sweep */
+export interface SummaryRetryResult {
+  /** Number of sessions found at parsed without summary */
+  found: number;
+  /** Number of sessions where pipeline was re-triggered */
+  retried: number;
+  /** Per-session errors encountered */
+  errors: Array<{ sessionId: string; error: string }>;
+}
+
+/**
+ * Find sessions stuck at lifecycle='parsed' with no summary, and re-trigger
+ * the pipeline to retry summary generation.
+ *
+ * These sessions completed parsing but failed summary generation (LLM timeout,
+ * rate limit, API key issue) and have no automatic retry mechanism. This function
+ * resets them back to 'ended' and re-runs the full pipeline (re-parse is fast,
+ * summary generation is the expensive step that needs retrying).
+ *
+ * @param sql          - postgres.js tagged template client
+ * @param pipelineDeps - Pipeline dependencies for re-triggering
+ * @param options      - Optional configuration
+ */
+export async function recoverUnsummarizedSessions(
+  sql: Sql,
+  pipelineDeps: PipelineDeps,
+  options?: {
+    /** How long a session must be stuck before retry kicks in (ms). Default: 600_000 (10 min) */
+    stuckThresholdMs?: number;
+    /** Maximum number of sessions to retry in a single sweep. Default: 10 */
+    maxRetries?: number;
+  },
+): Promise<SummaryRetryResult> {
+  const logger = pipelineDeps.logger;
+  const stuckThresholdMs = options?.stuckThresholdMs ?? 600_000;
+  const maxRetries = options?.maxRetries ?? 10;
+  const intervalMs = `${stuckThresholdMs} milliseconds`;
+
+  // Find sessions at parsed with completed parsing but no summary
+  const unsummarized = await sql`
+    SELECT id FROM sessions
+    WHERE lifecycle = 'parsed'
+      AND parse_status = 'completed'
+      AND summary IS NULL
+      AND updated_at < now() - ${intervalMs}::interval
+    ORDER BY updated_at ASC
+    LIMIT ${maxRetries}
+  `;
+
+  const result: SummaryRetryResult = {
+    found: unsummarized.length,
+    retried: 0,
+    errors: [],
+  };
+
+  if (unsummarized.length === 0) {
+    return result;
+  }
+
+  logger.info(
+    { count: unsummarized.length },
+    `Found ${unsummarized.length} sessions at parsed without summary — retrying`,
+  );
+
+  for (const row of unsummarized) {
+    const sessionId = row.id as string;
+    try {
+      // Reset session back to 'ended' so the pipeline can re-process it.
+      // This clears parsed data, but re-parsing is fast (pure JS, no network).
+      const resetResult = await resetSessionForReparse(sql, sessionId);
+      if (!resetResult.reset) {
+        result.errors.push({ sessionId, error: "Reset failed — session may have changed state" });
+        continue;
+      }
+
+      // Re-trigger pipeline via queue or direct call
+      if (pipelineDeps.enqueueSession) {
+        pipelineDeps.enqueueSession(sessionId);
+      } else {
+        runSessionPipeline(pipelineDeps, sessionId).catch((err) => {
+          logger.error(
+            { sessionId, error: err instanceof Error ? err.message : String(err) },
+            "Summary retry pipeline trigger failed",
+          );
+        });
+      }
+
+      result.retried++;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      result.errors.push({ sessionId, error: errorMsg });
+      logger.error({ sessionId, error: errorMsg }, "Error retrying summary for session");
     }
   }
 
