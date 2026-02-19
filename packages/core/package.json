@@ -9,6 +9,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.77.0",
     "@fuel-code/shared": "workspace:*",
     "pino": "^10.3.1",
     "postgres": "^3.4.8"
