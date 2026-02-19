@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# fuel-code: pre-push hook
+# Emits git.push event before push executes.
+# Args: $1 = remote name, $2 = remote URL
+# Stdin: lines of "<local ref> <local sha> <remote ref> <remote sha>"
+# SAFETY: Always exits 0. This is a PRE-push hook — exiting non-zero blocks the push.
+#         fuel-code MUST NEVER prevent a push.
+
+# IMPORTANT: Read all stdin first (git expects it to be consumed)
+PUSH_REFS=""
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+  PUSH_REFS+="${local_ref} ${local_sha} ${remote_ref} ${remote_sha}\n"
+done
+
+# Chain user hook — pipe stdin to it. User hook CAN block the push.
+USER_HOOK="$(dirname "$0")/pre-push.user"
+if [ -x "$USER_HOOK" ]; then
+  # Re-feed the refs to the user hook
+  printf '%b' "$PUSH_REFS" | "$USER_HOOK" "$@"
+  USER_EXIT=$?
+  if [ $USER_EXIT -ne 0 ]; then
+    # User's hook blocked the push. Respect that. Don't emit event.
+    exit $USER_EXIT
+  fi
+fi
+
+if ! command -v fuel-code >/dev/null 2>&1; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [pre-push] fuel-code binary not found in PATH" >> ~/.fuel-code/hook-errors.log 2>/dev/null
+  exit 0
+fi
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -n "$REPO_ROOT" ] && [ -f "$REPO_ROOT/.fuel-code/config.yaml" ]; then
+  if grep -q "git_enabled: false" "$REPO_ROOT/.fuel-code/config.yaml" 2>/dev/null; then
+    exit 0
+  fi
+fi
+
+WORKSPACE_ID=$("$(dirname "$0")/resolve-workspace.sh" 2>/dev/null)
+if [ -z "$WORKSPACE_ID" ]; then
+  exit 0
+fi
+
+REMOTE_NAME="${1:-origin}"
+
+# Process each pushed ref
+printf '%b' "$PUSH_REFS" | while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+  [ -z "$local_ref" ] && continue
+
+  # Skip branch deletions (local_sha is all zeros)
+  if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+    continue
+  fi
+
+  # Extract branch name from ref
+  BRANCH="$local_ref"
+  if [[ "$local_ref" =~ ^refs/heads/(.+)$ ]]; then
+    BRANCH="${BASH_REMATCH[1]}"
+  fi
+
+  # Get commit list
+  COMMIT_COUNT=0
+  COMMITS_JSON="[]"
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    # New branch: count all commits (cap at 100 for sanity)
+    COMMIT_LIST=$(git rev-list --max-count=100 "$local_sha" 2>/dev/null)
+    COMMIT_COUNT=$(echo "$COMMIT_LIST" | grep -c . 2>/dev/null || echo 0)
+  else
+    # Existing branch: new commits only
+    COMMIT_LIST=$(git rev-list --max-count=100 "$remote_sha..$local_sha" 2>/dev/null)
+    COMMIT_COUNT=$(echo "$COMMIT_LIST" | grep -c . 2>/dev/null || echo 0)
+  fi
+
+  # Build commits JSON array
+  if [ -n "$COMMIT_LIST" ]; then
+    COMMITS_JSON="["
+    FIRST=true
+    while read -r sha; do
+      [ -z "$sha" ] && continue
+      if [ "$FIRST" = true ]; then
+        FIRST=false
+      else
+        COMMITS_JSON+=","
+      fi
+      COMMITS_JSON+="\"$sha\""
+    done <<< "$COMMIT_LIST"
+    COMMITS_JSON+="]"
+  fi
+
+  (fuel-code emit git.push \
+    --workspace-id "$WORKSPACE_ID" \
+    --data-stdin <<FUELCODE_EOF
+{
+  "branch": "$BRANCH",
+  "remote": "$REMOTE_NAME",
+  "commit_count": $COMMIT_COUNT,
+  "commits": $COMMITS_JSON
+}
+FUELCODE_EOF
+  ) 2>&1 | while read -r line; do
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [pre-push] $line" >> ~/.fuel-code/hook-errors.log 2>/dev/null
+  done &
+done
+
+exit 0

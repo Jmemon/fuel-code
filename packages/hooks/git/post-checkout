@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# fuel-code: post-checkout hook
+# Emits git.checkout event on branch switches.
+# Args: $1 = previous HEAD, $2 = new HEAD, $3 = branch flag (1=branch, 0=file)
+# SAFETY: Always exits 0.
+
+USER_HOOK="$(dirname "$0")/post-checkout.user"
+if [ -x "$USER_HOOK" ]; then
+  "$USER_HOOK" "$@" || true
+fi
+
+if ! command -v fuel-code >/dev/null 2>&1; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [post-checkout] fuel-code binary not found in PATH" >> ~/.fuel-code/hook-errors.log 2>/dev/null
+  exit 0
+fi
+
+# Only track branch checkouts, not file checkouts
+if [ "${3:-0}" != "1" ]; then
+  exit 0
+fi
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -n "$REPO_ROOT" ] && [ -f "$REPO_ROOT/.fuel-code/config.yaml" ]; then
+  if grep -q "git_enabled: false" "$REPO_ROOT/.fuel-code/config.yaml" 2>/dev/null; then
+    exit 0
+  fi
+fi
+
+WORKSPACE_ID=$("$(dirname "$0")/resolve-workspace.sh" 2>/dev/null)
+if [ -z "$WORKSPACE_ID" ]; then
+  exit 0
+fi
+
+FROM_REF="${1:-unknown}"
+TO_REF="${2:-unknown}"
+
+# Resolve branch names from refs
+FROM_BRANCH=$(git name-rev --name-only "$FROM_REF" 2>/dev/null | sed 's|^remotes/[^/]*/||' || echo "")
+TO_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+
+# Detached HEAD -> null in JSON
+FROM_BRANCH_JSON="null"
+TO_BRANCH_JSON="null"
+[ -n "$FROM_BRANCH" ] && [ "$FROM_BRANCH" != "undefined" ] && FROM_BRANCH_JSON="\"$FROM_BRANCH\""
+[ -n "$TO_BRANCH" ] && [ "$TO_BRANCH" != "HEAD" ] && TO_BRANCH_JSON="\"$TO_BRANCH\""
+
+(fuel-code emit git.checkout \
+  --workspace-id "$WORKSPACE_ID" \
+  --data-stdin <<FUELCODE_EOF
+{
+  "from_ref": "$FROM_REF",
+  "to_ref": "$TO_REF",
+  "from_branch": $FROM_BRANCH_JSON,
+  "to_branch": $TO_BRANCH_JSON
+}
+FUELCODE_EOF
+) 2>&1 | while read -r line; do
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [post-checkout] $line" >> ~/.fuel-code/hook-errors.log 2>/dev/null
+done &
+
+exit 0

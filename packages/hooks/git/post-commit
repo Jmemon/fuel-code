@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# fuel-code: post-commit hook
+# Emits git.commit event with commit metadata.
+# SAFETY: Always exits 0. Never blocks git. Fire-and-forget.
+
+# Chain to user's existing hook if present
+USER_HOOK="$(dirname "$0")/post-commit.user"
+if [ -x "$USER_HOOK" ]; then
+  "$USER_HOOK" "$@" || true
+fi
+
+# Check if fuel-code is available
+if ! command -v fuel-code >/dev/null 2>&1; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [post-commit] fuel-code binary not found in PATH" >> ~/.fuel-code/hook-errors.log 2>/dev/null
+  exit 0
+fi
+
+# Per-repo opt-out
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -n "$REPO_ROOT" ] && [ -f "$REPO_ROOT/.fuel-code/config.yaml" ]; then
+  if grep -q "git_enabled: false" "$REPO_ROOT/.fuel-code/config.yaml" 2>/dev/null; then
+    exit 0
+  fi
+fi
+
+# Resolve workspace
+WORKSPACE_ID=$("$(dirname "$0")/resolve-workspace.sh" 2>/dev/null)
+if [ -z "$WORKSPACE_ID" ]; then
+  exit 0
+fi
+
+# Extract commit metadata
+HASH=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+# Commit message: escape double quotes and collapse newlines for JSON
+MESSAGE=$(git log -1 --pretty=%B HEAD 2>/dev/null | head -c 8192)
+AUTHOR_NAME=$(git log -1 --pretty=%an HEAD 2>/dev/null || echo "unknown")
+AUTHOR_EMAIL=$(git log -1 --pretty=%ae HEAD 2>/dev/null || echo "")
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "HEAD")
+
+# Diff stats from the commit
+INSERTIONS=0
+DELETIONS=0
+FILES_CHANGED=0
+
+NUMSTAT=$(git diff-tree --no-commit-id --numstat -r HEAD 2>/dev/null)
+if [ -n "$NUMSTAT" ]; then
+  FILES_CHANGED=$(echo "$NUMSTAT" | wc -l | tr -d '[:space:]')
+  # Sum insertions (col 1) and deletions (col 2). Binary files show "-", treat as 0.
+  INSERTIONS=$(echo "$NUMSTAT" | awk '{if($1!="-") sum+=$1} END {print sum+0}')
+  DELETIONS=$(echo "$NUMSTAT" | awk '{if($2!="-") sum+=$2} END {print sum+0}')
+fi
+
+# Build file list JSON array: [{"path":"file.txt","status":"M"}, ...]
+FILE_LIST="["
+FIRST=true
+while IFS=$'\t' read -r status filepath; do
+  [ -z "$status" ] && continue
+  if [ "$FIRST" = true ]; then
+    FIRST=false
+  else
+    FILE_LIST+=","
+  fi
+  FILE_LIST+="{\"path\":\"$filepath\",\"status\":\"$status\"}"
+done < <(git diff-tree --no-commit-id --name-status -r HEAD 2>/dev/null)
+FILE_LIST+="]"
+
+# Emit event (fire-and-forget, background, no output)
+# Use a heredoc piped to fuel-code emit --data-stdin to avoid shell escaping issues
+(fuel-code emit git.commit \
+  --workspace-id "$WORKSPACE_ID" \
+  --data-stdin <<FUELCODE_EOF
+{
+  "hash": "$HASH",
+  "message": $(printf '%s' "$MESSAGE" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo '""'),
+  "author_name": $(printf '%s' "$AUTHOR_NAME" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo '""'),
+  "author_email": "$AUTHOR_EMAIL",
+  "branch": "$BRANCH",
+  "files_changed": $FILES_CHANGED,
+  "insertions": $INSERTIONS,
+  "deletions": $DELETIONS,
+  "file_list": $FILE_LIST
+}
+FUELCODE_EOF
+) 2>&1 | while read -r line; do
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [post-commit] $line" >> ~/.fuel-code/hook-errors.log 2>/dev/null
+done &
+
+exit 0
