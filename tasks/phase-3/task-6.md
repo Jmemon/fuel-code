@@ -36,7 +36,7 @@ Reuse `docker-compose.test.yml` from Phase 1/2 (Postgres, Redis, LocalStack alre
 
 **Test 1: Full pipeline — git.commit event → git_activity + session correlation**:
 1. POST `session.start` event with workspace + device IDs. Wait for session `lifecycle = 'detected'`.
-2. Transition session to `capturing` (or verify that your lifecycle handles this).
+2. Verify session is at `lifecycle = 'detected'` (sessions stay at `detected` from session.start until session.end — correlation matches both `detected` and `capturing`).
 3. POST `git.commit` event with same workspace + device + commit metadata.
 4. Wait for event to be processed.
 5. Assert: `git_activity` row exists with correct type='commit', commit_sha, branch, message, files_changed, insertions, deletions.
@@ -51,7 +51,7 @@ Reuse `docker-compose.test.yml` from Phase 1/2 (Postgres, Redis, LocalStack alre
 4. Assert: no error logged.
 
 **Test 3: Multiple git event types**:
-1. Start a session (capturing).
+1. Start a session (will be at `detected`).
 2. POST `git.commit`, `git.checkout`, `git.merge`, `git.push` events — all same workspace+device.
 3. Assert: 4 `git_activity` rows exist.
 4. Assert: all have correct `type` values.
@@ -61,7 +61,7 @@ Reuse `docker-compose.test.yml` from Phase 1/2 (Postgres, Redis, LocalStack alre
 **Test 4: Session ends, then commit → no correlation**:
 1. POST `session.start`, then `session.end`.
 2. POST `git.commit` for same workspace+device.
-3. Assert: commit has `session_id = NULL` (session is `ended`, not `capturing`).
+3. Assert: commit has `session_id = NULL` (session is `ended`, not active).
 
 **Test 5: Timeline API — sessions with git highlights**:
 1. Create 3 sessions with events. For session 2, add 2 git.commit events.
@@ -166,7 +166,7 @@ timeout = 60000  # 60s per test (git operations + event processing)
 1. Test 1 verifies complete pipeline: git.commit → git_activity with session correlation.
 2. Test 2 verifies orphan git events (no active session) get `session_id = NULL`.
 3. Test 3 verifies all 4 git event types are handled and correlated.
-4. Test 4 verifies correlation only works for `capturing` sessions.
+4. Test 4 verifies correlation only works for active sessions (`detected`/`capturing`), not `ended`.
 5. Tests 5-8 verify timeline API: session grouping, orphan events, filtering, pagination.
 6. Tests 9-11 verify auto-prompt: flagging, skipping installed, dismissing.
 7. Test 12 verifies duplicate event handling (idempotent).

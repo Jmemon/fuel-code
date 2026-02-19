@@ -138,7 +138,9 @@ registry.set('git.merge', gitMergePayloadSchema);
 ```typescript
 // Find the active CC session for a git event.
 // Correlation heuristic: find the most recently started session
-// for the same workspace + device that is currently capturing.
+// for the same workspace + device that is currently active (detected or capturing).
+// Sessions stay at 'detected' from session.start until session.end — 'capturing'
+// may be introduced later as a refinement for active-work detection.
 //
 // This works because CC sessions and git commits happen on the same
 // device in the same workspace. The lifecycle window is well-defined
@@ -162,7 +164,7 @@ Query:
 SELECT id FROM sessions
 WHERE workspace_id = $1
   AND device_id = $2
-  AND lifecycle = 'capturing'
+  AND lifecycle IN ('detected', 'capturing')
   AND started_at <= $3
 ORDER BY started_at DESC
 LIMIT 1
@@ -393,9 +395,9 @@ export function createHandlerRegistry(): EventHandlerRegistry {
 
 **`packages/core/src/__tests__/git-correlator.test.ts`** (requires Postgres):
 
-1. Active `capturing` session exists for (workspace, device): returns session ID.
+1. Active session (`detected` or `capturing`) exists for (workspace, device): returns session ID.
 2. No active session: returns `{ sessionId: null }`.
-3. Session exists but lifecycle is `ended` (not capturing): returns null.
+3. Session exists but lifecycle is `ended` (not active): returns null.
 4. Session exists but for different workspace: returns null.
 5. Session exists but for different device: returns null.
 6. Multiple active sessions (edge case): returns most recently started.
@@ -442,7 +444,7 @@ export function createHandlerRegistry(): EventHandlerRegistry {
 6. `handleGitPush` inserts with type='push', branch, and data containing remote, commit_count, commits.
 7. `handleGitCheckout` inserts with type='checkout', branch set to `to_branch` (or `to_ref` for detached HEAD).
 8. `handleGitMerge` inserts with type='merge', merge_commit, into_branch, files_changed, and data containing merged_branch, had_conflicts.
-9. Session-git correlation works: active `capturing` session for same (workspace, device) is found and linked.
+9. Session-git correlation works: active session (`detected` or `capturing`) for same (workspace, device) is found and linked.
 10. Git events without an active session get `session_id = NULL` (no error).
 11. `events.session_id` is updated when correlation is found.
 12. Duplicate event IDs are handled gracefully (`ON CONFLICT DO NOTHING`).

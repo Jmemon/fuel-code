@@ -75,7 +75,7 @@ If the user has existing git hooks (via a prior `core.hooksPath`), fuel-code:
 
 ### Session-Git Correlation Heuristic
 When a git event arrives for workspace W on device D:
-1. Find active session: `WHERE workspace_id = W AND device_id = D AND lifecycle = 'capturing' ORDER BY started_at DESC LIMIT 1`
+1. Find active session: `WHERE workspace_id = W AND device_id = D AND lifecycle IN ('detected', 'capturing') ORDER BY started_at DESC LIMIT 1`
 2. If found: set `git_activity.session_id` and `events.session_id`
 3. If not found: `session_id` stays NULL (workspace-level activity, not tied to a session)
 
