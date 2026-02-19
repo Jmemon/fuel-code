@@ -7,13 +7,18 @@
  * Uses Commander for argument parsing and subcommand routing.
  *
  * Available commands:
- *   init    — Initialize fuel-code on this device (Task 5)
- *   status  — Show device info, queue depth, connectivity (Task 5)
- *   emit    — Emit an event to the backend with local queue fallback (Task 10)
+ *   init      — Initialize fuel-code on this device (Task 5)
+ *   status    — Show device info, queue depth, connectivity (Task 5)
+ *   emit      — Emit an event to the backend with local queue fallback (Task 10)
+ *   queue     — Manage the local event queue (Task 12)
+ *   hooks     — Install/manage git and Claude Code hooks (Task 13)
+ *   transcript — Upload transcript for session post-processing (Task 8)
+ *   backfill  — Historical session discovery and ingestion (Task 11)
  *
- * Future commands (registered by other tasks):
- *   queue   — Manage the local event queue (Task 12)
- *   hooks   — Install/manage git and Claude Code hooks (Task 13)
+ * On interactive commands (sessions, status, hooks, backfill, etc.), the CLI
+ * checks for pending prompts (e.g., git hook installation) before running
+ * the user's command. Non-interactive commands (emit, transcript, queue)
+ * skip prompt checking for speed.
  */
 
 import { Command } from "commander";
@@ -25,6 +30,9 @@ import { createQueueCommand } from "./commands/queue.js";
 import { createHooksCommand } from "./commands/hooks.js";
 import { createTranscriptCommand } from "./commands/transcript.js";
 import { createBackfillCommand } from "./commands/backfill.js";
+import { configExists, loadConfig } from "./lib/config.js";
+import { checkPendingPrompts } from "./lib/prompt-checker.js";
+import { showGitHooksPrompt } from "./lib/git-hooks-prompt.js";
 
 // ---------------------------------------------------------------------------
 // Logger — structured JSON logging for debugging and error tracking
@@ -40,6 +48,25 @@ const logger = pino({
       ? { target: "pino/file", options: { destination: 2 } } // stderr
       : undefined,
 });
+
+// ---------------------------------------------------------------------------
+// Interactive command list — these commands show pending prompts
+// ---------------------------------------------------------------------------
+
+/**
+ * Commands that are considered "interactive" — the user is actively using
+ * the CLI and should be shown pending prompts (e.g., git hook installation).
+ * Non-interactive commands (emit, transcript, queue) skip prompts for speed.
+ */
+const INTERACTIVE_COMMANDS = new Set([
+  "sessions",
+  "session",
+  "timeline",
+  "workspaces",
+  "status",
+  "hooks",
+  "backfill",
+]);
 
 // ---------------------------------------------------------------------------
 // Program setup
@@ -70,6 +97,42 @@ program.addCommand(createTranscriptCommand());
 
 // Register backfill command (Task 11: historical session discovery and ingestion)
 program.addCommand(createBackfillCommand());
+
+// ---------------------------------------------------------------------------
+// Prompt checking hook — runs before interactive commands
+// ---------------------------------------------------------------------------
+
+/**
+ * Before parsing, install a hook that checks for pending prompts
+ * on interactive commands. Uses Commander's hook() API to run
+ * pre-action logic for every command.
+ *
+ * The prompt check:
+ *   1. Only runs for interactive commands (status, hooks, backfill, etc.)
+ *   2. Only runs if config exists (fuel-code has been initialized)
+ *   3. Fails silently on any error (never blocks CLI usage)
+ *   4. Has a 2-second timeout built into checkPendingPrompts
+ */
+program.hook("preAction", async (thisCommand) => {
+  try {
+    // Determine the actual command being run (could be a subcommand)
+    const commandName = thisCommand.args?.[0] ?? thisCommand.name();
+
+    if (!INTERACTIVE_COMMANDS.has(commandName)) return;
+    if (!configExists()) return;
+
+    const config = loadConfig();
+    const prompts = await checkPendingPrompts(config);
+
+    for (const prompt of prompts) {
+      if (prompt.type === "git_hooks_install") {
+        await showGitHooksPrompt(prompt, config);
+      }
+    }
+  } catch {
+    // Prompt checking should never block the CLI — silently swallow errors
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Global error handling

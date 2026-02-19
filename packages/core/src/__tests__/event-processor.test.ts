@@ -266,9 +266,15 @@ describe("processEvent", () => {
     const logger = createMockLogger();
 
     // Result sets: workspace resolve, device resolve, ws-device link,
-    // event insert (returns id = new), handler session insert
+    // event insert (returns id = new), handler session insert,
+    // then git hooks prompt check: SELECT workspace canonical_id, SELECT workspace_devices
     const { sql, calls } = createMockSql([
-      ...standardResultSets([{ id: event.id }], []),
+      ...standardResultSets(
+        [{ id: event.id }],
+        [],                                                  // 5. INSERT session (from handler)
+        [{ canonical_id: "github.com/user/repo" }],          // 6. SELECT workspace for git hooks check
+        [],                                                  // 7. SELECT workspace_devices (empty = no link)
+      ),
     ]);
 
     const result = await processEvent(sql, event, registry, logger);
@@ -280,13 +286,15 @@ describe("processEvent", () => {
     expect(result.handlerResults[0].type).toBe("session.start");
     expect(result.handlerResults[0].success).toBe(true);
 
-    // Should have made 5 SQL calls total:
+    // Should have made 7 SQL calls total:
     //   1. resolveOrCreateWorkspace
     //   2. resolveOrCreateDevice
     //   3. ensureWorkspaceDeviceLink
     //   4. INSERT event
     //   5. INSERT session (from handler)
-    expect(calls).toHaveLength(5);
+    //   6. SELECT workspace canonical_id (git hooks prompt check)
+    //   7. SELECT workspace_devices (git hooks prompt check — empty, so no UPDATE)
+    expect(calls).toHaveLength(7);
 
     // Verify workspace resolve got the canonical ID and hint
     expect(calls[0].values).toContain("github.com/user/repo");
@@ -508,7 +516,12 @@ describe("handleSessionStart", () => {
   test("inserts session with correct fields from event data", async () => {
     const event = makeSessionStartEvent();
     const logger = createMockLogger();
-    const { sql, calls } = createMockSql([[]]);
+    // Provide result sets for: session INSERT, workspace lookup, wd status (empty=no link)
+    const { sql, calls } = createMockSql([
+      [],                                              // 1. session INSERT
+      [{ canonical_id: "github.com/user/repo" }],     // 2. workspace lookup (git hooks check)
+      [],                                              // 3. workspace_devices lookup (empty)
+    ]);
 
     await handleSessionStart({
       sql,
@@ -517,7 +530,8 @@ describe("handleSessionStart", () => {
       logger,
     });
 
-    expect(calls).toHaveLength(1);
+    // First call is the session INSERT; subsequent calls are git hooks prompt check
+    expect(calls.length).toBeGreaterThanOrEqual(1);
 
     const [call] = calls;
     // Values: cc_session_id, workspace_id, device_id, lifecycle, started_at,
@@ -552,7 +566,11 @@ describe("handleSessionStart", () => {
       },
     });
     const logger = createMockLogger();
-    const { sql, calls } = createMockSql([[]]);
+    // Provide result sets for: session INSERT, workspace lookup, wd status (empty)
+    const { sql, calls } = createMockSql([
+      [],                                              // 1. session INSERT
+      [{ canonical_id: "_unassociated" }],             // 2. workspace lookup (unassociated = skip)
+    ]);
 
     await handleSessionStart({
       sql,

@@ -32,6 +32,7 @@ import { createTranscriptUploadRouter } from "./routes/transcript-upload.js";
 import { createSessionActionsRouter } from "./routes/session-actions.js";
 import { createSessionsRouter } from "./routes/sessions.js";
 import { createTimelineRouter } from "./routes/timeline.js";
+import { createPromptsRouter } from "./routes/prompts.js";
 
 /** Dependencies injected into createApp for testability */
 export interface AppDeps {
@@ -119,6 +120,10 @@ export function createApp(deps: AppDeps): express.Express {
   // --- 6e. Timeline endpoint (Task 5) ---
   // Unified activity feed: sessions with embedded git highlights + orphan git events.
   app.use("/api", createTimelineRouter({ sql: deps.sql, logger }));
+
+  // --- 6f. Prompts endpoint (Task 4) ---
+  // Auto-prompt for git hook installation: pending prompts + dismiss actions.
+  app.use("/api", createPromptsRouter({ sql: deps.sql, logger }));
 
   // --- 7. Error handler — MUST be registered last ---
   app.use(errorHandler);
