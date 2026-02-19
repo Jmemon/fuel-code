@@ -165,7 +165,7 @@ async function main(): Promise<void> {
   // Consumer gets its own Redis client (blocking XREADGROUP commands).
   // Pipeline deps are passed through so session.end can trigger post-processing.
   const { registry } = createEventHandler(sql, logger, pipelineDeps);
-  const consumer = startConsumer({ redis: redisConsumer, sql, registry, logger });
+  const consumer = startConsumer({ redis: redisConsumer, sql, registry, logger, pipelineDeps });
   logger.info(
     { registeredHandlers: registry.listRegisteredTypes() },
     "Event consumer started",

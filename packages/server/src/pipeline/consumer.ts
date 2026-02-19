@@ -15,7 +15,7 @@
 import type Redis from "ioredis";
 import type { Sql } from "postgres";
 import type { Logger } from "pino";
-import type { EventHandlerRegistry, ProcessResult } from "@fuel-code/core";
+import type { EventHandlerRegistry, ProcessResult, PipelineDeps } from "@fuel-code/core";
 import type { Event } from "@fuel-code/shared";
 import { processEvent as processEventImpl } from "@fuel-code/core";
 
@@ -41,6 +41,8 @@ export interface ConsumerDeps {
   registry: EventHandlerRegistry;
   /** Pino logger for structured logging */
   logger: Logger;
+  /** Pipeline dependencies for post-processing (Phase 2) — passed through to processEvent */
+  pipelineDeps?: PipelineDeps;
 }
 
 /**
@@ -53,7 +55,7 @@ export interface ConsumerOverrides {
   readFromStream?: (redis: Redis, count: number, blockMs: number) => Promise<StreamEntry[]>;
   acknowledgeEntry?: (redis: Redis, streamId: string) => Promise<void>;
   claimPendingEntries?: (redis: Redis, minIdleMs: number, count: number) => Promise<StreamEntry[]>;
-  processEvent?: (sql: Sql, event: Event, registry: EventHandlerRegistry, logger: Logger) => Promise<ProcessResult>;
+  processEvent?: (sql: Sql, event: Event, registry: EventHandlerRegistry, logger: Logger, pipelineDeps?: PipelineDeps) => Promise<ProcessResult>;
   /** Override the reconnect delay (ms) for faster tests */
   reconnectDelayMs?: number;
   /** Override the stats interval (ms) for faster tests */
@@ -121,7 +123,7 @@ export function startConsumer(
   deps: ConsumerDeps,
   overrides?: ConsumerOverrides,
 ): ConsumerHandle {
-  const { redis, sql, registry, logger } = deps;
+  const { redis, sql, registry, logger, pipelineDeps } = deps;
 
   // Resolve function implementations — use overrides for testing, defaults for production
   const ensureGroup = overrides?.ensureConsumerGroup ?? ensureConsumerGroupImpl;
@@ -154,7 +156,7 @@ export function startConsumer(
    */
   async function handleEntry(entry: StreamEntry): Promise<void> {
     try {
-      const result = await processEvt(sql, entry.event, registry, logger);
+      const result = await processEvt(sql, entry.event, registry, logger, pipelineDeps);
 
       if (result.status === "duplicate") {
         statsDuplicates++;

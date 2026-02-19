@@ -196,7 +196,7 @@ beforeAll(async () => {
   // 9. Wire up the event handler registry with pipeline deps so session.end
   //    triggers the pipeline, then start the consumer
   const { registry } = createEventHandler(sql, logger, pipelineDeps);
-  consumer = startConsumer({ redis: redisConsumer, sql, registry, logger });
+  consumer = startConsumer({ redis: redisConsumer, sql, registry, logger, pipelineDeps });
 
   // 10. Create the Express app with S3 and pipeline deps enabled
   const app = createApp({
@@ -465,7 +465,8 @@ describe("Phase 2 E2E Pipeline", () => {
     expect(session.tool_use_count).toBeGreaterThan(0);
 
     // Token usage (fixture has non-zero input tokens on assistant messages)
-    expect(session.tokens_in).toBeGreaterThan(0);
+    // postgres.js returns bigint columns as strings; coerce before comparing
+    expect(Number(session.tokens_in)).toBeGreaterThan(0);
 
     // Initial prompt should be set (first user message text)
     expect(session.initial_prompt).toBeTruthy();
