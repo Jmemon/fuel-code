@@ -34,6 +34,8 @@ fi
 # Normalize SSH: git@github.com:user/repo.git -> github.com/user/repo
 if [[ "$REMOTE_URL" =~ ^[a-zA-Z0-9._-]+@([^:]+):(.+)$ ]]; then
   HOST="${BASH_REMATCH[1]}"
+  # Lowercase host to match TS normalizeGitRemote()
+  HOST=$(echo "$HOST" | tr '[:upper:]' '[:lower:]')
   PATH_PART="${BASH_REMATCH[2]}"
   # Strip .git suffix
   PATH_PART="${PATH_PART%.git}"
@@ -44,6 +46,8 @@ fi
 # Normalize HTTPS: https://github.com/user/repo.git -> github.com/user/repo
 if [[ "$REMOTE_URL" =~ ^https?://([^/]+)/(.+)$ ]]; then
   HOST="${BASH_REMATCH[1]}"
+  # Lowercase host to match TS normalizeGitRemote()
+  HOST=$(echo "$HOST" | tr '[:upper:]' '[:lower:]')
   PATH_PART="${BASH_REMATCH[2]}"
   PATH_PART="${PATH_PART%.git}"
   # Strip trailing slash

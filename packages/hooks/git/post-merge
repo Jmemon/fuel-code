@@ -32,16 +32,18 @@ INTO_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "HEAD")
 
 # Determine merged branch: try MERGE_HEAD first, then parse commit message
 MERGED_BRANCH="unknown"
-if [ -f ".git/MERGE_HEAD" ]; then
-  MERGE_HEAD=$(cat .git/MERGE_HEAD 2>/dev/null | head -1)
+GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
+if [ -n "$GIT_DIR" ] && [ -f "$GIT_DIR/MERGE_HEAD" ]; then
+  MERGE_HEAD=$(head -1 "$GIT_DIR/MERGE_HEAD" 2>/dev/null)
   if [ -n "$MERGE_HEAD" ]; then
     MERGED_BRANCH=$(git name-rev --name-only "$MERGE_HEAD" 2>/dev/null | sed 's|^remotes/[^/]*/||' || echo "unknown")
   fi
 fi
-# Fallback: parse "Merge branch 'feature'" from commit message
+# Fallback: parse "Merge branch 'feature'" from commit message (bash regex, macOS-safe)
 if [ "$MERGED_BRANCH" = "unknown" ]; then
-  PARSED=$(echo "$MESSAGE" | grep -oP "Merge branch '\\K[^']+" 2>/dev/null || echo "")
-  [ -n "$PARSED" ] && MERGED_BRANCH="$PARSED"
+  if [[ "$MESSAGE" =~ Merge\ branch\ \'([^\']+)\' ]]; then
+    MERGED_BRANCH="${BASH_REMATCH[1]}"
+  fi
 fi
 
 # Diff stats: compare HEAD^1 to HEAD
@@ -56,8 +58,8 @@ fi
 
 # Conflict detection: check MERGE_MSG for "Conflicts:" section
 HAD_CONFLICTS=false
-if [ -f ".git/MERGE_MSG" ]; then
-  if grep -q "^Conflicts:" ".git/MERGE_MSG" 2>/dev/null; then
+if [ -n "$GIT_DIR" ] && [ -f "$GIT_DIR/MERGE_MSG" ]; then
+  if grep -q "^Conflicts:" "$GIT_DIR/MERGE_MSG" 2>/dev/null; then
     HAD_CONFLICTS=true
   fi
 fi

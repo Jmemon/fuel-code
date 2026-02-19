@@ -60,7 +60,9 @@ while IFS=$'\t' read -r status filepath; do
   else
     FILE_LIST+=","
   fi
-  FILE_LIST+="{\"path\":\"$filepath\",\"status\":\"$status\"}"
+  # JSON-escape file path via python3 (handles special chars, quotes, unicode)
+  ESCAPED_PATH=$(printf '%s' "$filepath" | python3 -c 'import json,sys; sys.stdout.write(json.dumps(sys.stdin.read()))' 2>/dev/null || printf '"%s"' "$filepath")
+  FILE_LIST+="{\"path\":$ESCAPED_PATH,\"status\":\"$status\"}"
 done < <(git diff-tree --no-commit-id --name-status -r HEAD 2>/dev/null)
 FILE_LIST+="]"
 
@@ -73,7 +75,7 @@ FILE_LIST+="]"
   "hash": "$HASH",
   "message": $(printf '%s' "$MESSAGE" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo '""'),
   "author_name": $(printf '%s' "$AUTHOR_NAME" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo '""'),
-  "author_email": "$AUTHOR_EMAIL",
+  "author_email": $(printf '%s' "$AUTHOR_EMAIL" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo '""'),
   "branch": "$BRANCH",
   "files_changed": $FILES_CHANGED,
   "insertions": $INSERTIONS,

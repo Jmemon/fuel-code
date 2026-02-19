@@ -105,8 +105,10 @@ export async function runEmit(
 
   if (opts.dataStdin) {
     // Read JSON from stdin (used by git hooks via heredoc piping)
+    // Declare stdinText outside try so the catch block can wrap it as _raw
+    let stdinText = "";
     try {
-      const stdinText = await Bun.stdin.text();
+      stdinText = await Bun.stdin.text();
       const parsed = JSON.parse(stdinText);
       if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
         data = parsed as Record<string, unknown>;
@@ -115,8 +117,9 @@ export async function runEmit(
         data = { _raw: stdinText };
       }
     } catch {
-      logger.warn("Failed to parse stdin as JSON");
-      data = {};
+      // Not valid JSON — wrap the raw stdin text (consistent with --data path)
+      logger.warn("Failed to parse stdin as JSON — wrapping as { _raw }");
+      data = { _raw: stdinText };
     }
   } else {
     // Parse --data argument JSON. If invalid, wrap as { _raw: theString }.
