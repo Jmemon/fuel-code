@@ -86,7 +86,8 @@ export async function runMigrations(
       // Step 5: Apply unapplied migration inside a transaction.
       // On failure, rollback and record the error, then continue with the next file.
       try {
-        await sql.begin(async (tx) => {
+        // TransactionSql type is missing template literal call signatures in postgres.js types
+        await sql.begin(async (tx: any) => {
           // Execute the raw SQL from the migration file
           await tx.unsafe(file.content);
 

@@ -34,7 +34,7 @@ function triggerPipeline(pipelineDeps: PipelineDeps, sessionId: string, logger: 
   if (pipelineDeps.enqueueSession) {
     pipelineDeps.enqueueSession(sessionId);
   } else {
-    runSessionPipeline(pipelineDeps, sessionId).catch((err) => {
+    runSessionPipeline(pipelineDeps, sessionId).catch((err: unknown) => {
       logger.error(
         { sessionId, error: err instanceof Error ? err.message : String(err) },
         "Pipeline trigger failed (direct)",
@@ -79,7 +79,7 @@ export function createTranscriptUploadRouter(deps: {
     "/:id/transcript/upload",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const sessionId = req.params.id;
+        const sessionId = req.params.id as string;
 
         // --- Step 1: Validate Content-Length is present and within limits ---
         const contentLength = parseInt(req.headers["content-length"] || "0", 10);

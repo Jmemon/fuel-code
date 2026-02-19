@@ -148,12 +148,12 @@ describe("consumer — entry processing", () => {
 
     // processEvent should have been called with the event
     expect(overrides._processEvent).toHaveBeenCalled();
-    const processCall = overrides._processEvent.mock.calls[0];
+    const processCall = (overrides._processEvent.mock.calls as any[])[0];
     expect(processCall[1]).toEqual(event);
 
     // acknowledgeEntry should have been called with the stream ID
     expect(overrides._acknowledgeEntry).toHaveBeenCalled();
-    const ackCall = overrides._acknowledgeEntry.mock.calls[0];
+    const ackCall = (overrides._acknowledgeEntry.mock.calls as any[])[0];
     expect(ackCall[1]).toBe("1000-0");
   });
 
@@ -185,7 +185,7 @@ describe("consumer — entry processing", () => {
     await consumer.stop();
 
     expect(overrides._acknowledgeEntry).toHaveBeenCalled();
-    const ackCall = overrides._acknowledgeEntry.mock.calls[0];
+    const ackCall = (overrides._acknowledgeEntry.mock.calls as any[])[0];
     expect(ackCall[1]).toBe("2000-0");
   });
 });
@@ -355,7 +355,7 @@ describe("consumer — pending entry reclamation on startup", () => {
 
     // The reclaimed entry should have been processed
     expect(overrides._processEvent).toHaveBeenCalled();
-    const processCall = overrides._processEvent.mock.calls[0];
+    const processCall = (overrides._processEvent.mock.calls as any[])[0];
     expect(processCall[1]).toEqual(pendingEvent);
 
     // And acknowledged
@@ -390,7 +390,7 @@ describe("consumer — periodic stats logging", () => {
       return delayedResolve([] as StreamEntry[]);
     });
 
-    overrides._processEvent.mockImplementation((_sql: any, event: Event) =>
+    (overrides._processEvent as any).mockImplementation((_sql: any, event: Event) =>
       Promise.resolve({
         eventId: event.id,
         status: "processed" as const,
@@ -485,7 +485,7 @@ describe("consumer — multiple entries in a single read", () => {
       return delayedResolve([] as StreamEntry[]);
     });
 
-    overrides._processEvent.mockImplementation((_sql: any, event: Event) =>
+    (overrides._processEvent as any).mockImplementation((_sql: any, event: Event) =>
       Promise.resolve({
         eventId: event.id,
         status: "processed" as const,

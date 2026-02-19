@@ -8,7 +8,7 @@
     "fuel-code": "./src/index.ts"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -b",
     "test": "bun test"
   },
   "dependencies": {

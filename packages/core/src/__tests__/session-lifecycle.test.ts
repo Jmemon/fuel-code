@@ -139,7 +139,7 @@ const DATABASE_URL = process.env.DATABASE_URL;
 
 describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
   // Dynamically import postgres only when we have a DATABASE_URL
-  let postgres: typeof import("postgres").default;
+  let postgres: typeof import("postgres");
   let sql: import("postgres").Sql;
 
   // Test fixtures: IDs for workspace, device, and sessions

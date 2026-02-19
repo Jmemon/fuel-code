@@ -38,7 +38,7 @@ const DEVICE_ID = "test-device-reparse-001";
 // ---------------------------------------------------------------------------
 
 describe.skipIf(!DATABASE_URL)("POST /api/sessions/:id/reparse", () => {
-  let postgres: typeof import("postgres").default;
+  let postgres: typeof import("postgres");
   let sql: Sql;
   let server: Server;
   let baseUrl: string;

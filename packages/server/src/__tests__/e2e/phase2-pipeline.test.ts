@@ -360,7 +360,7 @@ async function uploadTranscript(
       "Content-Type": "application/octet-stream",
       Authorization: `Bearer ${API_KEY}`,
     },
-    body: content ?? testTranscriptContent,
+    body: (content ?? testTranscriptContent) as unknown as BodyInit,
   });
 }
 

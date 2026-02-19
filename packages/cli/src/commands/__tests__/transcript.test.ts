@@ -137,7 +137,7 @@ describe("runTranscriptUpload", () => {
         JSON.stringify({ status: "uploaded", s3_key: "transcripts/ws/sess/raw.jsonl", pipeline_triggered: false }),
         { status: 202, headers: { "Content-Type": "application/json" } },
       );
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     try {
       await runTranscriptUpload("sess-upload-test", transcriptFile);
@@ -164,7 +164,7 @@ describe("runTranscriptUpload", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => {
       throw new Error("Connection refused");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     // Capture stderr
     const stderrChunks: string[] = [];
@@ -202,7 +202,7 @@ describe("runTranscriptUpload", () => {
         JSON.stringify({ status: "uploaded", s3_key: "test/key", pipeline_triggered: false }),
         { status: 202 },
       );
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     try {
       await runTranscriptUpload("sess-size-check", transcriptFile);

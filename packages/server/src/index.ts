@@ -32,7 +32,7 @@ import { createEventHandler } from "./pipeline/wire.js";
 import { startConsumer } from "./pipeline/consumer.js";
 import { createS3Client } from "./aws/s3.js";
 import { loadS3Config } from "./aws/s3-config.js";
-import { loadSummaryConfig, createPipelineQueue } from "@fuel-code/core";
+import { loadSummaryConfig, createPipelineQueue, type PipelineDeps } from "@fuel-code/core";
 
 /** Graceful shutdown timeout — force exit if cleanup takes longer than this */
 const SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -131,7 +131,7 @@ async function main(): Promise<void> {
   const s3Config = loadS3Config();
   const s3 = createS3Client(s3Config, logger);
   const summaryConfig = loadSummaryConfig();
-  const pipelineDeps = { sql, s3, summaryConfig, logger };
+  const pipelineDeps: PipelineDeps = { sql, s3, summaryConfig, logger };
 
   // --- Step 7b: Create bounded pipeline queue (max 3 concurrent, 50 pending) ---
   // The queue prevents unbounded concurrent pipeline runs during backfill or

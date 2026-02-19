@@ -199,7 +199,7 @@ describe("createPipelineQueue", () => {
 // ---------------------------------------------------------------------------
 
 describe.skipIf(!DATABASE_URL)("session-pipeline (database)", () => {
-  let postgres: typeof import("postgres").default;
+  let postgres: typeof import("postgres");
   let sql: import("postgres").Sql;
 
   // Test fixtures

@@ -250,7 +250,7 @@ async function uploadTranscript(
       Authorization: AUTH_HEADER,
       ...headers,
     },
-    body,
+    body: body as BodyInit,
   });
 }
 

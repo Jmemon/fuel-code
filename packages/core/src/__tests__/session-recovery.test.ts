@@ -43,7 +43,7 @@ function createMockS3(): S3Client {
 // ---------------------------------------------------------------------------
 
 describe.skipIf(!DATABASE_URL)("session-recovery (database)", () => {
-  let postgres: typeof import("postgres").default;
+  let postgres: typeof import("postgres");
   let sql: import("postgres").Sql;
   let pipelineDeps: PipelineDeps;
 

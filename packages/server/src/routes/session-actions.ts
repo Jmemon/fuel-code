@@ -31,7 +31,7 @@ function triggerPipeline(pipelineDeps: PipelineDeps, sessionId: string, logger: 
   if (pipelineDeps.enqueueSession) {
     pipelineDeps.enqueueSession(sessionId);
   } else {
-    runSessionPipeline(pipelineDeps, sessionId).catch((err) => {
+    runSessionPipeline(pipelineDeps, sessionId).catch((err: unknown) => {
       logger.error(
         { sessionId, error: err instanceof Error ? err.message : String(err) },
         "Pipeline trigger failed (direct)",
@@ -71,7 +71,7 @@ export function createSessionActionsRouter(deps: {
     "/sessions/:id/reparse",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const sessionId = req.params.id;
+        const sessionId = req.params.id as string;
 
         // --- Step 1: Fetch session details for validation ---
         const sessionRows = await sql`

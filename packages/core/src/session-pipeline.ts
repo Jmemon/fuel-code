@@ -181,7 +181,8 @@ export async function runSessionPipeline(
   // -------------------------------------------------------------------------
 
   try {
-    await sql.begin(async (tx) => {
+    // TransactionSql type is missing template literal call signatures in postgres.js types
+    await sql.begin(async (tx: any) => {
       // Clear any previously parsed data for this session (idempotent re-run)
       await tx`DELETE FROM content_blocks WHERE session_id = ${sessionId}`;
       await tx`DELETE FROM transcript_messages WHERE session_id = ${sessionId}`;
@@ -211,7 +212,7 @@ export async function runSessionPipeline(
   const transitionResult = await transitionSession(sql, sessionId, "ended", "parsed", {
     parse_status: "completed",
     parse_error: null,
-    initial_prompt: initialPrompt,
+    initial_prompt: initialPrompt ?? undefined,
     total_messages: stats.total_messages,
     user_messages: stats.user_messages,
     assistant_messages: stats.assistant_messages,
@@ -385,7 +386,7 @@ async function batchInsertMessages(
         compact_sequence, is_compacted, timestamp, raw_message, metadata,
         has_text, has_thinking, has_tool_use, has_tool_result
       ) VALUES ${placeholders.join(", ")}`,
-      values,
+      values as any[],
     );
   }
 }
@@ -440,7 +441,7 @@ async function batchInsertContentBlocks(
         content_text, thinking_text, tool_name, tool_use_id, tool_input,
         tool_result_id, is_error, result_text, metadata
       ) VALUES ${placeholders.join(", ")}`,
-      values,
+      values as any[],
     );
   }
 }

@@ -184,7 +184,7 @@ export async function transitionSession(
     RETURNING lifecycle
   `;
 
-  const result = await sql.unsafe(query, values);
+  const result = await sql.unsafe(query, values as any[]);
 
   // If the UPDATE matched a row, the transition succeeded
   if (result.length > 0) {
@@ -325,7 +325,8 @@ export async function resetSessionForReparse(
   ];
 
   // Run in a transaction: delete parsed data, then reset the session row
-  const result = await sql.begin(async (tx) => {
+  // TransactionSql type is missing template literal call signatures in postgres.js types
+  const result = await sql.begin(async (tx: any) => {
     // Remove parsed content blocks first (FK: content_blocks -> transcript_messages)
     await tx`DELETE FROM content_blocks WHERE session_id = ${sessionId}`;
 

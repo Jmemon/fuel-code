@@ -63,7 +63,7 @@ export function createEventsRouter(deps: { redis: Redis }): Router {
     "/events/ingest",
     async (req: Request, res: Response, next: NextFunction) => {
       // --- Step 1: Validate the request envelope (batch structure, ULIDs, etc.) ---
-      let parsed: { events: Event[] };
+      let parsed: ReturnType<typeof ingestRequestSchema.parse>;
       try {
         parsed = ingestRequestSchema.parse(req.body);
       } catch (err) {
@@ -100,9 +100,9 @@ export function createEventsRouter(deps: { redis: Redis }): Router {
           continue;
         }
 
-        // Set server-side ingestion timestamp
-        event.ingested_at = new Date().toISOString();
-        valid.push(event);
+        // Set server-side ingestion timestamp and push as a full Event
+        const fullEvent = { ...event, ingested_at: new Date().toISOString() } as Event;
+        valid.push(fullEvent);
         results.push({ index: i, status: "accepted" });
       }
 

@@ -343,11 +343,11 @@ function handleApiError(error: unknown): SummaryResult {
  * Attempt to extract a retry-after value (in seconds) from an Anthropic
  * rate limit error. Returns undefined if not available.
  */
-function extractRetryAfter(error: Anthropic.APIError): number | undefined {
+function extractRetryAfter(error: InstanceType<typeof Anthropic.APIError>): number | undefined {
   // The Anthropic SDK exposes headers on the error object
   const headers = error.headers;
   if (headers) {
-    const retryAfter = headers["retry-after"];
+    const retryAfter = headers.get("retry-after");
     if (retryAfter) {
       const seconds = parseInt(retryAfter, 10);
       if (!isNaN(seconds) && seconds > 0) {

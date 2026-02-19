@@ -113,7 +113,7 @@ describe("createApiClient", () => {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
-      }) as typeof fetch;
+      }) as unknown as typeof fetch;
 
       try {
         const client = createApiClient(config);
@@ -133,7 +133,7 @@ describe("createApiClient", () => {
       const originalFetch = globalThis.fetch;
       globalThis.fetch = mock(async () => {
         throw new Error("Connection refused");
-      }) as typeof fetch;
+      }) as unknown as typeof fetch;
 
       try {
         const client = createApiClient(config);
@@ -151,7 +151,7 @@ describe("createApiClient", () => {
       const originalFetch = globalThis.fetch;
       globalThis.fetch = mock(async () => {
         return new Response("Internal Server Error", { status: 500 });
-      }) as typeof fetch;
+      }) as unknown as typeof fetch;
 
       try {
         const client = createApiClient(config);
@@ -176,7 +176,7 @@ describe("createApiClient", () => {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
-      }) as typeof fetch;
+      }) as unknown as typeof fetch;
 
       try {
         const client = createApiClient(config);
@@ -195,7 +195,7 @@ describe("createApiClient", () => {
       const originalFetch = globalThis.fetch;
       globalThis.fetch = mock(async () => {
         return new Response("OK", { status: 200 });
-      }) as typeof fetch;
+      }) as unknown as typeof fetch;
 
       try {
         const client = createApiClient(config);
@@ -212,7 +212,7 @@ describe("createApiClient", () => {
       const originalFetch = globalThis.fetch;
       globalThis.fetch = mock(async () => {
         throw new Error("DNS resolution failed");
-      }) as typeof fetch;
+      }) as unknown as typeof fetch;
 
       try {
         const client = createApiClient(config);
@@ -229,7 +229,7 @@ describe("createApiClient", () => {
       const originalFetch = globalThis.fetch;
       globalThis.fetch = mock(async () => {
         return new Response("Service Unavailable", { status: 503 });
-      }) as typeof fetch;
+      }) as unknown as typeof fetch;
 
       try {
         const client = createApiClient(config);
@@ -290,7 +290,7 @@ pipeline:
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => {
       throw new Error("Connection refused");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     try {
       await runEmit("git.commit", {
@@ -342,7 +342,7 @@ pipeline:
         JSON.stringify({ ingested: 1, duplicates: 0 }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     try {
       await runEmit("git.push", {
@@ -381,7 +381,7 @@ pipeline:
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => {
       throw new Error("Connection refused");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     try {
       await runEmit("git.commit", {
@@ -423,7 +423,7 @@ pipeline:
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => {
       throw new Error("Connection refused");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     try {
       await runEmit("git.commit", {
@@ -465,7 +465,7 @@ pipeline:
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => {
       throw new Error("Connection refused");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     try {
       await runEmit("system.heartbeat", {
@@ -507,7 +507,7 @@ pipeline:
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => {
       throw new Error("Connection refused");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     try {
       await runEmit("git.commit", {

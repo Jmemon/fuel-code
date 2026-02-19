@@ -57,7 +57,7 @@ describe("createAuthMiddleware", () => {
   test("calls next() for a valid Bearer token", () => {
     const req = mockRequest(`Bearer ${TEST_API_KEY}`);
     const res = mockResponse();
-    const next = mock<NextFunction>(() => {});
+    const next = mock(() => {}) as any as NextFunction;
 
     authMiddleware(req, res, next);
 
@@ -71,7 +71,7 @@ describe("createAuthMiddleware", () => {
   test("returns 401 when Authorization header is missing", () => {
     const req = mockRequest(); // no auth header
     const res = mockResponse();
-    const next = mock<NextFunction>(() => {});
+    const next = mock(() => {}) as any as NextFunction;
 
     authMiddleware(req, res, next);
 
@@ -83,7 +83,7 @@ describe("createAuthMiddleware", () => {
   test("returns 401 when token is wrong", () => {
     const req = mockRequest("Bearer wrong_key_value");
     const res = mockResponse();
-    const next = mock<NextFunction>(() => {});
+    const next = mock(() => {}) as any as NextFunction;
 
     authMiddleware(req, res, next);
 
@@ -95,7 +95,7 @@ describe("createAuthMiddleware", () => {
   test("returns 401 for malformed header without Bearer prefix", () => {
     const req = mockRequest(`Basic ${TEST_API_KEY}`);
     const res = mockResponse();
-    const next = mock<NextFunction>(() => {});
+    const next = mock(() => {}) as any as NextFunction;
 
     authMiddleware(req, res, next);
 
@@ -107,7 +107,7 @@ describe("createAuthMiddleware", () => {
   test("returns 401 for header with just the token (no Bearer prefix)", () => {
     const req = mockRequest(TEST_API_KEY);
     const res = mockResponse();
-    const next = mock<NextFunction>(() => {});
+    const next = mock(() => {}) as any as NextFunction;
 
     authMiddleware(req, res, next);
 
@@ -119,7 +119,7 @@ describe("createAuthMiddleware", () => {
   test("returns 401 for empty token after Bearer prefix", () => {
     const req = mockRequest("Bearer ");
     const res = mockResponse();
-    const next = mock<NextFunction>(() => {});
+    const next = mock(() => {}) as any as NextFunction;
 
     authMiddleware(req, res, next);
 
@@ -132,7 +132,7 @@ describe("createAuthMiddleware", () => {
   test("returns 401 for empty Authorization header", () => {
     const req = mockRequest("");
     const res = mockResponse();
-    const next = mock<NextFunction>(() => {});
+    const next = mock(() => {}) as any as NextFunction;
 
     authMiddleware(req, res, next);
 
