@@ -47,30 +47,34 @@ export async function handleGitMerge(ctx: EventHandlerContext): Promise<void> {
     "Processing git.merge event",
   );
 
-  // Insert into git_activity — merge events store branch/conflict info in data JSONB
-  await sql`
-    INSERT INTO git_activity (id, workspace_id, device_id, session_id, type, branch, commit_sha, message, files_changed, timestamp, data)
-    VALUES (
-      ${event.id},
-      ${workspaceId},
-      ${event.device_id},
-      ${correlation.sessionId},
-      ${"merge"},
-      ${intoBranch},
-      ${mergeCommit},
-      ${message},
-      ${filesChanged},
-      ${event.timestamp},
-      ${JSON.stringify({ merged_branch: mergedBranch, had_conflicts: hadConflicts })}
-    )
-    ON CONFLICT (id) DO NOTHING
-  `;
-
-  // If we found an active session, update the event row's session_id
-  if (correlation.sessionId) {
-    await sql`
-      UPDATE events SET session_id = ${correlation.sessionId}
-      WHERE id = ${event.id} AND session_id IS NULL
+  // Wrap INSERT + UPDATE in a transaction so both succeed or both roll back.
+  // Prevents inconsistent state where git_activity has session_id but events doesn't.
+  await sql.begin(async (tx) => {
+    // Insert into git_activity — merge events store branch/conflict info in data JSONB
+    await tx`
+      INSERT INTO git_activity (id, workspace_id, device_id, session_id, type, branch, commit_sha, message, files_changed, timestamp, data)
+      VALUES (
+        ${event.id},
+        ${workspaceId},
+        ${event.device_id},
+        ${correlation.sessionId},
+        ${"merge"},
+        ${intoBranch},
+        ${mergeCommit},
+        ${message},
+        ${filesChanged},
+        ${event.timestamp},
+        ${JSON.stringify({ merged_branch: mergedBranch, had_conflicts: hadConflicts })}
+      )
+      ON CONFLICT (id) DO NOTHING
     `;
-  }
+
+    // If we found an active session, update the event row's session_id
+    if (correlation.sessionId) {
+      await tx`
+        UPDATE events SET session_id = ${correlation.sessionId}
+        WHERE id = ${event.id} AND session_id IS NULL
+      `;
+    }
+  });
 }

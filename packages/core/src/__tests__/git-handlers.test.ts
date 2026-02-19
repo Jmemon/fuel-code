@@ -32,6 +32,10 @@ interface SqlCall {
 /**
  * Create a mock sql tagged template function.
  * Returns result sets in FIFO order; cycles through them for each call.
+ *
+ * Also provides a sql.begin(callback) method that mimics postgres.js transactions.
+ * The callback receives the same mock sql function as `tx`, so inner tagged-template
+ * calls are captured in the same `calls` array.
  */
 function createMockSql(resultSets: Record<string, unknown>[][]) {
   const calls: SqlCall[] = [];
@@ -42,6 +46,13 @@ function createMockSql(resultSets: Record<string, unknown>[][]) {
     const idx = Math.min(callIndex, resultSets.length - 1);
     callIndex++;
     return Promise.resolve(resultSets[idx] ?? []);
+  };
+
+  // Simulate postgres.js sql.begin(async (tx) => { ... })
+  // Passes the same mock sql function as the transaction client so
+  // inner queries are recorded in the shared calls array.
+  sqlFn.begin = async (cb: (tx: any) => Promise<void>) => {
+    await cb(sqlFn);
   };
 
   return { sql: sqlFn as any, calls };

@@ -456,11 +456,13 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
           return;
         }
 
-        // Query git_activity table for all git events correlated to this session
+        // Query git_activity table for all git events correlated to this session.
+        // LIMIT 500 as a defensive upper bound to prevent unbounded result sets.
         const gitActivity = await sql`
           SELECT * FROM git_activity
           WHERE session_id = ${id}
           ORDER BY timestamp ASC
+          LIMIT 500
         `;
         res.json({ git_activity: gitActivity });
       } catch (err) {
