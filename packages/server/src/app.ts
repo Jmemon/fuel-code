@@ -29,6 +29,7 @@ import { errorHandler } from "./middleware/error-handler.js";
 import { createHealthRouter } from "./routes/health.js";
 import { createEventsRouter } from "./routes/events.js";
 import { createTranscriptUploadRouter } from "./routes/transcript-upload.js";
+import { createSessionsRouter } from "./routes/sessions.js";
 
 /** Dependencies injected into createApp for testability */
 export interface AppDeps {
@@ -98,6 +99,10 @@ export function createApp(deps: AppDeps): express.Express {
     });
     app.use("/api/sessions", uploadRouter);
   }
+
+  // --- 6d. Session query/mutation routes (Task 9) ---
+  // List, detail, transcript, events, git activity, and tag/summary updates.
+  app.use("/api", createSessionsRouter({ sql: deps.sql, s3: deps.s3, logger }));
 
   // --- 7. Error handler — MUST be registered last ---
   app.use(errorHandler);

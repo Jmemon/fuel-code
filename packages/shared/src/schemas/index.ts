@@ -7,3 +7,4 @@ export * from "./session-start.js";
 export * from "./session-end.js";
 export * from "./session-compact.js";
 export * from "./payload-registry.js";
+export * from "./session-query.js";
