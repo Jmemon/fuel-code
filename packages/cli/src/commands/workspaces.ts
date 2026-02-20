@@ -24,8 +24,6 @@ import {
   formatDuration,
   formatCost,
   formatRelativeTime,
-  formatWorkspaceRow,
-  formatSessionRow,
   formatEmpty,
   formatError,
   outputResult,
@@ -153,8 +151,8 @@ export function formatWorkspaceDetail(detail: WorkspaceDetailResponse): string {
       const gitHook = device.git_hooks_installed
         ? pc.green("\u2713")
         : pc.red("\u2717");
-      const lastActive = (device as any).last_active_at
-        ? formatRelativeTime((device as any).last_active_at)
+      const lastActive = device.last_active_at
+        ? formatRelativeTime(device.last_active_at)
         : pc.dim("never");
       lines.push(
         `  ${device.name} (${device.type})  CC: ${ccHook}  Git: ${gitHook}  last active: ${lastActive}`,

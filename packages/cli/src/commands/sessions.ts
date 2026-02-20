@@ -137,7 +137,7 @@ export function formatSessionsTable(sessions: Session[], hasFilters?: boolean): 
  */
 function formatPaginationFooter(cursor: string | null, total: number): string {
   if (!cursor) return "";
-  return pc.dim(`\nShowing ${total} sessions. Next page: --cursor ${cursor}`);
+  return pc.dim(`\nShowing ${total} sessions (more available). Next page: --cursor ${cursor}`);
 }
 
 // ---------------------------------------------------------------------------

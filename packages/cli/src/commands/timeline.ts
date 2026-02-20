@@ -25,7 +25,6 @@ import {
   formatDuration,
   formatCost,
   formatLifecycle,
-  formatEmpty,
   formatError,
   outputResult,
 } from "../lib/formatters.js";
@@ -205,7 +204,7 @@ function renderSessionItem(item: TimelineSessionItem): string {
   }
   if (toolCounts.size > 0) {
     const parts = Array.from(toolCounts.entries()).map(
-      ([type, count]) => `${count} ${type}${count > 1 ? "s" : ""}`,
+      ([type, count]) => `${count} ${count > 1 ? (type.endsWith("h") ? type + "es" : type + "s") : type}`,
     );
     lines.push(`           ${pc.dim(parts.join(", "))}`);
   }
@@ -267,20 +266,25 @@ function computeStats(items: TimelineItem[]): {
 /**
  * Format the full timeline output with date headers, session blocks, and footer.
  *
- * If there is only one date group, the date header is still shown for context.
+ * If there is only one date group, the date header is suppressed (single-day view).
  */
 export function formatTimeline(data: TimelineResponse): string {
   if (data.items.length === 0) {
-    return formatEmpty("activity") + "\n" + pc.dim("No activity found for today.");
+    return pc.dim("No activity found for today.");
   }
 
   const groups = groupByDate(data.items);
   const lines: string[] = [];
 
+  // Suppress the date header when all results fall under a single date group
+  const isSingleDay = groups.size === 1;
+
   for (const [dateKey, items] of groups) {
-    // Date header
-    lines.push("");
-    lines.push(pc.bold(formatDateHeader(dateKey)));
+    if (!isSingleDay) {
+      // Date header (only shown when multiple date groups exist)
+      lines.push("");
+      lines.push(pc.bold(formatDateHeader(dateKey)));
+    }
     lines.push("");
 
     // Render each item
@@ -294,14 +298,16 @@ export function formatTimeline(data: TimelineResponse): string {
     }
   }
 
-  // Footer stats
+  // Footer stats — format: "Today: 4 sessions · 2h50m · $2.78 · 8 commits"
   const stats = computeStats(data.items);
+  const datePrefix = isSingleDay ? `${formatDateHeader([...groups.keys()][0])}: ` : "";
   lines.push(
     pc.dim(
-      `${stats.sessions} session${stats.sessions !== 1 ? "s" : ""}` +
-        ` | ${formatDuration(stats.totalDurationMs)}` +
-        ` | ${formatCost(stats.totalCostUsd)}` +
-        ` | ${stats.commits} commit${stats.commits !== 1 ? "s" : ""}`,
+      `${datePrefix}` +
+        `${stats.sessions} session${stats.sessions !== 1 ? "s" : ""}` +
+        ` \u00b7 ${formatDuration(stats.totalDurationMs)}` +
+        ` \u00b7 ${formatCost(stats.totalCostUsd)}` +
+        ` \u00b7 ${stats.commits} commit${stats.commits !== 1 ? "s" : ""}`,
     ),
   );
 

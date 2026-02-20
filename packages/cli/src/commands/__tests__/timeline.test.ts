@@ -228,11 +228,13 @@ describe("fetchTimeline", () => {
 // ---------------------------------------------------------------------------
 
 describe("formatTimeline", () => {
-  it("shows empty state when no items", () => {
+  it("shows single empty message when no items", () => {
     const data = makeTimelineResponse();
     const output = formatTimeline(data);
     const plain = stripAnsi(output);
-    expect(plain).toContain("No activity found for today");
+    expect(plain).toBe("No activity found for today.");
+    // Should be one message, not a duplicate
+    expect(plain.match(/No activity found/g)?.length).toBe(1);
   });
 
   it("renders session with lifecycle, workspace@device, duration, cost", () => {
@@ -302,19 +304,19 @@ describe("formatTimeline", () => {
     expect(plain).toContain("fix: resolve login bug");
   });
 
-  it("renders date header for items", () => {
-    // Use a fixed past date to avoid "Today" label
+  it("includes date prefix in footer for single-day view", () => {
+    // Use a fixed past date to get a specific date label
     const sessionItem = makeSessionItem();
     sessionItem.session.started_at = "2024-03-15T10:00:00Z";
     const data = makeTimelineResponse([sessionItem]);
     const output = formatTimeline(data);
     const plain = stripAnsi(output);
 
-    // Should contain a date header (day name or "Today"/"Yesterday")
+    // Single-day view: date header is suppressed but the footer contains a date prefix
     expect(plain).toMatch(/(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Today|Yesterday|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/);
   });
 
-  it("renders footer stats with session count, duration, cost, commits", () => {
+  it("renders footer stats with middle-dot separators and session count, duration, cost, commits", () => {
     const sessionItem = makeSessionItem({
       git_activity: [
         {
@@ -337,6 +339,9 @@ describe("formatTimeline", () => {
     expect(plain).toContain("1h30m");
     expect(plain).toContain("$1.50");
     expect(plain).toContain("1 commit");
+    // Footer uses middle-dot separator, not pipe
+    expect(plain).toContain("\u00b7");
+    expect(plain).not.toContain("|");
   });
 
   it("pluralizes footer stats correctly for multiple items", () => {
@@ -428,18 +433,23 @@ describe("formatTimeline", () => {
     const output = formatTimeline(data);
     const plain = stripAnsi(output);
 
-    expect(plain).toContain("2 pushs");
+    expect(plain).toContain("2 pushes");
   });
 
-  it("renders single-day timeline with date header", () => {
+  it("suppresses date header for single-day results", () => {
     const sessionItem = makeSessionItem();
     const data = makeTimelineResponse([sessionItem]);
     const output = formatTimeline(data);
-    // Even with a single date, a header should be present
-    expect(output.length).toBeGreaterThan(0);
-    // The output should have content beyond just the empty state
     const plain = stripAnsi(output);
+
+    // Should have content (not empty state)
     expect(plain).not.toContain("No activity found");
+    // Should not contain a standalone date header line when all results are same day
+    const lines = plain.split("\n").filter((l) => l.trim().length > 0);
+    const dateHeaders = lines.filter(
+      (l) => !l.startsWith("  ") && /^(?:Today|Yesterday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)/.test(l.trim()) && !l.includes("session"),
+    );
+    expect(dateHeaders.length).toBe(0);
   });
 });
 
