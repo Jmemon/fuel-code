@@ -99,11 +99,25 @@ describe("TranscriptViewer — Empty states", () => {
     expect(lastFrame()).toContain("not yet available");
   });
 
-  it("2. empty array shows 'not yet available'", () => {
+  it("2. empty array shows 'No messages in transcript'", () => {
     const { lastFrame } = render(
       <TranscriptViewer messages={[]} scrollOffset={0} onScrollChange={() => {}} />
     );
-    expect(lastFrame()).toContain("not yet available");
+    expect(lastFrame()).toContain("No messages in transcript");
+  });
+
+  it("2b. isLive with null messages shows in-progress message", () => {
+    const { lastFrame } = render(
+      <TranscriptViewer messages={null} scrollOffset={0} onScrollChange={() => {}} isLive={true} />
+    );
+    expect(lastFrame()).toContain("Session in progress");
+  });
+
+  it("2c. isLive with empty array shows in-progress message", () => {
+    const { lastFrame } = render(
+      <TranscriptViewer messages={[]} scrollOffset={0} onScrollChange={() => {}} isLive={true} />
+    );
+    expect(lastFrame()).toContain("Session in progress");
   });
 });
 

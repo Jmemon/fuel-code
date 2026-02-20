@@ -28,6 +28,7 @@ import { SessionHeader } from "./components/SessionHeader.js";
 import { TranscriptViewer } from "./components/TranscriptViewer.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { FooterBar } from "./components/FooterBar.js";
+import { Spinner } from "./components/Spinner.js";
 import { GitActivityPanel } from "./components/GitActivityPanel.js";
 import type { TranscriptMessageWithBlocks } from "./components/MessageBlock.js";
 import type { Event } from "@fuel-code/shared";
@@ -162,8 +163,12 @@ export function SessionDetailView({
       setScrollOffset((prev) => Math.max(prev - 1, 0));
       return;
     }
-    if (input === " ") {
+    if (input === " " || key.pageDown) {
       setScrollOffset((prev) => Math.min(prev + pageSize, maxScroll()));
+      return;
+    }
+    if (key.pageUp) {
+      setScrollOffset((prev) => Math.max(prev - pageSize, 0));
       return;
     }
 
@@ -187,7 +192,7 @@ export function SessionDetailView({
   if (loading) {
     return (
       <Box flexDirection="column">
-        <Text>Loading session detail...</Text>
+        <Spinner label="Loading session detail..." />
       </Box>
     );
   }
@@ -243,6 +248,7 @@ export function SessionDetailView({
                 scrollOffset={scrollOffset}
                 onScrollChange={handleScrollChange}
                 isLive={isLive}
+                lifecycle={session?.lifecycle}
               />
             </Box>
             {/* Right panel: sidebar (~35%) */}
@@ -256,35 +262,45 @@ export function SessionDetailView({
         )}
 
         {activeTab === "events" && (
-          <Box flexDirection="column">
-            {events === null ? (
-              <Text dimColor>Loading events...</Text>
-            ) : events.length === 0 ? (
-              <Text dimColor>No events for this session.</Text>
-            ) : (
-              <Box flexDirection="column">
-                {/* Events table header */}
-                <Box>
-                  <Box width={12}><Text bold>TIME</Text></Box>
-                  <Box width={22}><Text bold>TYPE</Text></Box>
-                  <Box><Text bold>DATA</Text></Box>
-                </Box>
-                {/* Event rows */}
-                {events.map((evt, idx) => (
-                  <Box key={evt.id || idx}>
-                    <Box width={12}><Text>{formatEventTime(evt.timestamp)}</Text></Box>
-                    <Box width={22}><Text>{evt.type}</Text></Box>
-                    <Box><Text>{formatEventData(evt)}</Text></Box>
+          <Box>
+            {/* Left panel: events table (~65%) */}
+            <Box flexGrow={1} flexBasis="65%" flexDirection="column">
+              {events === null ? (
+                <Text dimColor>Loading events...</Text>
+              ) : events.length === 0 ? (
+                <Text dimColor>No events for this session.</Text>
+              ) : (
+                <Box flexDirection="column">
+                  {/* Events table header */}
+                  <Box>
+                    <Box width={12}><Text bold>TIME</Text></Box>
+                    <Box width={22}><Text bold>TYPE</Text></Box>
+                    <Box><Text bold>DATA</Text></Box>
                   </Box>
-                ))}
-              </Box>
-            )}
+                  {/* Event rows */}
+                  {events.map((evt, idx) => (
+                    <Box key={evt.id || idx}>
+                      <Box width={12}><Text>{formatEventTime(evt.timestamp)}</Text></Box>
+                      <Box width={22}><Text>{evt.type}</Text></Box>
+                      <Box><Text>{formatEventData(evt)}</Text></Box>
+                    </Box>
+                  ))}
+                </Box>
+              )}
+            </Box>
+            {/* Right panel: sidebar (~35%) */}
+            <Box flexBasis="35%">
+              <Sidebar
+                gitActivity={gitActivity}
+                messages={(transcript as TranscriptMessageWithBlocks[]) ?? []}
+              />
+            </Box>
           </Box>
         )}
 
         {activeTab === "git" && (
           <Box flexDirection="column" width="100%">
-            <GitActivityPanel commits={gitActivity} />
+            <GitActivityPanel commits={gitActivity} detailed />
           </Box>
         )}
       </Box>

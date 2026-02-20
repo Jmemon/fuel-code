@@ -89,12 +89,12 @@ describe("WorkspaceItem", () => {
     expect(output).toContain("(5)");
   });
 
-  test("2. selected item shows > prefix", () => {
+  test("2. selected item shows ► prefix", () => {
     const { lastFrame } = render(
       <WorkspaceItem workspace={makeWorkspace()} selected={true} />,
     );
     const output = stripAnsi(lastFrame()!);
-    expect(output).toContain("> fuel-code");
+    expect(output).toContain("\u25BA fuel-code");
   });
 
   test("3. shows active session count when > 0", () => {
@@ -173,11 +173,11 @@ describe("SessionRow", () => {
       />,
     );
     const output = stripAnsi(lastFrame()!);
-    // Should show 3 commits + overflow message
+    // Should show 2 commits + overflow message
     expect(output).toContain("Commit 1");
     expect(output).toContain("Commit 2");
-    expect(output).toContain("Commit 3");
-    expect(output).toContain("+2 more commits");
+    expect(output).not.toContain("Commit 3");
+    expect(output).toContain("... 3 more commits");
   });
 });
 
@@ -215,12 +215,12 @@ describe("Spinner", () => {
 });
 
 describe("ErrorBanner", () => {
-  test("10. renders error message", () => {
+  test("10. renders error message with ✗ prefix", () => {
     const { lastFrame } = render(
       <ErrorBanner message="Connection refused" />,
     );
     const output = stripAnsi(lastFrame()!);
-    expect(output).toContain("Error:");
+    expect(output).toContain("\u2717 Error:");
     expect(output).toContain("Connection refused");
   });
 });

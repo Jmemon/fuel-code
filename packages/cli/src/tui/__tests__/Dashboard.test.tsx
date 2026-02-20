@@ -416,7 +416,7 @@ describe("Dashboard", () => {
     const instance = renderDashboard({ ws: mockWs as any });
     await wait(100);
     const output = strip(instance.lastFrame());
-    expect(output).toContain("connected (ws)");
+    expect(output).toContain("\u25CF Connected");
   });
 
   // 14. WS session.update updates session in-place

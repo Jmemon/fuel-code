@@ -22,21 +22,25 @@ export function StatusBar({
   wsState,
   queuePending = 0,
 }: StatusBarProps): React.ReactElement {
+  // WS indicator: filled bullet for connected, open circle for disconnected/polling
+  const WS_CONNECTED_LABEL = "\u25CF Connected (ws)";
+  const WS_RECONNECTING_LABEL = "\u25CB Reconnecting...";
+  const WS_POLLING_LABEL = "\u25CB Polling (10s)";
   const wsLabel =
     wsState === "connected"
-      ? "connected (ws)"
+      ? WS_CONNECTED_LABEL
       : wsState === "reconnecting"
-        ? "reconnecting..."
-        : "polling";
+        ? WS_RECONNECTING_LABEL
+        : WS_POLLING_LABEL;
 
   const wsColor =
-    wsState === "connected" ? "green" : wsState === "reconnecting" ? "yellow" : "red";
+    wsState === "connected" ? "green" : "yellow";
 
   return (
     <Box flexDirection="column" borderStyle="single" borderTop borderBottom={false} borderLeft={false} borderRight={false}>
       <Box>
         <Text>
-          {stats.sessions} sessions {"\u00B7"}{" "}
+          Today: {stats.sessions} sessions {"\u00B7"}{" "}
           {formatDuration(stats.durationMs)} {"\u00B7"}{" "}
           {formatCost(stats.costUsd)}
           {stats.commits > 0 ? ` \u00B7 ${stats.commits} commits` : ""}

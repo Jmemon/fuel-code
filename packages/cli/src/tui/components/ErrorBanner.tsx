@@ -14,7 +14,7 @@ export function ErrorBanner({ message }: ErrorBannerProps): React.ReactElement {
   return (
     <Box>
       <Text color="red" bold>
-        Error:
+        ✗ Error:
       </Text>
       <Text color="red"> {message}</Text>
     </Box>

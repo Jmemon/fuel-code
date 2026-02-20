@@ -16,48 +16,10 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Box, Text } from "ink";
 import type { SessionDetail } from "../../commands/session-detail.js";
+import { formatDuration, formatCost, formatRelativeTime, formatNumber } from "../../lib/formatters.js";
 
 export interface SessionHeaderProps {
   session: SessionDetail;
-}
-
-/**
- * Format a number with K/M suffixes for compact display.
- */
-function formatCompactNumber(n: number | null | undefined): string {
-  if (n === null || n === undefined) return "-";
-  if (n < 1000) return String(n);
-  if (n < 10000) return `${(n / 1000).toFixed(1)}K`;
-  return `${Math.round(n / 1000)}K`;
-}
-
-/**
- * Format duration in milliseconds to a human-readable string.
- */
-function formatDurationMs(ms: number | null | undefined): string {
-  if (ms === null || ms === undefined) return "-";
-  if (ms === 0) return "-";
-  if (ms < 1000) return "0s";
-
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-
-  if (days > 0) return `${days}d${hours % 24 > 0 ? `${hours % 24}h` : ""}`;
-  if (hours > 0) return `${hours}h${minutes % 60 > 0 ? `${String(minutes % 60).padStart(2, "0")}m` : ""}`;
-  if (minutes > 0) return `${minutes}m`;
-  return `${seconds}s`;
-}
-
-/**
- * Format a USD cost value.
- */
-function formatCostUsd(usd: number | null | undefined): string {
-  if (usd === null || usd === undefined) return "\u2014";
-  if (usd === 0) return "$0.00";
-  if (usd > 0 && usd < 0.01) return "<$0.01";
-  return `$${usd.toFixed(2)}`;
 }
 
 export function SessionHeader({ session }: SessionHeaderProps): React.ReactElement {
@@ -86,14 +48,14 @@ export function SessionHeader({ session }: SessionHeaderProps): React.ReactEleme
 
   const workspaceName = session.workspace_name ?? session.workspace_id;
   const deviceName = session.device_name ?? session.device_id;
-  const duration = isLive ? formatDurationMs(elapsedMs) : formatDurationMs(session.duration_ms);
-  const cost = formatCostUsd(session.cost_estimate_usd ?? null);
+  const duration = isLive ? formatDuration(elapsedMs) : formatDuration(session.duration_ms);
+  const cost = formatCost(session.cost_estimate_usd ?? null);
 
   // Token counts
   const stats = session.stats;
-  const tokensIn = formatCompactNumber(stats?.tokens_in ?? null);
-  const tokensOut = formatCompactNumber(stats?.tokens_out ?? null);
-  const tokensCache = formatCompactNumber(stats?.tokens_cache ?? null);
+  const tokensIn = formatNumber(stats?.tokens_in ?? null);
+  const tokensOut = formatNumber(stats?.tokens_out ?? null);
+  const tokensCache = formatNumber(stats?.tokens_cache ?? null);
   const tokenStr = stats?.tokens_cache
     ? `${tokensIn} in / ${tokensOut} out / ${tokensCache} cache`
     : `${tokensIn} in / ${tokensOut} out`;
@@ -121,7 +83,7 @@ export function SessionHeader({ session }: SessionHeaderProps): React.ReactEleme
       {/* Line 2: Started + Duration + Cost */}
       <Box>
         <Text bold>Started: </Text>
-        <Text>{session.started_at}</Text>
+        <Text>{formatRelativeTime(session.started_at)}</Text>
         <Text>  </Text>
         <Text bold>Duration: </Text>
         <Text>{duration}</Text>

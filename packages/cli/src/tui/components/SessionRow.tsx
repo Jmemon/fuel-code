@@ -24,6 +24,13 @@ const LIFECYCLE_DISPLAY: Record<
   failed: { icon: "\u2717", label: "FAIL", color: "red" },
 };
 
+/** Format per-tool usage counts like "Edit(3) Bash(2) Read(5)" */
+function formatToolCounts(counts: Record<string, number>): string {
+  return Object.entries(counts)
+    .map(([name, count]) => `${name}(${count})`)
+    .join(" ");
+}
+
 export interface SessionRowProps {
   session: Session & {
     device_name?: string;
@@ -33,6 +40,8 @@ export interface SessionRowProps {
     total_messages?: number | null;
     tool_uses?: number | null;
     commit_messages?: string[] | null;
+    /** Per-tool usage counts for live sessions, e.g. { Edit: 3, Bash: 2, Read: 5 } */
+    tool_counts?: Record<string, number> | null;
   };
   selected: boolean;
 }
@@ -53,6 +62,8 @@ export function SessionRow({
   const cost = formatCost(ext.cost_estimate_usd ?? null);
   const summary = ext.summary ?? "(no summary)";
   const commitMessages: string[] = ext.commit_messages ?? [];
+  const overflowCount = Math.max(0, commitMessages.length - 2);
+  const overflowText = overflowCount > 0 ? "... " + overflowCount + " more commits" : "";
 
   return (
     <Box flexDirection="column">
@@ -75,26 +86,27 @@ export function SessionRow({
           {summary}
         </Text>
       </Box>
-      {/* Live sessions: show tool usage count if available */}
+      {/* Live sessions: show per-tool breakdown or aggregate counts */}
       {session.lifecycle === "capturing" && ext.total_messages != null && (
         <Box paddingLeft={4}>
           <Text color="green">
-            {ext.total_messages} messages
-            {ext.tool_uses != null ? ` / ${ext.tool_uses} tool uses` : ""}
+            {ext.tool_counts
+              ? formatToolCounts(ext.tool_counts as Record<string, number>)
+              : `${ext.total_messages} messages${ext.tool_uses != null ? ` / ${ext.tool_uses} tool uses` : ""}`}
           </Text>
         </Box>
       )}
       {/* Summarized sessions: show commit messages if available */}
       {commitMessages.length > 0 && (
         <Box paddingLeft={4} flexDirection="column">
-          {commitMessages.slice(0, 3).map((msg, i) => (
+          {commitMessages.slice(0, 2).map((msg, i) => (
             <Text key={i} dimColor>
               {"\u2022"} {msg}
             </Text>
           ))}
-          {commitMessages.length > 3 && (
+          {overflowCount > 0 && (
             <Text dimColor>
-              +{commitMessages.length - 3} more commits
+              {overflowText}
             </Text>
           )}
         </Box>

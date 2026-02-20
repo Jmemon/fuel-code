@@ -45,8 +45,10 @@ function extractToolPrimaryInput(block: ParsedContentBlock): string {
     case "edit":
     case "write":
       return (input.file_path ?? input.path ?? "") as string;
-    case "bash":
-      return (input.command ?? "") as string;
+    case "bash": {
+      const cmd = (input.command ?? "") as string;
+      return cmd.length > 60 ? cmd.slice(0, 60) + "..." : cmd;
+    }
     case "grep":
     case "glob":
       return (input.pattern ?? "") as string;
@@ -88,9 +90,9 @@ export function MessageBlock({ message, ordinal }: MessageBlockProps): React.Rea
     const parts: string[] = [];
     if (message.model) parts.push(message.model);
     if (message.cost_usd != null && message.cost_usd > 0) {
-      parts.push(`$${message.cost_usd.toFixed(4)}`);
+      parts.push(`$${message.cost_usd.toFixed(2)}`);
     }
-    if (parts.length > 0) extras = ` ${parts.join(" ")}`;
+    if (parts.length > 0) extras = ` ${parts.join(" \u00B7 ")}`;
   }
 
   // Determine header color

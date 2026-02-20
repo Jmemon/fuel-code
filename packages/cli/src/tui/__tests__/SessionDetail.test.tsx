@@ -576,15 +576,15 @@ describe("SessionDetail — Navigation", () => {
 });
 
 describe("SessionDetail — Empty states", () => {
-  it("19. No transcript shows 'not yet available' message", async () => {
+  it("19. No transcript shows 'No messages in transcript' message", async () => {
     const api = makeMockApiClient({ transcript: null });
     const ws = makeMockWsClient();
     const { lastFrame } = render(
       <SessionDetailView apiClient={api} wsClient={ws} sessionId="01JTEST1234567890ABCDEFGHI" onBack={() => {}} />
     );
-    await waitForText(lastFrame, "not yet available");
+    await waitForText(lastFrame, "No messages in transcript");
 
-    expect(lastFrame()).toContain("not yet available");
+    expect(lastFrame()).toContain("No messages in transcript");
   });
 
   it("20. No git shows 'No git activity'", async () => {

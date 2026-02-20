@@ -181,15 +181,15 @@ export function Dashboard({
 
   // ----- Keyboard input -----
   useInput((input, key) => {
-    // Navigation: j=down, k=up
-    if (input === "j") {
+    // Navigation: j/down=down, k/up=up
+    if (input === "j" || key.downArrow) {
       if (focusPane === "workspaces") {
         setSelectedWorkspaceIndex((i) => Math.min(i + 1, workspaces.length - 1));
       } else {
         setSelectedSessionIndex((i) => Math.min(i + 1, sessions.length - 1));
       }
     }
-    if (input === "k") {
+    if (input === "k" || key.upArrow) {
       if (focusPane === "workspaces") {
         setSelectedWorkspaceIndex((i) => Math.max(i - 1, 0));
       } else {
@@ -246,7 +246,7 @@ export function Dashboard({
           {loading && workspaces.length === 0 ? (
             <Spinner label="Loading workspaces..." />
           ) : workspaces.length === 0 ? (
-            <Text dimColor> No workspaces found</Text>
+            <Text dimColor> No workspaces found. Run {"`"}fuel-code init{"`"} to get started.</Text>
           ) : (
             workspaces.map((w, i) => (
               <WorkspaceItem

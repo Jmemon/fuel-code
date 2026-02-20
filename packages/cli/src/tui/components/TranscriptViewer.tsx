@@ -21,6 +21,8 @@ export interface TranscriptViewerProps {
   pageSize?: number;
   /** Whether this is a live session (auto-scroll behavior) */
   isLive?: boolean;
+  /** Session lifecycle status, shown in placeholder when transcript is null */
+  lifecycle?: string;
 }
 
 export function TranscriptViewer({
@@ -28,6 +30,7 @@ export function TranscriptViewer({
   scrollOffset,
   onScrollChange,
   isLive,
+  lifecycle,
 }: TranscriptViewerProps): React.ReactElement {
   const prevLengthRef = useRef(messages?.length ?? 0);
 
@@ -43,11 +46,23 @@ export function TranscriptViewer({
     }
   }, [messages?.length, isLive, scrollOffset, onScrollChange]);
 
-  // Handle null or empty transcript
+  // Handle live, null, or empty transcript with distinct messages
+  if (isLive && (messages === null || messages.length === 0)) {
+    return (
+      <Box flexDirection="column">
+        <Text dimColor>Session in progress — transcript available after session ends</Text>
+      </Box>
+    );
+  }
+
   if (messages === null) {
     return (
       <Box flexDirection="column">
-        <Text dimColor>Transcript not yet available</Text>
+        <Text dimColor>
+          {lifecycle
+            ? `Transcript not yet available (status: ${lifecycle})`
+            : "Transcript not yet available"}
+        </Text>
       </Box>
     );
   }
@@ -55,7 +70,7 @@ export function TranscriptViewer({
   if (messages.length === 0) {
     return (
       <Box flexDirection="column">
-        <Text dimColor>Transcript not yet available</Text>
+        <Text dimColor>No messages in transcript</Text>
       </Box>
     );
   }

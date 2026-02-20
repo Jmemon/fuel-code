@@ -139,7 +139,9 @@ describe("MessageBlock", () => {
     expect(frame).toContain("[2]");
     expect(frame).toContain("Assistant");
     expect(frame).toContain("claude-sonnet-4-5");
-    expect(frame).toContain("$0.0532");
+    expect(frame).toContain("$0.05");
+    // Model and cost separated by middot
+    expect(frame).toContain("\u00B7");
   });
 
   it("3. Text content is indented and wrapped", () => {

@@ -18,7 +18,7 @@ export function WorkspaceItem({
   workspace,
   selected,
 }: WorkspaceItemProps): React.ReactElement {
-  const prefix = selected ? ">" : " ";
+  const prefix = selected ? "\u25BA" : " ";
   const activeCount = workspace.active_session_count;
 
   return (
