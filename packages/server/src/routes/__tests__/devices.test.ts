@@ -5,7 +5,7 @@
  * The mock SQL is a proxy that intercepts postgres.js tagged template calls
  * and returns canned data based on query patterns.
  *
- * Test coverage (12 tests):
+ * Test coverage (11 tests):
  *   - GET /api/devices: list, aggregate fields, response shape
  *   - GET /api/devices/:id: detail, 404, response shape with workspaces/sessions/stats
  *   - Auth: 401 without token
@@ -80,6 +80,7 @@ const DEVICE_WORKSPACES = [
     default_branch: "main",
     local_path: "/Users/john/code/repo-alpha",
     hooks_installed: true,
+    git_hooks_installed: true,
     last_active_at: "2025-01-15T14:00:00.000Z",
   },
   {
@@ -89,6 +90,7 @@ const DEVICE_WORKSPACES = [
     default_branch: "main",
     local_path: "/Users/john/code/repo-beta",
     hooks_installed: false,
+    git_hooks_installed: false,
     last_active_at: "2025-01-14T10:00:00.000Z",
   },
 ];
@@ -108,6 +110,7 @@ const DEVICE_SESSIONS = [
     model: "claude-opus-4-20250514",
     git_branch: "main",
     workspace_name: "user/repo-alpha",
+    workspace_canonical_id: "github.com/user/repo-alpha",
   },
   {
     id: "sess-02",
@@ -123,18 +126,10 @@ const DEVICE_SESSIONS = [
     model: "claude-opus-4-20250514",
     git_branch: "feature/fix-css",
     workspace_name: "user/repo-alpha",
+    workspace_canonical_id: "github.com/user/repo-alpha",
   },
 ];
 
-const DEVICE_STATS = {
-  total_sessions: 8,
-  active_sessions: 1,
-  total_duration_ms: "28800000",
-  total_cost_usd: "3.50",
-  total_messages: "150",
-  first_session_at: "2025-01-01T08:00:00.000Z",
-  last_session_at: "2025-01-15T14:00:00.000Z",
-};
 
 // ---------------------------------------------------------------------------
 // Mock SQL factory (fragment-aware)
@@ -210,10 +205,11 @@ function buildMockSql(
 // ---------------------------------------------------------------------------
 
 function defaultQueryHandler(queryText: string, values: unknown[]): unknown[] {
-  // Device list with aggregates
+  // Device list with aggregates (uses workspace_devices for workspace_count)
   if (
     queryText.includes("FROM devices d") &&
     queryText.includes("LEFT JOIN sessions s") &&
+    queryText.includes("LEFT JOIN workspace_devices wd") &&
     queryText.includes("GROUP BY d.id")
   ) {
     return ALL_DEVICES;
@@ -242,15 +238,6 @@ function defaultQueryHandler(queryText: string, values: unknown[]): unknown[] {
     queryText.includes("s.device_id =")
   ) {
     return DEVICE_SESSIONS;
-  }
-
-  // Aggregate stats for device
-  if (
-    queryText.includes("FROM sessions") &&
-    queryText.includes("SUM(duration_ms)") &&
-    queryText.includes("device_id =")
-  ) {
-    return [DEVICE_STATS];
   }
 
   return [];
@@ -430,6 +417,7 @@ describe("GET /api/devices/:id", () => {
     expect(ws).toHaveProperty("display_name");
     expect(ws).toHaveProperty("local_path");
     expect(ws).toHaveProperty("hooks_installed");
+    expect(ws).toHaveProperty("git_hooks_installed");
     expect(ws).toHaveProperty("last_active_at");
   });
 
@@ -446,31 +434,20 @@ describe("GET /api/devices/:id", () => {
     expect(session).toHaveProperty("workspace_id");
     expect(session).toHaveProperty("lifecycle");
     expect(session).toHaveProperty("workspace_name");
+    expect(session).toHaveProperty("workspace_canonical_id");
     expect(session.workspace_name).toBe("user/repo-alpha");
+    expect(session.workspace_canonical_id).toBe("github.com/user/repo-alpha");
   });
 
-  test("includes aggregate stats", async () => {
-    const res = await get("/api/devices/dev-01");
-    const body = await res.json();
-
-    expect(body.stats).toBeDefined();
-    expect(body.stats).toHaveProperty("total_sessions");
-    expect(body.stats).toHaveProperty("active_sessions");
-    expect(body.stats).toHaveProperty("total_duration_ms");
-    expect(body.stats).toHaveProperty("total_cost_usd");
-    expect(body.stats).toHaveProperty("total_messages");
-    expect(body.stats).toHaveProperty("first_session_at");
-    expect(body.stats).toHaveProperty("last_session_at");
-  });
-
-  test("response has all expected sections", async () => {
+  test("response has all expected sections (device, workspaces, recent_sessions)", async () => {
     const res = await get("/api/devices/dev-01");
     const body = await res.json();
 
     expect(body).toHaveProperty("device");
     expect(body).toHaveProperty("workspaces");
     expect(body).toHaveProperty("recent_sessions");
-    expect(body).toHaveProperty("stats");
+    // stats section was removed per spec — only device, workspaces, recent_sessions
+    expect(body).not.toHaveProperty("stats");
   });
 });
 

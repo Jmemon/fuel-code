@@ -5,7 +5,7 @@
  * The mock SQL is a proxy that intercepts postgres.js tagged template calls
  * and returns canned data based on query patterns.
  *
- * Test coverage (21 tests):
+ * Test coverage (26 tests):
  *   - GET /api/workspaces: list, pagination, cursor validation, limit validation
  *   - GET /api/workspaces/:id: ULID lookup, name lookup, canonical_id lookup,
  *     ambiguous name 400, 404, response shape, parallel queries
@@ -114,6 +114,7 @@ const RECENT_SESSIONS = [
     git_branch: "main",
     device_name: "macbook-pro",
     device_id: "dev-01",
+    device_type: "local",
   },
 ];
 
@@ -131,14 +132,19 @@ const DEVICES = [
     last_seen_at: "2025-01-15T14:00:00.000Z",
     local_path: "/Users/john/code/repo-alpha",
     hooks_installed: true,
+    git_hooks_installed: true,
     last_active_at: "2025-01-15T14:00:00.000Z",
   },
 ];
 
+// Single-row aggregate result from the git_activity query
 const GIT_SUMMARY = [
-  { type: "commit", count: 12 },
-  { type: "push", count: 5 },
-  { type: "checkout", count: 3 },
+  {
+    total_commits: 47,
+    total_pushes: 12,
+    active_branches: ["main", "feature/auth"],
+    last_commit_at: "2025-01-15T13:00:00.000Z",
+  },
 ];
 
 const WORKSPACE_STATS = {
@@ -262,8 +268,8 @@ function defaultQueryHandler(queryText: string, values: unknown[]): unknown[] {
     return DEVICES;
   }
 
-  // Git activity summary
-  if (queryText.includes("FROM git_activity") && queryText.includes("GROUP BY type")) {
+  // Git activity summary (flat aggregate: total_commits, total_pushes, active_branches, last_commit_at)
+  if (queryText.includes("FROM git_activity") && queryText.includes("workspace_id =")) {
     return GIT_SUMMARY;
   }
 
@@ -499,6 +505,59 @@ describe("GET /api/workspaces", () => {
     }
   });
 
+  test("returns empty array when no workspaces exist", async () => {
+    const emptyHandler = () => [] as unknown[];
+    const { url, close } = await withCustomServer(emptyHandler);
+    try {
+      const res = await get("/api/workspaces", {}, url);
+      expect(res.status).toBe(200);
+
+      const body = await res.json();
+      expect(body.workspaces).toEqual([]);
+      expect(body.has_more).toBe(false);
+      expect(body.next_cursor).toBeNull();
+    } finally {
+      await close();
+    }
+  });
+
+  test("workspace with no sessions still appears (counts are 0, last_session_at is null)", async () => {
+    const noSessionWorkspace = {
+      id: "01HQRS0000WORKSPACENOSESS00",
+      canonical_id: "github.com/user/empty-repo",
+      display_name: "user/empty-repo",
+      default_branch: "main",
+      metadata: {},
+      first_seen_at: "2025-01-20T08:00:00.000Z",
+      updated_at: "2025-01-20T08:00:00.000Z",
+      session_count: "0",
+      active_session_count: "0",
+      last_session_at: null,
+      device_count: "0",
+      total_cost_usd: "0",
+      total_duration_ms: "0",
+    };
+    const noSessionHandler = (queryText: string, _values: unknown[]) => {
+      if (queryText.includes("workspace_agg")) return [noSessionWorkspace];
+      return [];
+    };
+    const { url, close } = await withCustomServer(noSessionHandler);
+    try {
+      const res = await get("/api/workspaces", {}, url);
+      expect(res.status).toBe(200);
+
+      const body = await res.json();
+      expect(body.workspaces.length).toBe(1);
+      const ws = body.workspaces[0];
+      expect(ws.session_count).toBe("0");
+      expect(ws.active_session_count).toBe("0");
+      expect(ws.last_session_at).toBeNull();
+      expect(ws.device_count).toBe("0");
+    } finally {
+      await close();
+    }
+  });
+
   test("pagination: second page has no duplicates", async () => {
     const { url, close } = await withCustomServer(paginationQueryHandler);
     try {
@@ -621,19 +680,39 @@ describe("GET /api/workspaces/:id — response shape", () => {
     expect(session).toHaveProperty("lifecycle");
     expect(session).toHaveProperty("started_at");
     expect(session).toHaveProperty("device_name");
+    expect(session).toHaveProperty("device_type");
     expect(session.device_name).toBe("macbook-pro");
+    expect(session.device_type).toBe("local");
   });
 
-  test("git_summary contains type counts", async () => {
+  test("devices include git_hooks_installed field", async () => {
     const res = await get(`/api/workspaces/${WORKSPACE_1.id}`);
     const body = await res.json();
 
-    expect(Array.isArray(body.git_summary)).toBe(true);
-    expect(body.git_summary.length).toBeGreaterThan(0);
+    expect(Array.isArray(body.devices)).toBe(true);
+    expect(body.devices.length).toBeGreaterThan(0);
 
-    const commitSummary = body.git_summary.find((g: any) => g.type === "commit");
-    expect(commitSummary).toBeDefined();
-    expect(commitSummary.count).toBe(12);
+    const device = body.devices[0];
+    expect(device).toHaveProperty("git_hooks_installed");
+    expect(device.git_hooks_installed).toBe(true);
+  });
+
+  test("git_summary is a flat object with spec-required fields", async () => {
+    const res = await get(`/api/workspaces/${WORKSPACE_1.id}`);
+    const body = await res.json();
+
+    // git_summary must be a flat object, not an array
+    expect(typeof body.git_summary).toBe("object");
+    expect(Array.isArray(body.git_summary)).toBe(false);
+    expect(body.git_summary).toHaveProperty("total_commits");
+    expect(body.git_summary).toHaveProperty("total_pushes");
+    expect(body.git_summary).toHaveProperty("active_branches");
+    expect(body.git_summary).toHaveProperty("last_commit_at");
+    expect(body.git_summary.total_commits).toBe(47);
+    expect(body.git_summary.total_pushes).toBe(12);
+    expect(Array.isArray(body.git_summary.active_branches)).toBe(true);
+    expect(body.git_summary.active_branches).toContain("main");
+    expect(body.git_summary.active_branches).toContain("feature/auth");
   });
 
   test("stats contains aggregate metrics", async () => {

@@ -237,7 +237,7 @@ export function createWorkspacesRouter(deps: WorkspacesRouterDeps): Router {
               SELECT s.id, s.lifecycle, s.started_at, s.ended_at, s.duration_ms,
                      s.summary, s.cost_estimate_usd, s.total_messages, s.tags,
                      s.model, s.git_branch,
-                     d.name AS device_name, d.id AS device_id
+                     d.name AS device_name, d.id AS device_id, d.type AS device_type
               FROM sessions s
               JOIN devices d ON s.device_id = d.id
               WHERE s.workspace_id = ${workspace.id}
@@ -247,20 +247,22 @@ export function createWorkspacesRouter(deps: WorkspacesRouterDeps): Router {
 
             // Devices tracking this workspace (via workspace_devices junction)
             sql`
-              SELECT d.*, wd.local_path, wd.hooks_installed, wd.last_active_at
+              SELECT d.*, wd.local_path, wd.hooks_installed, wd.git_hooks_installed, wd.last_active_at
               FROM devices d
               JOIN workspace_devices wd ON wd.device_id = d.id
               WHERE wd.workspace_id = ${workspace.id}
               ORDER BY wd.last_active_at DESC
             `,
 
-            // Git activity summary: counts by type for this workspace
+            // Git activity summary: flat object with commit/push counts, active branches, and last commit time
             sql`
-              SELECT type, COUNT(*)::int AS count
+              SELECT
+                COUNT(*) FILTER (WHERE type = 'commit') AS total_commits,
+                COUNT(*) FILTER (WHERE type = 'push') AS total_pushes,
+                array_agg(DISTINCT branch) FILTER (WHERE branch IS NOT NULL) AS active_branches,
+                MAX(timestamp) AS last_commit_at
               FROM git_activity
               WHERE workspace_id = ${workspace.id}
-              GROUP BY type
-              ORDER BY count DESC
             `,
 
             // Aggregate stats across all sessions for this workspace
@@ -280,11 +282,18 @@ export function createWorkspacesRouter(deps: WorkspacesRouterDeps): Router {
             `,
           ]);
 
+        // git_summary is a single-row aggregate; extract as flat object
+        const gitRow = gitSummary[0] || {};
         res.json({
           workspace,
           recent_sessions: recentSessions,
           devices,
-          git_summary: gitSummary,
+          git_summary: {
+            total_commits: gitRow.total_commits ?? 0,
+            total_pushes: gitRow.total_pushes ?? 0,
+            active_branches: gitRow.active_branches ?? [],
+            last_commit_at: gitRow.last_commit_at ?? null,
+          },
           stats: stats[0] || null,
         });
       } catch (err) {

@@ -52,16 +52,18 @@ export function createDevicesRouter(deps: DevicesRouterDeps): Router {
       try {
         // Aggregate session and workspace counts per device.
         // No pagination needed: single-user system, typically <10 devices.
+        // workspace_count derived from workspace_devices junction (not sessions)
         const rows = await sql`
           SELECT d.*,
             COUNT(DISTINCT s.id)::int AS session_count,
-            COUNT(DISTINCT s.workspace_id)::int AS workspace_count,
+            COUNT(DISTINCT wd.workspace_id)::int AS workspace_count,
             COUNT(CASE WHEN s.lifecycle = 'capturing' THEN 1 END)::int AS active_session_count,
             MAX(s.started_at) AS last_session_at,
             COALESCE(SUM(s.cost_estimate_usd), 0) AS total_cost_usd,
             COALESCE(SUM(s.duration_ms), 0) AS total_duration_ms
           FROM devices d
           LEFT JOIN sessions s ON s.device_id = d.id
+          LEFT JOIN workspace_devices wd ON wd.device_id = d.id
           GROUP BY d.id
           ORDER BY d.last_seen_at DESC
         `;
@@ -95,11 +97,11 @@ export function createDevicesRouter(deps: DevicesRouterDeps): Router {
         const device = deviceRows[0];
 
         // --- Parallel queries for detail data ---
-        const [workspaces, recentSessions, stats] = await Promise.all([
+        const [workspaces, recentSessions] = await Promise.all([
           // Workspaces associated with this device (via workspace_devices junction)
           sql`
             SELECT w.id, w.canonical_id, w.display_name, w.default_branch,
-                   wd.local_path, wd.hooks_installed, wd.last_active_at
+                   wd.local_path, wd.hooks_installed, wd.git_hooks_installed, wd.last_active_at
             FROM workspaces w
             JOIN workspace_devices wd ON wd.workspace_id = w.id
             WHERE wd.device_id = ${id}
@@ -111,26 +113,12 @@ export function createDevicesRouter(deps: DevicesRouterDeps): Router {
             SELECT s.id, s.workspace_id, s.lifecycle, s.started_at, s.ended_at,
                    s.duration_ms, s.summary, s.cost_estimate_usd, s.total_messages,
                    s.tags, s.model, s.git_branch,
-                   w.display_name AS workspace_name
+                   w.display_name AS workspace_name, w.canonical_id AS workspace_canonical_id
             FROM sessions s
             JOIN workspaces w ON s.workspace_id = w.id
             WHERE s.device_id = ${id}
             ORDER BY s.started_at DESC
             LIMIT 10
-          `,
-
-          // Aggregate stats for all sessions on this device
-          sql`
-            SELECT
-              COUNT(*)::int AS total_sessions,
-              COUNT(CASE WHEN lifecycle = 'capturing' THEN 1 END)::int AS active_sessions,
-              COALESCE(SUM(duration_ms), 0) AS total_duration_ms,
-              COALESCE(SUM(cost_estimate_usd), 0) AS total_cost_usd,
-              COALESCE(SUM(total_messages), 0) AS total_messages,
-              MIN(started_at) AS first_session_at,
-              MAX(started_at) AS last_session_at
-            FROM sessions
-            WHERE device_id = ${id}
           `,
         ]);
 
@@ -138,7 +126,6 @@ export function createDevicesRouter(deps: DevicesRouterDeps): Router {
           device,
           workspaces,
           recent_sessions: recentSessions,
-          stats: stats[0] || null,
         });
       } catch (err) {
         next(err);
