@@ -171,12 +171,17 @@ export interface FetchTimelineParams {
   before?: string;         // ISO-8601
 }
 
-// Timeline API returns session-grouped activity data.
-// Each entry is a session with embedded events, or an orphan event.
+// > **Phase 3 Downstream Amendment [3->4.A.1]:** The timeline API returns
+// > `{ items: TimelineItem[], next_cursor, has_more }` where TimelineItem is a
+// > discriminated union: `type: 'session'` (with embedded session + git_activity)
+// > or `type: 'git_activity'` (orphan git events grouped by workspace+device).
+// > See Task 3's amended TimelineResponse / TimelineItem types.
+// > `fetchTimeline` should call `api.getTimeline()` and receive a TimelineResponse.
+
 export async function fetchTimeline(
   api: ApiClient,
   params: FetchTimelineParams
-): Promise<TimelineData>
+): Promise<TimelineResponse>
 
 // ─── Presentation Layer ────────────────────────────────────────────
 

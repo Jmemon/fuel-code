@@ -137,9 +137,18 @@ export function getErrorGuidance(code: string): ErrorGuidance | undefined;
 
 ### Error Code on FuelCodeError
 
+> **Phase 3 Downstream Amendment [3→6.C.1]:** The actual `FuelCodeError` constructor
+> signature is `(message: string, code: string, context?: Record<string, unknown>)` —
+> NOT `(message, options?)`. The `code` field already exists as a required parameter,
+> and `context` replaces `cause`. All subclasses follow this pattern. The spec below
+> shows the PLANNED change; implementors should reconcile with the actual constructor.
+
 ```typescript
-// Extend the existing FuelCodeError base class (packages/shared/src/errors.ts)
-// Add an optional `code` field:
+// PLANNED — but actual FuelCodeError already has: constructor(message, code, context)
+// The `code` field already exists. This task should:
+//   1. Keep the existing constructor signature
+//   2. Add error catalog lookup using the existing `code` field
+//   3. NOT change the constructor — it's already used across Phases 1-3
 
 export class FuelCodeError extends Error {
   readonly code?: string;

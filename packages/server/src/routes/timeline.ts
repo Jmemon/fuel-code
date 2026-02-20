@@ -287,6 +287,7 @@ export function createTimelineRouter(deps: TimelineRouterDeps): Router {
           JOIN devices d ON ga.device_id = d.id
           ${orphanWhereClause}
           ORDER BY ga.timestamp DESC
+          LIMIT 200
         `;
 
         // =================================================================

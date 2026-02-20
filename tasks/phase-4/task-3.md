@@ -231,17 +231,20 @@ export class ApiClient {
 
   // --- Timeline ---
 
-  async getTimeline(params?: TimelineParams): Promise<TimelineEntry[]> {
+  // > **Phase 3 Downstream Amendment [3->4.A.1]:** The actual timeline API
+  // > returns `{ items, next_cursor, has_more }` where `items` is a
+  // > discriminated union of session items and orphan git-activity items —
+  // > NOT `{ timeline: TimelineEntry[] }` with flat objects. See the
+  // > TimelineResponse / TimelineItem types below.
+
+  async getTimeline(params?: TimelineParams): Promise<TimelineResponse> {
     // Maps to GET /api/timeline
     const query: Record<string, string | undefined> = {};
     if (params?.workspaceId) query.workspace_id = params.workspaceId;
     if (params?.after) query.after = params.after;
     if (params?.before) query.before = params.before;
     if (params?.types) query.types = params.types;
-    const res = await this.request<{ timeline: TimelineEntry[] }>(
-      'GET', '/api/timeline', { query }
-    );
-    return res.timeline;
+    return this.request<TimelineResponse>('GET', '/api/timeline', { query });
   }
 
   // --- System ---
@@ -431,13 +434,63 @@ export interface HealthStatus {
   version: string;
 }
 
-export interface TimelineEntry {
-  // Timeline entry shape from GET /api/timeline (defined in Phase 3)
-  type: string;
+// > **Phase 3 Downstream Amendment [3->4.A.1]:** The timeline API returns a
+// > discriminated union of session items and orphan git-activity items, NOT a
+// > flat TimelineEntry. The types below match the actual API at
+// > packages/server/src/routes/timeline.ts.
+
+/** Git activity summary embedded in timeline items */
+export interface TimelineGitEvent {
+  id: string;
+  type: 'commit' | 'push' | 'checkout' | 'merge';
+  branch: string | null;
+  commit_sha: string | null;
+  message: string | null;
+  files_changed: number | null;
   timestamp: string;
+  data: Record<string, unknown>;
+}
+
+/** A session item in the timeline — session with embedded git activity */
+export interface TimelineSessionItem {
+  type: 'session';
+  session: {
+    id: string;
+    workspace_id: string;
+    workspace_name: string;
+    device_id: string;
+    device_name: string;
+    lifecycle: string;
+    started_at: string;
+    ended_at: string | null;
+    duration_ms: number | null;
+    summary: string | null;
+    cost_estimate_usd: number | null;
+    total_messages: number | null;
+    tags: string[];
+  };
+  git_activity: TimelineGitEvent[];
+}
+
+/** An orphan git-activity item — git events outside any session */
+export interface TimelineOrphanItem {
+  type: 'git_activity';
   workspace_id: string;
   workspace_name: string;
-  data: Record<string, unknown>;
+  device_id: string;
+  device_name: string;
+  git_activity: TimelineGitEvent[];
+  started_at: string;
+}
+
+/** Discriminated union of all timeline item types */
+export type TimelineItem = TimelineSessionItem | TimelineOrphanItem;
+
+/** Response from GET /api/timeline */
+export interface TimelineResponse {
+  items: TimelineItem[];
+  next_cursor: string | null;
+  has_more: boolean;
 }
 ```
 
@@ -795,8 +848,8 @@ Use `Bun.serve()` to create a local mock HTTP server in tests. No external mocki
 26. `resolveWorkspaceName('f')`: multiple prefix matches throws ApiError with 400 and candidate list.
 27. `listDevices()`: sends `GET /api/devices`, returns devices array.
 28. `getDevice(id)`: sends `GET /api/devices/<id>`, returns device detail.
-29. `getTimeline()`: sends `GET /api/timeline`, returns timeline entries.
-30. `getTimeline({ workspaceId, after, before })`: sends correct query params.
+29. `getTimeline()`: sends `GET /api/timeline`, returns `TimelineResponse` with `items`, `next_cursor`, `has_more`. Items are a discriminated union (`type: 'session'` or `type: 'git_activity'`).
+30. `getTimeline({ workspaceId, after, before })`: sends correct query params, reads from `items` key (not `timeline`).
 31. `getHealth()`: sends `GET /api/health`, returns health status.
 32. `fromConfig()`: creates client with baseUrl and apiKey from config.
 

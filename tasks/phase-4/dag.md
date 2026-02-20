@@ -155,6 +155,17 @@ The TUI uses `ink` with React components. State management via hooks + WS client
 - All Zod schemas for event payloads + session query/patch schemas
 - ULID generation, canonical ID normalization
 
+### Phase 3 Downstream Amendment: Timeline API Response Shape
+
+> **Amendment from Phase 3 downstream review [3→4.A.1]:** The `GET /api/timeline` endpoint
+> (implemented in Phase 3) returns `{ items, next_cursor, has_more }` — NOT `{ timeline: [...] }`.
+> Each item is a discriminated union:
+> - `{ type: "session", session: {...}, git_activity: [...] }` — session with embedded git
+> - `{ type: "git_activity", workspace_id, device_id, git_activity: [...], started_at }` — orphan git
+>
+> Phase 4 Task 4 (`fuel-code timeline`) and Task 8 (TUI dashboard) must consume this shape.
+> The response uses session-based cursor pagination (not git-activity-based).
+
 ### NOT yet built (Phase 4 creates)
 - `GET /api/workspaces`, `GET /api/workspaces/:id`
 - `GET /api/devices`, `GET /api/devices/:id`

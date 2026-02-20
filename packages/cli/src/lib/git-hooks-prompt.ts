@@ -59,11 +59,12 @@ export async function showGitHooksPrompt(
     try {
       await installGitHooks();
       process.stderr.write("Git hooks installed successfully.\n\n");
+      await dismissPrompt(config, prompt.workspaceId, "accepted");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`Failed to install git hooks: ${message}\n\n`);
+      await dismissPrompt(config, prompt.workspaceId, "declined");
     }
-    await dismissPrompt(config, prompt.workspaceId, "accepted");
   } else {
     process.stderr.write("Skipped git hook installation.\n\n");
     await dismissPrompt(config, prompt.workspaceId, "declined");

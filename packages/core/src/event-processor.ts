@@ -17,6 +17,7 @@
 import type { Sql } from "postgres";
 import type { Logger } from "pino";
 import type { Event, EventType } from "@fuel-code/shared";
+import { validateEventPayload } from "@fuel-code/shared";
 
 import { resolveOrCreateWorkspace } from "./workspace-resolver.js";
 import { resolveOrCreateDevice } from "./device-resolver.js";
@@ -177,7 +178,21 @@ export async function processEvent(
     return { eventId: event.id, status: "duplicate", handlerResults: [] };
   }
 
-  // 5. Dispatch to type-specific handler
+  // 5. Validate event payload against registered schema (if any)
+  const validation = validateEventPayload(event.type, event.data);
+  if (!validation.success) {
+    log.warn(
+      { eventType: event.type, errors: validation.error?.issues },
+      "Event payload validation failed — skipping handler",
+    );
+    return {
+      eventId: event.id,
+      status: "processed",
+      handlerResults: [{ type: event.type, success: false, error: "Payload validation failed" }],
+    };
+  }
+
+  // 6. Dispatch to type-specific handler
   const handlerResults: ProcessResult["handlerResults"] = [];
   const handler = registry.getHandler(event.type);
 
