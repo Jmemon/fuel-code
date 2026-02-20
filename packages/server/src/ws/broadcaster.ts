@@ -15,6 +15,7 @@
  *   - "session:<id>" — client receives events/updates for that session
  */
 
+import { WebSocket } from "ws";
 import type { Logger } from "pino";
 import type { Event } from "@fuel-code/shared";
 import type { ConnectedClient, ServerMessage, SessionStats } from "./types.js";
@@ -95,6 +96,7 @@ export function createBroadcaster(
 
     for (const client of clients.values()) {
       if (!clientMatchesFilter(client, filter)) continue;
+      if (client.ws.readyState !== WebSocket.OPEN) continue;
 
       try {
         client.ws.send(payload, (err) => {
