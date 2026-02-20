@@ -108,6 +108,7 @@ export function createWsServer(options: WsServerOptions): WsServerHandle {
       ws,
       subscriptions: new Set(),
       isAlive: true,
+      connectedAt: new Date(),
     };
 
     clients.set(clientId, client);
@@ -144,6 +145,12 @@ export function createWsServer(options: WsServerOptions): WsServerHandle {
   // -------------------------------------------------------------------------
 
   function handleClientMessage(client: ConnectedClient, msg: ClientMessage): void {
+    // Validate that the parsed message has a type field (e.g., someone sends `{}`)
+    if (!msg || typeof (msg as Record<string, unknown>).type !== "string") {
+      sendMessage(client.ws, { type: "error", message: "Missing message type" });
+      return;
+    }
+
     switch (msg.type) {
       case "subscribe":
         handleSubscribe(client, msg);
@@ -200,12 +207,9 @@ export function createWsServer(options: WsServerOptions): WsServerHandle {
       client.subscriptions.delete(subscription);
       sendMessage(client.ws, { type: "unsubscribed", subscription });
     } else {
-      // No specific target — clear all subscriptions
-      const subs = [...client.subscriptions];
+      // No specific target — clear all subscriptions and send a single ack
       client.subscriptions.clear();
-      for (const sub of subs) {
-        sendMessage(client.ws, { type: "unsubscribed", subscription: sub });
-      }
+      sendMessage(client.ws, { type: "unsubscribed", subscription: "all" });
     }
   }
 

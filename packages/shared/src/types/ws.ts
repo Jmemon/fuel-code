@@ -17,12 +17,12 @@ import type { Event } from "./event.js";
 
 /** Compact session statistics included in session.update broadcasts */
 export interface SessionStats {
-  /** Total number of events in this session */
-  event_count: number;
-  /** Number of git commits during this session */
-  commit_count: number;
-  /** Session duration in milliseconds (null if still active) */
-  duration_ms: number | null;
+  /** Total number of messages (LLM interactions) in this session */
+  total_messages?: number;
+  /** Total cost in USD for this session */
+  total_cost_usd?: number;
+  /** Session duration in milliseconds */
+  duration_ms?: number;
 }
 
 // ---------------------------------------------------------------------------

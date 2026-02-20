@@ -101,16 +101,18 @@ export function createBroadcaster(
           if (err) {
             logger.warn(
               { clientId: client.id, error: err.message },
-              "Failed to send WebSocket message",
+              "Failed to send WebSocket message — removing client",
             );
+            clients.delete(client.id);
           }
         });
       } catch (err) {
-        // ws.send can throw if the connection is already closed
+        // ws.send can throw if the connection is already closed — remove the client
         logger.warn(
           { clientId: client.id, error: err instanceof Error ? err.message : String(err) },
-          "WebSocket send threw synchronously",
+          "WebSocket send threw synchronously — removing client",
         );
+        clients.delete(client.id);
       }
     }
   }

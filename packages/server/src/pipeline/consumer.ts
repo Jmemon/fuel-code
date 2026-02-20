@@ -170,6 +170,17 @@ export function startConsumer(
         // Non-blocking — broadcastEvent is fire-and-forget with internal error handling.
         if (broadcaster) {
           broadcaster.broadcastEvent(entry.event);
+
+          // Broadcast session lifecycle transitions for event types that cause them.
+          // session.start -> lifecycle "capturing", session.end -> lifecycle "ended".
+          const { session_id, workspace_id, type: eventType } = entry.event;
+          if (session_id && workspace_id) {
+            if (eventType === "session.start") {
+              broadcaster.broadcastSessionUpdate(session_id, workspace_id, "capturing");
+            } else if (eventType === "session.end") {
+              broadcaster.broadcastSessionUpdate(session_id, workspace_id, "ended");
+            }
+          }
         }
       }
 

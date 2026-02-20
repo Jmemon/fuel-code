@@ -41,4 +41,6 @@ export interface ConnectedClient {
   subscriptions: Set<string>;
   /** Tracks whether the client has responded to the latest ping */
   isAlive: boolean;
+  /** Timestamp when this client connected */
+  connectedAt: Date;
 }

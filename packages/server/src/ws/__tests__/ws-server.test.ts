@@ -393,13 +393,10 @@ describe("WebSocket Server", () => {
     client.ws.send(JSON.stringify({ type: "subscribe", workspace_id: "ws-1" }));
     await client.nextMessage();
 
-    // Unsubscribe all
+    // Unsubscribe all — should get a single ack with subscription: "all"
     client.ws.send(JSON.stringify({ type: "unsubscribe" }));
-    // Should get two unsubscribed messages
-    const unsub1 = await client.nextMessage();
-    const unsub2 = await client.nextMessage();
-    expect(unsub1.type).toBe("unsubscribed");
-    expect(unsub2.type).toBe("unsubscribed");
+    const unsub = await client.nextMessage();
+    expect(unsub).toEqual({ type: "unsubscribed", subscription: "all" });
 
     // Should NOT receive broadcasts
     const collector = client.collectMessages(200);
@@ -606,7 +603,7 @@ describe("WebSocket Server", () => {
       "ws-1",
       "ended",
       "Session summary text",
-      { event_count: 10, commit_count: 2, duration_ms: 5000 },
+      { total_messages: 10, total_cost_usd: 0.42, duration_ms: 5000 },
     );
 
     const msg = await client.nextMessage();
@@ -614,7 +611,7 @@ describe("WebSocket Server", () => {
     expect(msg.session_id).toBe("sess-1");
     expect(msg.lifecycle).toBe("ended");
     expect(msg.summary).toBe("Session summary text");
-    expect(msg.stats).toEqual({ event_count: 10, commit_count: 2, duration_ms: 5000 });
+    expect(msg.stats).toEqual({ total_messages: 10, total_cost_usd: 0.42, duration_ms: 5000 });
   });
 
   // -------------------------------------------------------------------------
