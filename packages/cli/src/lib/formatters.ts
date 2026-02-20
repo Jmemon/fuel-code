@@ -5,7 +5,8 @@
  * relative times, lifecycle states, tables, and structured output. All color
  * output uses picocolors (lightweight, no dependencies).
  *
- * Used by every CLI query command and TUI view to render data consistently.
+ * Used by every CLI query command to render data consistently.
+ * NOT used by TUI (TUI renders via Ink components).
  */
 
 import pc from "picocolors";
@@ -37,12 +38,12 @@ function displayWidth(str: string): number {
 // ---------------------------------------------------------------------------
 
 /**
- * Format a duration in milliseconds to a human-readable string.
+ * Format a duration in milliseconds to a human-readable compound string.
  *
  * Returns "-" for null/undefined/0 values.
- * Uses the largest sensible unit: s, m, h, d.
+ * Uses compound units for readability: "1h22m", "1d1h", "12m"
  *
- * Examples: "0s", "45s", "12m", "2h", "3d"
+ * Examples: "0s", "45s", "12m", "1h22m", "1d1h"
  */
 export function formatDuration(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return "-";
@@ -50,16 +51,14 @@ export function formatDuration(ms: number | null | undefined): string {
   if (ms < 1000) return "0s";
 
   const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-
   const days = Math.floor(hours / 24);
-  return `${days}d`;
+
+  if (days > 0) return `${days}d${hours % 24 > 0 ? `${hours % 24}h` : ""}`;
+  if (hours > 0) return `${hours}h${minutes % 60 > 0 ? `${String(minutes % 60).padStart(2, "0")}m` : ""}`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${seconds}s`;
 }
 
 // ---------------------------------------------------------------------------
@@ -86,16 +85,16 @@ export function formatCost(usd: number | null | undefined): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Format an ISO-8601 timestamp as a relative time string.
+ * Format an ISO-8601 timestamp as a relative or calendar string.
  *
  * Bands:
  *   - < 60s:        "just now"
  *   - < 60m:        "Nm ago"
  *   - < 24h:        "Nh ago"
- *   - yesterday:    "yesterday HH:MM"
- *   - < 7d:         "DayName HH:MM"
- *   - same year:    "Mon DD"
- *   - older:        "Mon DD, YYYY"
+ *   - yesterday:    "yesterday 3:45pm"
+ *   - < 7d:         "Monday 3:45pm" (full day name)
+ *   - same year:    "Feb 10"
+ *   - older:        "Feb 10, 2025"
  */
 export function formatRelativeTime(iso: string | null | undefined): string {
   if (!iso) return "-";
@@ -114,39 +113,34 @@ export function formatRelativeTime(iso: string | null | undefined): string {
   // Check if it was yesterday
   const yesterday = new Date(now);
   yesterday.setDate(yesterday.getDate() - 1);
-  if (
-    date.getFullYear() === yesterday.getFullYear() &&
-    date.getMonth() === yesterday.getMonth() &&
-    date.getDate() === yesterday.getDate()
-  ) {
-    const time = formatTime(date);
-    return `yesterday ${time}`;
+  if (date.toDateString() === yesterday.toDateString()) {
+    return `yesterday ${formatTime(date)}`;
   }
 
-  // Within the last 7 days: show day name + time
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  if (diffDays < 7) {
-    const dayName = date.toLocaleDateString("en-US", { weekday: "short" });
-    const time = formatTime(date);
-    return `${dayName} ${time}`;
+  // Within the last 7 days: show full day name + time
+  const daysAgo = Math.floor(diffHr / 24);
+  if (daysAgo < 7) {
+    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    return `${dayNames[date.getDay()]} ${formatTime(date)}`;
   }
 
-  // Same year: "Mon DD"
-  const monthName = date.toLocaleDateString("en-US", { month: "short" });
-  const day = date.getDate();
+  // Same year: "Feb 10"
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   if (date.getFullYear() === now.getFullYear()) {
-    return `${monthName} ${day}`;
+    return `${months[date.getMonth()]} ${date.getDate()}`;
   }
 
-  // Older: "Mon DD, YYYY"
-  return `${monthName} ${day}, ${date.getFullYear()}`;
+  // Different year: "Feb 10, 2025"
+  return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
 }
 
-/** Format a Date to "HH:MM" in 24-hour format */
+/** Format a Date to 12-hour am/pm format: "3:45pm" */
 function formatTime(date: Date): string {
-  const h = date.getHours().toString().padStart(2, "0");
-  const m = date.getMinutes().toString().padStart(2, "0");
-  return `${h}:${m}`;
+  let hours = date.getHours();
+  const minutes = date.getMinutes();
+  const ampm = hours >= 12 ? "pm" : "am";
+  hours = hours % 12 || 12;
+  return `${hours}:${String(minutes).padStart(2, "0")}${ampm}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,12 +166,13 @@ const LIFECYCLE_STYLES: Record<SessionLifecycle, LifecycleStyle> = {
 
 /**
  * Format a session lifecycle state with colored icon and label.
+ * Unknown lifecycle values are returned as dimmed uppercase.
  *
  * Examples: dim("○ DETECTED"), green("● LIVE"), red("✗ FAILED")
  */
 export function formatLifecycle(lifecycle: string): string {
   const style = LIFECYCLE_STYLES[lifecycle as SessionLifecycle];
-  if (!style) return lifecycle;
+  if (!style) return pc.dim(lifecycle.toUpperCase());
   return style.color(`${style.icon} ${style.label}`);
 }
 
@@ -193,13 +188,8 @@ export function formatLifecycle(lifecycle: string): string {
 export function formatNumber(n: number | null | undefined): string {
   if (n === null || n === undefined) return "-";
   if (n < 1000) return String(n);
-  if (n < 1_000_000) {
-    const k = n / 1000;
-    // Show decimal only if meaningful (e.g., 1.5K but not 2.0K)
-    return k % 1 === 0 ? `${k}K` : `${parseFloat(k.toFixed(1))}K`;
-  }
-  const m = n / 1_000_000;
-  return m % 1 === 0 ? `${m}M` : `${parseFloat(m.toFixed(1))}M`;
+  if (n < 10000) return `${(n / 1000).toFixed(1)}K`;
+  return `${Math.round(n / 1000)}K`;
 }
 
 /**
@@ -213,13 +203,14 @@ export function formatTokens(
   tokensOut: number | null | undefined,
   cache?: number | null,
 ): string {
-  const inStr = formatNumber(tokensIn ?? 0);
-  const outStr = formatNumber(tokensOut ?? 0);
-  let result = `${inStr} in / ${outStr} out`;
+  const parts = [
+    `${formatNumber(tokensIn ?? 0)} in`,
+    `${formatNumber(tokensOut ?? 0)} out`,
+  ];
   if (cache && cache > 0) {
-    result += ` / ${formatNumber(cache)} cache`;
+    parts.push(`${formatNumber(cache)} cache`);
   }
-  return result;
+  return parts.join(" / ");
 }
 
 // ---------------------------------------------------------------------------
@@ -229,14 +220,14 @@ export function formatTokens(
 /**
  * Truncate a string to maxLen characters, appending "..." if exceeded.
  * ANSI-aware: measures visible width, not byte length.
+ * When maxLen < 4, returns text.slice(0, maxLen) (no room for ellipsis).
  */
 export function truncate(text: string, maxLen: number): string {
-  if (displayWidth(text) <= maxLen) return text;
-  if (maxLen <= 3) return "...".slice(0, maxLen);
-
+  if (maxLen < 4) return text.slice(0, maxLen);
+  const visible = stripAnsi(text);
+  if (visible.length <= maxLen) return text;
   // Strip ANSI, truncate the plain text, then add "..."
-  const plain = stripAnsi(text);
-  return plain.slice(0, maxLen - 3) + "...";
+  return visible.slice(0, maxLen - 3) + "...";
 }
 
 // ---------------------------------------------------------------------------
@@ -244,11 +235,11 @@ export function truncate(text: string, maxLen: number): string {
 // ---------------------------------------------------------------------------
 
 /** Column definition for renderTable */
-interface ColumnDef {
+export interface ColumnDef {
   /** Column header label */
   header: string;
-  /** Minimum column width (defaults to header length) */
-  minWidth?: number;
+  /** Fixed width (truncates/pads). If omitted, auto-sized. */
+  width?: number;
   /** Alignment: "left" (default) or "right" */
   align?: "left" | "right";
 }
@@ -259,74 +250,62 @@ interface ColumnDef {
  * Features:
  *   - Auto-sizes columns based on content width
  *   - ANSI-aware width calculation (colored text won't misalign)
- *   - Respects maxWidth by truncating the widest columns first
+ *   - Respects maxWidth by shrinking the widest columns first
  *   - Column gap is 2 spaces
+ *   - Headers rendered with pc.bold()
+ *   - Returns empty string when rows is empty
  */
 export function renderTable(opts: {
   columns: ColumnDef[];
   rows: string[][];
   maxWidth?: number;
 }): string {
-  const { columns, rows, maxWidth } = opts;
-  const colGap = 2;
-  const numCols = columns.length;
+  const { columns, rows, maxWidth = process.stdout.columns || 120 } = opts;
 
   if (rows.length === 0) {
-    // Just render the header
-    return columns.map((c) => c.header).join(" ".repeat(colGap));
+    return "";
   }
 
-  // Calculate the natural width of each column (max of header and all row cells)
-  const colWidths: number[] = columns.map((col, i) => {
-    const headerWidth = displayWidth(col.header);
-    const minWidth = col.minWidth ?? headerWidth;
-    let maxCellWidth = 0;
-    for (const row of rows) {
-      const cellWidth = displayWidth(row[i] ?? "");
-      if (cellWidth > maxCellWidth) maxCellWidth = cellWidth;
-    }
-    return Math.max(minWidth, headerWidth, maxCellWidth);
+  const gap = 2;
+
+  // Calculate column widths: start with header lengths, expand to widest cell
+  const widths = columns.map((col, i) => {
+    if (col.width) return col.width;
+    const headerLen = col.header.length;
+    const maxCell = Math.max(headerLen, ...rows.map((row) => displayWidth(row[i] ?? "")));
+    return maxCell;
   });
 
-  // If maxWidth is specified, shrink columns to fit
-  if (maxWidth) {
-    const totalGap = colGap * (numCols - 1);
-    let totalWidth = colWidths.reduce((a, b) => a + b, 0) + totalGap;
-
-    // Iteratively shrink the widest column until we fit
-    while (totalWidth > maxWidth) {
-      const maxIdx = colWidths.indexOf(Math.max(...colWidths));
-      const excess = totalWidth - maxWidth;
-      const shrinkBy = Math.min(excess, colWidths[maxIdx] - 3); // Never shrink below 3
-      if (shrinkBy <= 0) break;
-      colWidths[maxIdx] -= shrinkBy;
-      totalWidth -= shrinkBy;
-    }
+  // If total width exceeds maxWidth, shrink the widest column(s)
+  const totalGaps = (columns.length - 1) * gap;
+  let totalWidth = widths.reduce((a, b) => a + b, 0) + totalGaps;
+  while (totalWidth > maxWidth && widths.some((w) => w > 10)) {
+    const maxIdx = widths.indexOf(Math.max(...widths));
+    widths[maxIdx]--;
+    totalWidth--;
   }
 
-  // Pad/truncate a cell value to the target width
-  function formatCell(value: string, colIdx: number): string {
-    const width = colWidths[colIdx];
-    const visWidth = displayWidth(value);
-    const align = columns[colIdx].align ?? "left";
-
-    if (visWidth > width) {
-      // Need to truncate
-      return truncate(value, width);
-    }
-
-    const padding = " ".repeat(width - visWidth);
-    return align === "right" ? padding + value : value + padding;
+  // Pad/align a string to a given width
+  function pad(str: string, width: number, align: "left" | "right"): string {
+    const visibleLen = displayWidth(str);
+    if (visibleLen >= width) return str;
+    const padding = " ".repeat(width - visibleLen);
+    return align === "right" ? padding + str : str + padding;
   }
 
-  // Build header line
+  // Render header row with bold styling
   const headerLine = columns
-    .map((col, i) => formatCell(pc.dim(col.header), i))
-    .join(" ".repeat(colGap));
+    .map((col, i) => pc.bold(pad(col.header, widths[i], col.align ?? "left")))
+    .join("  ");
 
-  // Build data rows
+  // Render data rows
   const dataLines = rows.map((row) =>
-    row.map((cell, i) => formatCell(cell ?? "", i)).join(" ".repeat(colGap)),
+    columns
+      .map((col, i) => {
+        const value = row[i] ?? "";
+        return pad(truncate(value, widths[i]), widths[i], col.align ?? "left");
+      })
+      .join("  "),
   );
 
   return [headerLine, ...dataLines].join("\n");
@@ -344,14 +323,16 @@ interface SessionRowData {
   device_name?: string;
   device_id?: string;
   duration_ms: number | null;
-  cost_usd?: number | null;
+  cost_estimate_usd?: number | null;
   started_at: string;
   summary?: string | null;
+  initial_prompt?: string | null;
 }
 
 /**
  * Format a session into a table row array.
  * Returns: [status, workspace, device, duration, cost, started, summary]
+ * Uses cost_estimate_usd field and falls back through summary -> initial_prompt -> (no summary)
  */
 export function formatSessionRow(session: SessionRowData): string[] {
   return [
@@ -359,9 +340,9 @@ export function formatSessionRow(session: SessionRowData): string[] {
     session.workspace_name ?? session.workspace_id ?? "-",
     session.device_name ?? session.device_id ?? "-",
     formatDuration(session.duration_ms),
-    formatCost(session.cost_usd ?? null),
+    formatCost(session.cost_estimate_usd ?? null),
     formatRelativeTime(session.started_at),
-    session.summary ?? pc.dim("(no summary)"),
+    session.summary ?? session.initial_prompt ?? pc.dim("(no summary)"),
   ];
 }
 
@@ -372,12 +353,13 @@ interface WorkspaceRowData {
   active_session_count: number;
   device_count: number;
   total_cost_usd: number;
-  last_activity_at: string | null;
+  last_session_at: string | null;
 }
 
 /**
  * Format a workspace into a table row array.
  * Returns: [name, sessions, active, devices, cost, last_activity]
+ * Uses last_session_at field. Null last_session_at renders as dimmed "never".
  */
 export function formatWorkspaceRow(workspace: WorkspaceRowData): string[] {
   return [
@@ -388,7 +370,9 @@ export function formatWorkspaceRow(workspace: WorkspaceRowData): string[] {
       : "0",
     String(workspace.device_count),
     formatCost(workspace.total_cost_usd),
-    formatRelativeTime(workspace.last_activity_at),
+    workspace.last_session_at
+      ? formatRelativeTime(workspace.last_session_at)
+      : pc.dim("never"),
   ];
 }
 
@@ -405,24 +389,21 @@ export function formatEmpty(entity: string): string {
 }
 
 /**
- * Format an error for user-facing display.
+ * Format an error for user-facing display (no stack traces).
  *
  * Handles ApiError (HTTP errors), ApiConnectionError (network failures),
- * and generic Error instances with appropriate messaging.
+ * and generic Error instances. Matches spec format exactly:
+ *   ApiError -> "Error: <message> (HTTP <code>)"
+ *   ApiConnectionError -> "Connection error: <message>"
+ *   Other -> "Error: <message>"
  */
 export function formatError(error: unknown): string {
   if (error instanceof ApiError) {
-    if (error.statusCode === 401) {
-      return pc.red("Authentication failed. Check your API key.");
-    }
-    if (error.statusCode === 404) {
-      return pc.red(`Not found: ${error.message}`);
-    }
-    return pc.red(`API error (${error.statusCode}): ${error.message}`);
+    return pc.red(`Error: ${error.message} (HTTP ${error.statusCode})`);
   }
 
   if (error instanceof ApiConnectionError) {
-    return pc.red(`Connection failed: ${error.message}`);
+    return pc.red(`Connection error: ${error.message}`);
   }
 
   if (error instanceof Error) {

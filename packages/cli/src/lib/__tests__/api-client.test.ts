@@ -3,7 +3,8 @@
  *
  * Uses Bun.serve() as a mock HTTP server to test real HTTP round-trips
  * rather than mocking fetch. Tests cover all endpoints, error handling,
- * timeout behavior, parameter mapping, and resolveWorkspaceName logic.
+ * timeout behavior, parameter mapping, envelope unwrapping, and
+ * resolveWorkspaceName logic.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
@@ -99,12 +100,13 @@ function makeWorkspaceSummary(name: string, id?: string): WorkspaceSummary {
     default_branch: "main",
     session_count: 5,
     active_session_count: 1,
+    last_session_at: "2025-01-01T00:00:00Z",
     device_count: 2,
     total_cost_usd: 1.23,
-    last_activity_at: "2025-01-01T00:00:00Z",
+    total_duration_ms: 3600000,
     first_seen_at: "2024-06-01T00:00:00Z",
     updated_at: "2025-01-01T00:00:00Z",
-  };
+  } as WorkspaceSummary;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,8 +119,6 @@ describe("FuelApiClient — constructor", () => {
       baseUrl: "http://example.com///",
       apiKey: "key",
     });
-    // Verify by making a request (the URL should not have double slashes)
-    // We test this indirectly via the mock server
     expect(client).toBeDefined();
   });
 
@@ -146,7 +146,7 @@ describe("FuelApiClient — constructor", () => {
 
 describe("FuelApiClient — authentication", () => {
   it("sends Authorization header with Bearer token", async () => {
-    mockResponse(200, { status: "ok" });
+    mockResponse(200, { status: "ok", postgres: true, redis: true, ws_clients: 0, uptime: 100, version: "1.0.0" });
     const client = makeClient();
     await client.getHealth();
 
@@ -163,20 +163,19 @@ describe("FuelApiClient — authentication", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests: Session Endpoints
+// Tests: Session Endpoints (with envelope unwrapping)
 // ---------------------------------------------------------------------------
 
 describe("FuelApiClient — session endpoints", () => {
-  it("listSessions sends GET /api/sessions with query params", async () => {
-    const mockData = { data: [], total: 0, limit: 50, offset: 0 };
-    mockResponse(200, mockData);
+  it("listSessions sends GET /api/sessions with camelCase mapped to snake_case params", async () => {
+    mockResponse(200, { sessions: [], next_cursor: null, has_more: false });
     const client = makeClient();
 
     const result = await client.listSessions({
-      workspace_id: "ws-123",
+      workspaceId: "ws-123",
       lifecycle: "capturing",
       limit: 10,
-      offset: 5,
+      cursor: "abc",
     });
 
     expect(lastRequest.method).toBe("GET");
@@ -184,13 +183,14 @@ describe("FuelApiClient — session endpoints", () => {
     expect(lastRequest.url).toContain("workspace_id=ws-123");
     expect(lastRequest.url).toContain("lifecycle=capturing");
     expect(lastRequest.url).toContain("limit=10");
-    expect(lastRequest.url).toContain("offset=5");
+    expect(lastRequest.url).toContain("cursor=abc");
     expect(result.data).toEqual([]);
-    expect(result.total).toBe(0);
+    expect(result.nextCursor).toBeNull();
+    expect(result.hasMore).toBe(false);
   });
 
   it("listSessions omits undefined params", async () => {
-    mockResponse(200, { data: [], total: 0, limit: 50, offset: 0 });
+    mockResponse(200, { sessions: [], next_cursor: null, has_more: false });
     const client = makeClient();
 
     await client.listSessions({ limit: 20 });
@@ -200,9 +200,22 @@ describe("FuelApiClient — session endpoints", () => {
     expect(lastRequest.url).not.toContain("lifecycle");
   });
 
-  it("getSession sends GET /api/sessions/:id", async () => {
+  it("listSessions returns PaginatedResponse with data, nextCursor, hasMore", async () => {
+    const session = { id: "sess-001", lifecycle: "capturing" };
+    mockResponse(200, { sessions: [session], next_cursor: "cursor-abc", has_more: true });
+    const client = makeClient();
+
+    const result = await client.listSessions();
+
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0].id).toBe("sess-001");
+    expect(result.nextCursor).toBe("cursor-abc");
+    expect(result.hasMore).toBe(true);
+  });
+
+  it("getSession sends GET /api/sessions/:id and unwraps { session } envelope", async () => {
     const mockSession = { id: "sess-001", lifecycle: "capturing" };
-    mockResponse(200, mockSession);
+    mockResponse(200, { session: mockSession });
     const client = makeClient();
 
     const result = await client.getSession("sess-001");
@@ -212,83 +225,102 @@ describe("FuelApiClient — session endpoints", () => {
     expect(result.id).toBe("sess-001");
   });
 
-  it("getTranscript sends GET /api/sessions/:id/transcript", async () => {
-    mockResponse(200, [{ id: "msg-1", session_id: "sess-001" }]);
+  it("getTranscript sends GET /api/sessions/:id/transcript and unwraps { messages }", async () => {
+    mockResponse(200, { messages: [{ id: "msg-1", session_id: "sess-001" }] });
     const client = makeClient();
 
     const result = await client.getTranscript("sess-001");
 
     expect(lastRequest.url).toBe("/api/sessions/sess-001/transcript");
     expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("msg-1");
   });
 
-  it("getSessionEvents sends GET /api/sessions/:id/events", async () => {
-    mockResponse(200, [{ id: "evt-1", type: "git.commit" }]);
+  it("getSessionEvents sends GET /api/sessions/:id/events and unwraps { events }", async () => {
+    mockResponse(200, { events: [{ id: "evt-1", type: "git.commit" }] });
     const client = makeClient();
 
     const result = await client.getSessionEvents("sess-001");
 
     expect(lastRequest.url).toBe("/api/sessions/sess-001/events");
     expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("evt-1");
   });
 
-  it("getSessionGit sends GET /api/sessions/:id/git", async () => {
-    mockResponse(200, [{ id: "git-1", type: "commit" }]);
+  it("getSessionGit sends GET /api/sessions/:id/git and unwraps { git_activity }", async () => {
+    mockResponse(200, { git_activity: [{ id: "git-1", type: "commit" }] });
     const client = makeClient();
 
     const result = await client.getSessionGit("sess-001");
 
     expect(lastRequest.url).toBe("/api/sessions/sess-001/git");
     expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("git-1");
   });
 
-  it("updateSession sends PATCH /api/sessions/:id with body", async () => {
-    mockResponse(200, { id: "sess-001", lifecycle: "ended" });
+  it("updateSession sends PATCH /api/sessions/:id and unwraps { session }", async () => {
+    mockResponse(200, { session: { id: "sess-001", tags: ["test"] } });
     const client = makeClient();
 
-    const result = await client.updateSession("sess-001", { lifecycle: "ended" });
+    const result = await client.updateSession("sess-001", { tags: ["test"] });
 
     expect(lastRequest.method).toBe("PATCH");
     expect(lastRequest.url).toBe("/api/sessions/sess-001");
-    expect(lastRequest.body).toEqual({ lifecycle: "ended" });
-    expect(result.lifecycle).toBe("ended");
+    expect(lastRequest.body).toEqual({ tags: ["test"] });
+    expect(result.id).toBe("sess-001");
   });
 
   it("reparseSession sends POST /api/sessions/:id/reparse", async () => {
     mockResponse(200, { status: "queued" });
     const client = makeClient();
 
-    const result = await client.reparseSession("sess-001");
+    await client.reparseSession("sess-001");
 
     expect(lastRequest.method).toBe("POST");
     expect(lastRequest.url).toBe("/api/sessions/sess-001/reparse");
-    expect(result.status).toBe("queued");
   });
 });
 
 // ---------------------------------------------------------------------------
-// Tests: Workspace Endpoints
+// Tests: Workspace Endpoints (with envelope unwrapping)
 // ---------------------------------------------------------------------------
 
 describe("FuelApiClient — workspace endpoints", () => {
-  it("listWorkspaces sends GET /api/workspaces", async () => {
-    const mockData = { data: [], total: 0, limit: 50, offset: 0 };
-    mockResponse(200, mockData);
+  it("listWorkspaces sends GET /api/workspaces with cursor param", async () => {
+    mockResponse(200, { workspaces: [], next_cursor: null, has_more: false });
     const client = makeClient();
 
-    const result = await client.listWorkspaces({ search: "fuel" });
+    const result = await client.listWorkspaces({ cursor: "abc", limit: 25 });
 
     expect(lastRequest.method).toBe("GET");
     expect(lastRequest.url).toContain("/api/workspaces");
-    expect(lastRequest.url).toContain("search=fuel");
+    expect(lastRequest.url).toContain("cursor=abc");
+    expect(lastRequest.url).toContain("limit=25");
     expect(result.data).toEqual([]);
+    expect(result.nextCursor).toBeNull();
+    expect(result.hasMore).toBe(false);
   });
 
-  it("getWorkspace sends GET /api/workspaces/:id", async () => {
+  it("listWorkspaces returns PaginatedResponse with data, nextCursor, hasMore", async () => {
+    const ws = makeWorkspaceSummary("my-repo");
+    mockResponse(200, { workspaces: [ws], next_cursor: "next-cursor", has_more: true });
+    const client = makeClient();
+
+    const result = await client.listWorkspaces();
+
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0].display_name).toBe("my-repo");
+    expect(result.nextCursor).toBe("next-cursor");
+    expect(result.hasMore).toBe(true);
+  });
+
+  it("getWorkspace sends GET /api/workspaces/:id and returns full detail", async () => {
     const mockResp = {
       workspace: { id: "ws-001", display_name: "my-repo" },
-      tracking: { active_sessions: [], recent_git: [] },
-      stats: { total_sessions: 0, total_events: 0, total_cost_usd: 0, total_duration_ms: 0, tokens_in: 0, tokens_out: 0, top_tools: [] },
+      recent_sessions: [],
+      devices: [],
+      git_summary: { total_commits: 0, total_pushes: 0, active_branches: [], last_commit_at: null },
+      stats: { total_sessions: 0, total_duration_ms: 0, total_cost_usd: 0, first_session_at: null, last_session_at: null },
     };
     mockResponse(200, mockResp);
     const client = makeClient();
@@ -297,37 +329,56 @@ describe("FuelApiClient — workspace endpoints", () => {
 
     expect(lastRequest.url).toBe("/api/workspaces/ws-001");
     expect(result.workspace.display_name).toBe("my-repo");
+    expect(result.stats).toBeDefined();
+    expect(result.git_summary).toBeDefined();
+  });
+
+  it("getWorkspace URL-encodes the path segment for canonical_id", async () => {
+    const mockResp = {
+      workspace: { id: "ws-001", display_name: "my-repo" },
+      recent_sessions: [],
+      devices: [],
+      git_summary: { total_commits: 0, total_pushes: 0, active_branches: [], last_commit_at: null },
+      stats: { total_sessions: 0, total_duration_ms: 0, total_cost_usd: 0, first_session_at: null, last_session_at: null },
+    };
+    mockResponse(200, mockResp);
+    const client = makeClient();
+
+    await client.getWorkspace("canonical/id");
+
+    // Should URL-encode the slash
+    expect(lastRequest.url).toBe("/api/workspaces/canonical%2Fid");
   });
 });
 
 // ---------------------------------------------------------------------------
-// Tests: resolveWorkspaceName
+// Tests: resolveWorkspaceName (returns ULID string, not WorkspaceSummary)
 // ---------------------------------------------------------------------------
 
 describe("FuelApiClient — resolveWorkspaceName", () => {
-  it("returns exact match (case-insensitive)", async () => {
-    const ws = makeWorkspaceSummary("MyProject");
-    mockResponse(200, { data: [ws], total: 1, limit: 250, offset: 0 });
+  it("returns exact match ULID (case-insensitive)", async () => {
+    const ws = makeWorkspaceSummary("MyProject", "ulid-myproject");
+    mockResponse(200, { workspaces: [ws], next_cursor: null, has_more: false });
     const client = makeClient();
 
     const result = await client.resolveWorkspaceName("myproject");
-    expect(result.display_name).toBe("MyProject");
+    expect(result).toBe("ulid-myproject");
   });
 
-  it("returns single prefix match", async () => {
-    const ws1 = makeWorkspaceSummary("fuel-code");
-    const ws2 = makeWorkspaceSummary("other-project");
-    mockResponse(200, { data: [ws1, ws2], total: 2, limit: 250, offset: 0 });
+  it("returns single prefix match ULID", async () => {
+    const ws1 = makeWorkspaceSummary("fuel-code", "ulid-fuel-code");
+    const ws2 = makeWorkspaceSummary("other-project", "ulid-other");
+    mockResponse(200, { workspaces: [ws1, ws2], next_cursor: null, has_more: false });
     const client = makeClient();
 
     const result = await client.resolveWorkspaceName("fuel");
-    expect(result.display_name).toBe("fuel-code");
+    expect(result).toBe("ulid-fuel-code");
   });
 
   it("throws ApiError on ambiguous prefix match", async () => {
     const ws1 = makeWorkspaceSummary("fuel-code");
     const ws2 = makeWorkspaceSummary("fuel-web");
-    mockResponse(200, { data: [ws1, ws2], total: 2, limit: 250, offset: 0 });
+    mockResponse(200, { workspaces: [ws1, ws2], next_cursor: null, has_more: false });
     const client = makeClient();
 
     try {
@@ -344,7 +395,7 @@ describe("FuelApiClient — resolveWorkspaceName", () => {
 
   it("throws ApiError 404 when no match found", async () => {
     const ws = makeWorkspaceSummary("other-project");
-    mockResponse(200, { data: [ws], total: 1, limit: 250, offset: 0 });
+    mockResponse(200, { workspaces: [ws], next_cursor: null, has_more: false });
     const client = makeClient();
 
     try {
@@ -358,37 +409,40 @@ describe("FuelApiClient — resolveWorkspaceName", () => {
   });
 
   it("prefers exact match over prefix match", async () => {
-    const ws1 = makeWorkspaceSummary("fuel");
-    const ws2 = makeWorkspaceSummary("fuel-code");
-    mockResponse(200, { data: [ws1, ws2], total: 2, limit: 250, offset: 0 });
+    const ws1 = makeWorkspaceSummary("fuel", "ulid-fuel");
+    const ws2 = makeWorkspaceSummary("fuel-code", "ulid-fuel-code");
+    mockResponse(200, { workspaces: [ws1, ws2], next_cursor: null, has_more: false });
     const client = makeClient();
 
     const result = await client.resolveWorkspaceName("fuel");
-    expect(result.display_name).toBe("fuel");
+    expect(result).toBe("ulid-fuel");
   });
 });
 
 // ---------------------------------------------------------------------------
-// Tests: Device Endpoints
+// Tests: Device Endpoints (bare array, not paginated)
 // ---------------------------------------------------------------------------
 
 describe("FuelApiClient — device endpoints", () => {
-  it("listDevices sends GET /api/devices", async () => {
-    mockResponse(200, { data: [], total: 0, limit: 50, offset: 0 });
+  it("listDevices sends GET /api/devices and returns bare array", async () => {
+    const devices = [{ id: "dev-1", name: "macbook" }, { id: "dev-2", name: "linux-box" }];
+    mockResponse(200, { devices });
     const client = makeClient();
 
     const result = await client.listDevices();
 
     expect(lastRequest.method).toBe("GET");
     expect(lastRequest.url).toBe("/api/devices");
-    expect(result.data).toEqual([]);
+    expect(Array.isArray(result)).toBe(true);
+    expect(result).toHaveLength(2);
+    expect(result[0].id).toBe("dev-1");
   });
 
-  it("getDevice sends GET /api/devices/:id", async () => {
+  it("getDevice sends GET /api/devices/:id and returns full detail", async () => {
     const mockResp = {
       device: { id: "dev-001", name: "macbook" },
-      tracking: { device: { id: "dev-001" }, active_sessions: [] },
-      stats: { total_sessions: 5, total_events: 100, last_seen_at: "2025-01-01" },
+      workspaces: [],
+      recent_sessions: [],
     };
     mockResponse(200, mockResp);
     const client = makeClient();
@@ -397,35 +451,40 @@ describe("FuelApiClient — device endpoints", () => {
 
     expect(lastRequest.url).toBe("/api/devices/dev-001");
     expect(result.device.name).toBe("macbook");
+    expect(result.workspaces).toEqual([]);
+    expect(result.recent_sessions).toEqual([]);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Tests: Timeline Endpoint
+// Tests: Timeline Endpoint (discriminated union: type not kind)
 // ---------------------------------------------------------------------------
 
 describe("FuelApiClient — timeline endpoint", () => {
-  it("getTimeline sends GET /api/timeline with params", async () => {
-    const mockResp = { items: [], total: 0, has_more: false };
-    mockResponse(200, mockResp);
+  it("getTimeline sends GET /api/timeline with camelCase mapped to snake_case params", async () => {
+    mockResponse(200, { items: [], next_cursor: null, has_more: false });
     const client = makeClient();
 
     const result = await client.getTimeline({
-      workspace_id: "ws-001",
-      limit: 25,
-      kinds: ["session", "git"],
+      workspaceId: "ws-001",
+      after: "2025-01-01",
+      before: "2025-12-31",
+      types: "session,git_activity",
     });
 
     expect(lastRequest.method).toBe("GET");
     expect(lastRequest.url).toContain("/api/timeline");
     expect(lastRequest.url).toContain("workspace_id=ws-001");
-    expect(lastRequest.url).toContain("limit=25");
-    expect(lastRequest.url).toContain("kinds=session%2Cgit");
+    expect(lastRequest.url).toContain("after=2025-01-01");
+    expect(lastRequest.url).toContain("before=2025-12-31");
+    expect(lastRequest.url).toContain("types=session%2Cgit_activity");
     expect(result.items).toEqual([]);
+    expect(result.next_cursor).toBeNull();
+    expect(result.has_more).toBe(false);
   });
 
   it("getTimeline works without params", async () => {
-    mockResponse(200, { items: [], total: 0, has_more: false });
+    mockResponse(200, { items: [], next_cursor: null, has_more: false });
     const client = makeClient();
 
     const result = await client.getTimeline();
@@ -433,21 +492,66 @@ describe("FuelApiClient — timeline endpoint", () => {
     expect(lastRequest.url).toBe("/api/timeline");
     expect(result.has_more).toBe(false);
   });
+
+  it("getTimeline returns items as discriminated union with type field", async () => {
+    const sessionItem = {
+      type: "session",
+      session: {
+        id: "sess-1",
+        workspace_id: "ws-1",
+        workspace_name: "my-repo",
+        device_id: "dev-1",
+        device_name: "macbook",
+        lifecycle: "summarized",
+        started_at: "2025-01-01T00:00:00Z",
+        ended_at: "2025-01-01T01:00:00Z",
+        duration_ms: 3600000,
+        summary: "Worked on feature",
+        cost_estimate_usd: 0.50,
+        total_messages: 20,
+        tags: ["feature"],
+      },
+      git_activity: [],
+    };
+    const orphanItem = {
+      type: "git_activity",
+      workspace_id: "ws-1",
+      workspace_name: "my-repo",
+      device_id: "dev-1",
+      device_name: "macbook",
+      git_activity: [{ id: "g-1", type: "commit", branch: "main", commit_sha: "abc", message: "fix", files_changed: 1, timestamp: "2025-01-01T00:00:00Z", data: {} }],
+      started_at: "2025-01-01T00:00:00Z",
+    };
+    mockResponse(200, { items: [sessionItem, orphanItem], next_cursor: "next", has_more: true });
+    const client = makeClient();
+
+    const result = await client.getTimeline();
+
+    expect(result.items).toHaveLength(2);
+    expect(result.items[0].type).toBe("session");
+    expect(result.items[1].type).toBe("git_activity");
+    expect(result.next_cursor).toBe("next");
+    expect(result.has_more).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
-// Tests: System Endpoint
+// Tests: System Endpoint (HealthStatus with full fields)
 // ---------------------------------------------------------------------------
 
 describe("FuelApiClient — system endpoints", () => {
-  it("getHealth sends GET /api/health", async () => {
-    mockResponse(200, { status: "healthy", version: "1.0.0" });
+  it("getHealth sends GET /api/health and returns HealthStatus", async () => {
+    mockResponse(200, { status: "ok", postgres: true, redis: true, ws_clients: 5, uptime: 12345, version: "1.0.0" });
     const client = makeClient();
 
     const result = await client.getHealth();
 
     expect(lastRequest.url).toBe("/api/health");
-    expect(result.status).toBe("healthy");
+    expect(result.status).toBe("ok");
+    expect(result.postgres).toBe(true);
+    expect(result.redis).toBe(true);
+    expect(result.ws_clients).toBe(5);
+    expect(result.uptime).toBe(12345);
     expect(result.version).toBe("1.0.0");
   });
 
@@ -492,11 +596,11 @@ describe("FuelApiClient — ingest endpoint", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests: Error Handling
+// Tests: Error Handling (with JSON body parsing for .error field)
 // ---------------------------------------------------------------------------
 
 describe("FuelApiClient — error handling", () => {
-  it("throws ApiError on 400 response", async () => {
+  it("throws ApiError on 400 response with server error message", async () => {
     mockResponse(400, { error: "Bad request" });
     const client = makeClient();
 
@@ -506,6 +610,7 @@ describe("FuelApiClient — error handling", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(ApiError);
       expect((err as ApiError).statusCode).toBe(400);
+      expect((err as ApiError).message).toBe("Bad request");
     }
   });
 
@@ -519,10 +624,11 @@ describe("FuelApiClient — error handling", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(ApiError);
       expect((err as ApiError).statusCode).toBe(401);
+      expect((err as ApiError).message).toBe("Unauthorized");
     }
   });
 
-  it("throws ApiError on 404 response", async () => {
+  it("throws ApiError on 404 response with server error message", async () => {
     mockResponse(404, { error: "Not found" });
     const client = makeClient();
 
@@ -532,10 +638,11 @@ describe("FuelApiClient — error handling", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(ApiError);
       expect((err as ApiError).statusCode).toBe(404);
+      expect((err as ApiError).message).toBe("Not found");
     }
   });
 
-  it("throws ApiError on 500 response", async () => {
+  it("throws ApiError on 500 response with server error message in body", async () => {
     mockResponse(500, { error: "Internal server error" });
     const client = makeClient();
 
@@ -545,7 +652,9 @@ describe("FuelApiClient — error handling", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(ApiError);
       expect((err as ApiError).statusCode).toBe(500);
-      expect((err as ApiError).body).toContain("Internal server error");
+      expect((err as ApiError).message).toBe("Internal server error");
+      // Body should be the parsed JSON object
+      expect((err as ApiError).body).toEqual({ error: "Internal server error" });
     }
   });
 
@@ -593,9 +702,9 @@ describe("FuelApiClient — error handling", () => {
   });
 
   it("ApiError includes status code and body", () => {
-    const err = new ApiError("test error", 422, '{"detail":"invalid"}');
+    const err = new ApiError("test error", 422, { detail: "invalid" });
     expect(err.statusCode).toBe(422);
-    expect(err.body).toBe('{"detail":"invalid"}');
+    expect(err.body).toEqual({ detail: "invalid" });
     expect(err.name).toBe("ApiError");
     expect(err.message).toBe("test error");
   });

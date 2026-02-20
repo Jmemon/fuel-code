@@ -1,8 +1,9 @@
 /**
  * Tests for CLI output formatting utilities.
  *
- * Pure unit tests — no I/O, no mocks. Tests all formatter functions
- * for correctness with edge cases, null handling, and ANSI-aware behavior.
+ * Pure unit tests -- no I/O, no mocks. Tests all formatter functions
+ * for correctness with edge cases, null handling, ANSI-aware behavior,
+ * and spec compliance (compound durations, 12-hour time, full day names, etc.).
  */
 
 import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
@@ -26,7 +27,7 @@ import {
 import { ApiError, ApiConnectionError } from "../api-client.js";
 
 // ---------------------------------------------------------------------------
-// Tests: formatDuration
+// Tests: formatDuration (compound formatting)
 // ---------------------------------------------------------------------------
 
 describe("formatDuration", () => {
@@ -49,23 +50,27 @@ describe("formatDuration", () => {
 
   it("formats seconds correctly", () => {
     expect(formatDuration(1000)).toBe("1s");
-    expect(formatDuration(45000)).toBe("45s");
+    expect(formatDuration(30000)).toBe("30s");
     expect(formatDuration(59999)).toBe("59s");
   });
 
   it("formats minutes correctly", () => {
     expect(formatDuration(60000)).toBe("1m");
-    expect(formatDuration(300000)).toBe("5m");
-    expect(formatDuration(3599999)).toBe("59m");
+    expect(formatDuration(720000)).toBe("12m");
   });
 
-  it("formats hours correctly", () => {
+  it("formats compound hours+minutes", () => {
+    // 4920000ms = 82 minutes = 1h22m
+    expect(formatDuration(4920000)).toBe("1h22m");
+    // exact hours with no remaining minutes
     expect(formatDuration(3600000)).toBe("1h");
     expect(formatDuration(7200000)).toBe("2h");
-    expect(formatDuration(86399999)).toBe("23h");
   });
 
-  it("formats days correctly", () => {
+  it("formats compound days+hours", () => {
+    // 90000000ms = 25 hours = 1d1h
+    expect(formatDuration(90000000)).toBe("1d1h");
+    // exact days with no remaining hours
     expect(formatDuration(86400000)).toBe("1d");
     expect(formatDuration(172800000)).toBe("2d");
   });
@@ -90,20 +95,22 @@ describe("formatCost", () => {
 
   it("returns '<$0.01' for tiny amounts", () => {
     expect(formatCost(0.001)).toBe("<$0.01");
+    expect(formatCost(0.005)).toBe("<$0.01");
     expect(formatCost(0.009)).toBe("<$0.01");
     expect(formatCost(0.0001)).toBe("<$0.01");
   });
 
   it("formats normal amounts with 2 decimal places", () => {
     expect(formatCost(0.01)).toBe("$0.01");
+    expect(formatCost(0.42)).toBe("$0.42");
     expect(formatCost(1.5)).toBe("$1.50");
-    expect(formatCost(123.456)).toBe("$123.46");
-    expect(formatCost(0.1)).toBe("$0.10");
+    expect(formatCost(1.999)).toBe("$2.00");
+    expect(formatCost(12.345)).toBe("$12.35");
   });
 });
 
 // ---------------------------------------------------------------------------
-// Tests: formatRelativeTime
+// Tests: formatRelativeTime (12-hour am/pm, full day names)
 // ---------------------------------------------------------------------------
 
 describe("formatRelativeTime", () => {
@@ -138,26 +145,29 @@ describe("formatRelativeTime", () => {
     expect(formatRelativeTime(twoHoursAgo.toISOString())).toBe("2h ago");
   });
 
-  it("returns 'yesterday HH:MM' for yesterday's timestamps", () => {
+  it("returns 'yesterday <time>' with 12-hour am/pm format", () => {
     const now = new Date();
     const yesterday = new Date(now);
     yesterday.setDate(yesterday.getDate() - 1);
-    yesterday.setHours(14, 30, 0, 0);
+    yesterday.setHours(15, 45, 0, 0); // 3:45pm
 
     const result = formatRelativeTime(yesterday.toISOString());
     expect(result).toContain("yesterday");
-    expect(result).toContain("14:30");
+    expect(result).toContain("3:45pm");
   });
 
-  it("returns 'DayName HH:MM' for timestamps within last 7 days", () => {
+  it("returns full day name with 12-hour time for timestamps within last 7 days", () => {
     const now = new Date();
     const threeDaysAgo = new Date(now);
     threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
     threeDaysAgo.setHours(10, 15, 0, 0);
 
     const result = formatRelativeTime(threeDaysAgo.toISOString());
-    // Should contain a short day name and time
-    expect(result).toMatch(/\w{3} \d{2}:\d{2}/);
+    // Should contain a full day name (e.g., "Monday", "Tuesday") and am/pm time
+    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const expectedDay = dayNames[threeDaysAgo.getDay()];
+    expect(result).toContain(expectedDay);
+    expect(result).toContain("10:15am");
   });
 
   it("returns 'Mon DD' for same-year timestamps older than 7 days", () => {
@@ -178,7 +188,7 @@ describe("formatRelativeTime", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests: formatLifecycle
+// Tests: formatLifecycle (including unknown state handling)
 // ---------------------------------------------------------------------------
 
 describe("formatLifecycle", () => {
@@ -228,8 +238,12 @@ describe("formatLifecycle", () => {
     expect(stripped).toContain("FAILED");
   });
 
-  it("returns unknown lifecycle string as-is", () => {
-    expect(formatLifecycle("unknown_state")).toBe("unknown_state");
+  it("returns unknown lifecycle as dimmed uppercase", () => {
+    const result = formatLifecycle("unknown_state");
+    const stripped = stripAnsi(result);
+    expect(stripped).toBe("UNKNOWN_STATE");
+    // Verify it went through pc.dim
+    expect(result).toBe(pc.dim("UNKNOWN_STATE"));
   });
 });
 
@@ -253,16 +267,8 @@ describe("formatNumber", () => {
   });
 
   it("formats thousands with K suffix", () => {
-    expect(formatNumber(1000)).toBe("1K");
     expect(formatNumber(1500)).toBe("1.5K");
     expect(formatNumber(125000)).toBe("125K");
-    expect(formatNumber(999999)).toBe("1000K");
-  });
-
-  it("formats millions with M suffix", () => {
-    expect(formatNumber(1000000)).toBe("1M");
-    expect(formatNumber(1500000)).toBe("1.5M");
-    expect(formatNumber(2000000)).toBe("2M");
   });
 });
 
@@ -280,15 +286,19 @@ describe("formatTokens", () => {
   });
 
   it("omits cache when zero", () => {
-    expect(formatTokens(1000, 2000, 0)).toBe("1K in / 2K out");
+    expect(formatTokens(1000, 2000, 0)).toBe("1.0K in / 2.0K out");
   });
 
   it("omits cache when null", () => {
-    expect(formatTokens(1000, 2000, null)).toBe("1K in / 2K out");
+    expect(formatTokens(1000, 2000, null)).toBe("1.0K in / 2.0K out");
   });
 
   it("handles null input tokens as 0", () => {
     expect(formatTokens(null, null)).toBe("0 in / 0 out");
+  });
+
+  it("formats small token counts without K suffix", () => {
+    expect(formatTokens(500, 200)).toBe("500 in / 200 out");
   });
 });
 
@@ -317,26 +327,26 @@ describe("stripAnsi", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests: truncate
+// Tests: truncate (maxLen < 4 uses text.slice)
 // ---------------------------------------------------------------------------
 
 describe("truncate", () => {
   it("returns short text unchanged", () => {
-    expect(truncate("hello", 10)).toBe("hello");
+    expect(truncate("short", 10)).toBe("short");
   });
 
   it("truncates long text with ellipsis", () => {
-    expect(truncate("hello world!", 8)).toBe("hello...");
+    expect(truncate("hello world", 8)).toBe("hello...");
   });
 
   it("handles exact length", () => {
     expect(truncate("hello", 5)).toBe("hello");
   });
 
-  it("handles very short maxLen", () => {
-    expect(truncate("hello", 3)).toBe("...");
-    expect(truncate("hello", 2)).toBe("..");
-    expect(truncate("hello", 1)).toBe(".");
+  it("handles maxLen < 4 by slicing without ellipsis", () => {
+    expect(truncate("hello", 3)).toBe("hel");
+    expect(truncate("hi", 2)).toBe("hi");
+    expect(truncate("hello", 1)).toBe("h");
   });
 
   it("is ANSI-aware for width calculation", () => {
@@ -347,7 +357,7 @@ describe("truncate", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests: renderTable
+// Tests: renderTable (empty returns '', bold headers, width not minWidth)
 // ---------------------------------------------------------------------------
 
 describe("renderTable", () => {
@@ -369,14 +379,24 @@ describe("renderTable", () => {
     expect(stripAnsi(lines[0]).length).toBe(stripAnsi(lines[1]).length);
   });
 
-  it("handles empty rows (just renders header)", () => {
+  it("returns empty string for empty rows", () => {
     const result = renderTable({
       columns: [{ header: "NAME" }, { header: "VALUE" }],
       rows: [],
     });
 
-    expect(result).toContain("NAME");
-    expect(result).toContain("VALUE");
+    expect(result).toBe("");
+  });
+
+  it("uses pc.bold for headers (not pc.dim)", () => {
+    const result = renderTable({
+      columns: [{ header: "NAME" }],
+      rows: [["test"]],
+    });
+
+    const lines = result.split("\n");
+    // The header should be bold-wrapped. "NAME" and "test" are both 4 chars, so no padding.
+    expect(lines[0]).toBe(pc.bold("NAME"));
   });
 
   it("respects right alignment", () => {
@@ -388,7 +408,6 @@ describe("renderTable", () => {
       rows: [["test", "42"]],
     });
 
-    // The "42" should be right-aligned (padded on the left)
     const lines = result.split("\n");
     const dataLine = stripAnsi(lines[1]);
     // COUNT column should have leading spaces before "42"
@@ -426,10 +445,10 @@ describe("renderTable", () => {
     expect(widths[1]).toBe(widths[2]);
   });
 
-  it("respects minWidth on columns", () => {
+  it("respects width on columns", () => {
     const result = renderTable({
       columns: [
-        { header: "ID", minWidth: 10 },
+        { header: "ID", width: 10 },
         { header: "V" },
       ],
       rows: [["1", "x"]],
@@ -437,14 +456,15 @@ describe("renderTable", () => {
 
     const lines = result.split("\n");
     const headerPlain = stripAnsi(lines[0]);
-    // The first column should be at least 10 chars wide
+    // The first column should be exactly 10 chars wide
     const firstColEnd = headerPlain.indexOf("V");
-    expect(firstColEnd).toBeGreaterThanOrEqual(10);
+    // Gap is 2, so first col width + gap = firstColEnd
+    expect(firstColEnd).toBe(12); // 10 + 2 gap
   });
 });
 
 // ---------------------------------------------------------------------------
-// Tests: formatSessionRow
+// Tests: formatSessionRow (cost_estimate_usd, initial_prompt fallback)
 // ---------------------------------------------------------------------------
 
 describe("formatSessionRow", () => {
@@ -454,7 +474,7 @@ describe("formatSessionRow", () => {
       workspace_name: "my-repo",
       device_name: "macbook",
       duration_ms: 3600000,
-      cost_usd: 1.5,
+      cost_estimate_usd: 1.5,
       started_at: "2020-01-01T00:00:00Z",
       summary: "Fixed a bug",
     });
@@ -483,12 +503,36 @@ describe("formatSessionRow", () => {
     expect(row[1]).toBe("ws-001");
   });
 
-  it("shows (no summary) when summary is null", () => {
+  it("uses cost_estimate_usd field", () => {
+    const row = formatSessionRow({
+      lifecycle: "ended",
+      duration_ms: 1000,
+      cost_estimate_usd: 0.42,
+      started_at: new Date().toISOString(),
+    });
+
+    expect(row[4]).toBe("$0.42");
+  });
+
+  it("falls back to initial_prompt when summary is null", () => {
     const row = formatSessionRow({
       lifecycle: "ended",
       duration_ms: 1000,
       started_at: new Date().toISOString(),
       summary: null,
+      initial_prompt: "Fix the build",
+    });
+
+    expect(row[6]).toBe("Fix the build");
+  });
+
+  it("shows (no summary) when both summary and initial_prompt are null", () => {
+    const row = formatSessionRow({
+      lifecycle: "ended",
+      duration_ms: 1000,
+      started_at: new Date().toISOString(),
+      summary: null,
+      initial_prompt: null,
     });
 
     expect(stripAnsi(row[6])).toBe("(no summary)");
@@ -496,7 +540,7 @@ describe("formatSessionRow", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests: formatWorkspaceRow
+// Tests: formatWorkspaceRow (last_session_at, null -> "never")
 // ---------------------------------------------------------------------------
 
 describe("formatWorkspaceRow", () => {
@@ -507,7 +551,7 @@ describe("formatWorkspaceRow", () => {
       active_session_count: 2,
       device_count: 3,
       total_cost_usd: 5.5,
-      last_activity_at: "2020-01-01T00:00:00Z",
+      last_session_at: "2020-01-01T00:00:00Z",
     });
 
     expect(row).toHaveLength(6);
@@ -523,12 +567,10 @@ describe("formatWorkspaceRow", () => {
       active_session_count: 2,
       device_count: 1,
       total_cost_usd: 0,
-      last_activity_at: null,
+      last_session_at: null,
     });
 
-    // The visible text should be "2" regardless of color support
     expect(stripAnsi(row[2])).toBe("2");
-    // Verify it went through pc.green (which is a no-op when colors are off)
     expect(row[2]).toBe(pc.green("2"));
   });
 
@@ -539,10 +581,24 @@ describe("formatWorkspaceRow", () => {
       active_session_count: 0,
       device_count: 1,
       total_cost_usd: 0,
-      last_activity_at: null,
+      last_session_at: null,
     });
 
     expect(row[2]).toBe("0");
+  });
+
+  it("shows dimmed 'never' when last_session_at is null", () => {
+    const row = formatWorkspaceRow({
+      display_name: "repo",
+      session_count: 0,
+      active_session_count: 0,
+      device_count: 1,
+      total_cost_usd: 0,
+      last_session_at: null,
+    });
+
+    expect(stripAnsi(row[5])).toBe("never");
+    expect(row[5]).toBe(pc.dim("never"));
   });
 });
 
@@ -563,32 +619,32 @@ describe("formatEmpty", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests: formatError
+// Tests: formatError (spec-compliant format)
 // ---------------------------------------------------------------------------
 
 describe("formatError", () => {
-  it("formats ApiError 401 as authentication message", () => {
-    const err = new ApiError("unauthorized", 401);
+  it("formats ApiError with spec format: Error: <message> (HTTP <code>)", () => {
+    const err = new ApiError("Not found", 404);
     const result = formatError(err);
-    expect(stripAnsi(result)).toContain("Authentication failed");
+    expect(stripAnsi(result)).toBe("Error: Not found (HTTP 404)");
   });
 
-  it("formats ApiError 404 with not found message", () => {
-    const err = new ApiError("session not found", 404);
+  it("formats ApiError 401 with spec format", () => {
+    const err = new ApiError("Unauthorized", 401);
     const result = formatError(err);
-    expect(stripAnsi(result)).toContain("Not found");
+    expect(stripAnsi(result)).toBe("Error: Unauthorized (HTTP 401)");
   });
 
-  it("formats generic ApiError with status code", () => {
-    const err = new ApiError("server error", 500);
+  it("formats ApiError 500 with spec format", () => {
+    const err = new ApiError("Internal server error", 500);
     const result = formatError(err);
-    expect(stripAnsi(result)).toContain("500");
+    expect(stripAnsi(result)).toBe("Error: Internal server error (HTTP 500)");
   });
 
-  it("formats ApiConnectionError as connection failure", () => {
+  it("formats ApiConnectionError with spec format: Connection error: <message>", () => {
     const err = new ApiConnectionError("ECONNREFUSED");
     const result = formatError(err);
-    expect(stripAnsi(result)).toContain("Connection failed");
+    expect(stripAnsi(result)).toBe("Connection error: ECONNREFUSED");
   });
 
   it("formats generic Error", () => {
