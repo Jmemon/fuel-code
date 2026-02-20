@@ -50,21 +50,38 @@ export function createDevicesRouter(deps: DevicesRouterDeps): Router {
     "/devices",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        // Aggregate session and workspace counts per device.
-        // No pagination needed: single-user system, typically <10 devices.
-        // workspace_count derived from workspace_devices junction (not sessions)
+        // Aggregate session and workspace counts per device using CTEs to
+        // avoid cross-join inflation. A flat multi-join between sessions and
+        // workspace_devices produces N*M rows per device, inflating SUM/COUNT
+        // aggregates. Pre-aggregating each dimension in its own CTE keeps the
+        // row counts correct.
         const rows = await sql`
+          WITH device_sessions AS (
+            SELECT s.device_id,
+              COUNT(*)::int AS session_count,
+              COUNT(CASE WHEN s.lifecycle = 'capturing' THEN 1 END)::int AS active_session_count,
+              MAX(s.started_at) AS last_session_at,
+              COALESCE(SUM(s.cost_estimate_usd), 0) AS total_cost_usd,
+              COALESCE(SUM(s.duration_ms), 0) AS total_duration_ms
+            FROM sessions s
+            GROUP BY s.device_id
+          ),
+          device_workspaces AS (
+            SELECT wd.device_id,
+              COUNT(DISTINCT wd.workspace_id)::int AS workspace_count
+            FROM workspace_devices wd
+            GROUP BY wd.device_id
+          )
           SELECT d.*,
-            COUNT(DISTINCT s.id)::int AS session_count,
-            COUNT(DISTINCT wd.workspace_id)::int AS workspace_count,
-            COUNT(CASE WHEN s.lifecycle = 'capturing' THEN 1 END)::int AS active_session_count,
-            MAX(s.started_at) AS last_session_at,
-            COALESCE(SUM(s.cost_estimate_usd), 0) AS total_cost_usd,
-            COALESCE(SUM(s.duration_ms), 0) AS total_duration_ms
+            COALESCE(ds.session_count, 0) AS session_count,
+            COALESCE(dw.workspace_count, 0) AS workspace_count,
+            COALESCE(ds.active_session_count, 0) AS active_session_count,
+            ds.last_session_at,
+            COALESCE(ds.total_cost_usd, 0) AS total_cost_usd,
+            COALESCE(ds.total_duration_ms, 0) AS total_duration_ms
           FROM devices d
-          LEFT JOIN sessions s ON s.device_id = d.id
-          LEFT JOIN workspace_devices wd ON wd.device_id = d.id
-          GROUP BY d.id
+          LEFT JOIN device_sessions ds ON ds.device_id = d.id
+          LEFT JOIN device_workspaces dw ON dw.device_id = d.id
           ORDER BY d.last_seen_at DESC
         `;
 

@@ -205,12 +205,12 @@ function buildMockSql(
 // ---------------------------------------------------------------------------
 
 function defaultQueryHandler(queryText: string, values: unknown[]): unknown[] {
-  // Device list with aggregates (uses workspace_devices for workspace_count)
+  // Device list with aggregates (CTE-based: pre-aggregates sessions and
+  // workspace_devices separately to avoid cross-join inflation)
   if (
-    queryText.includes("FROM devices d") &&
-    queryText.includes("LEFT JOIN sessions s") &&
-    queryText.includes("LEFT JOIN workspace_devices wd") &&
-    queryText.includes("GROUP BY d.id")
+    queryText.includes("device_sessions") &&
+    queryText.includes("device_workspaces") &&
+    queryText.includes("FROM devices d")
   ) {
     return ALL_DEVICES;
   }
