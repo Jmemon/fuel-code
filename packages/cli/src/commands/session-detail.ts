@@ -552,23 +552,36 @@ function formatEventData(evt: Event): string {
       if (data.model) parts.push(`model=${data.model}`);
       return parts.join(", ") || "-";
     }
-    case "session.end":
-      return [
-        data.duration_ms ? formatDuration(data.duration_ms as number) : null,
-        data.reason,
-      ]
-        .filter(Boolean)
-        .join(" ") || "-";
-    case "git.commit":
-      return [
-        data.commit_sha ? (data.commit_sha as string).slice(0, 7) : null,
-        data.message ? truncate(data.message as string, 40) : null,
-        data.files_changed ? `${data.files_changed} files` : null,
-      ]
-        .filter(Boolean)
-        .join(" ") || "-";
-    case "git.push":
-      return [data.branch, data.remote].filter(Boolean).join(" -> ") || "-";
+    case "session.end": {
+      // Labeled key=value format: duration=47m, reason=exit
+      const parts: string[] = [];
+      if (data.duration_ms) parts.push(`duration=${formatDuration(data.duration_ms as number)}`);
+      if (data.reason) parts.push(`reason=${data.reason as string}`);
+      return parts.join(", ") || "-";
+    }
+    case "git.commit": {
+      // Format: abc123 "fix auth bug" (+12 -3, 2 files)
+      const commitParts: string[] = [];
+      if (data.commit_sha) commitParts.push((data.commit_sha as string).slice(0, 7));
+      if (data.message) commitParts.push(`"${truncate(data.message as string, 40)}"`);
+      const additions = (data.additions ?? 0) as number;
+      const deletions = (data.deletions ?? 0) as number;
+      const filesChanged = data.files_changed as number | undefined;
+      if (filesChanged || additions || deletions) {
+        const statParts: string[] = [];
+        if (additions || deletions) statParts.push(`+${additions} -${deletions}`);
+        if (filesChanged) statParts.push(`${filesChanged} files`);
+        commitParts.push(`(${statParts.join(", ")})`);
+      }
+      return commitParts.join(" ") || "-";
+    }
+    case "git.push": {
+      // Format: main -> origin (2 commits)
+      const pushBase = [data.branch, data.remote].filter(Boolean).join(" -> ") || "-";
+      const commitCount = data.commit_count ?? data.commits;
+      if (commitCount) return `${pushBase} (${commitCount} commits)`;
+      return pushBase;
+    }
     default:
       return truncate(JSON.stringify(data), 50);
   }

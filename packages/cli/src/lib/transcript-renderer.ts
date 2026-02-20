@@ -23,7 +23,7 @@ import type { TranscriptMessage, ParsedContentBlock } from "@fuel-code/shared";
 
 /** Options for controlling transcript rendering */
 export interface TranscriptRenderOptions {
-  /** Maximum terminal width for word wrapping (default: 100) */
+  /** Maximum terminal width for word wrapping (default: process.stdout.columns || 120) */
   maxWidth?: number;
   /** Show full thinking block text instead of collapsed summary (default: false) */
   showThinking?: boolean;
@@ -35,7 +35,7 @@ export interface TranscriptRenderOptions {
 
 /** Internal defaults applied when options are not specified */
 const DEFAULTS: Required<TranscriptRenderOptions> = {
-  maxWidth: 100,
+  maxWidth: process.stdout.columns || 120,
   showThinking: false,
   maxMessages: 50,
   colorize: true,

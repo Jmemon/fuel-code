@@ -622,8 +622,9 @@ describe("session resolver — ambiguous prefix", () => {
     } catch (err) {
       const msg = (err as Error).message;
       expect(msg).toContain("Ambiguous");
-      // Should show 8-char prefix IDs, workspace name, and summary
-      expect(msg).toContain("01JTEST1");
+      // Should show 16-char prefix IDs with "..." suffix, workspace name, and summary
+      expect(msg).toContain("01JTEST111111111...");
+      expect(msg).toContain("01JTEST122222222...");
       expect(msg).toContain("my-project");
       expect(msg).toContain("Implemented session detail");
     }

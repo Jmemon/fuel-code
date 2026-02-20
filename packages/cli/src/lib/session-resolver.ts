@@ -61,10 +61,11 @@ export async function resolveSessionId(api: FuelApiClient, idArg: string): Promi
     return matches[0].id;
   }
 
-  // Multiple matches — list candidates with rich metadata for disambiguation
+  // Multiple matches — list candidates with longer IDs for disambiguation.
+  // Use at least 16 chars so candidates are visually distinct.
   const candidates = matches
     .map((s) => {
-      const short = s.id.slice(0, 8);
+      const short = s.id.slice(0, 16) + "...";
       const ws = (s as Record<string, unknown>).workspace_name ?? s.workspace_id;
       const relTime = formatRelativeTime(s.started_at);
       const summary = (s as Record<string, unknown>).summary
