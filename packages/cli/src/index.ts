@@ -25,11 +25,15 @@ import { Command } from "commander";
 import pino from "pino";
 import { createInitCommand } from "./commands/init.js";
 import { createStatusCommand } from "./commands/status.js";
+import { createSessionsCommand } from "./commands/sessions.js";
+import { createTimelineCommand } from "./commands/timeline.js";
 import { createEmitCommand } from "./commands/emit.js";
 import { createQueueCommand } from "./commands/queue.js";
 import { createHooksCommand } from "./commands/hooks.js";
 import { createTranscriptCommand } from "./commands/transcript.js";
 import { createBackfillCommand } from "./commands/backfill.js";
+import { createSessionDetailCommand } from "./commands/session-detail.js";
+import { registerWorkspacesCommands } from "./commands/workspaces.js";
 import { configExists, loadConfig } from "./lib/config.js";
 import { checkPendingPrompts } from "./lib/prompt-checker.js";
 import { showGitHooksPrompt } from "./lib/git-hooks-prompt.js";
@@ -63,6 +67,7 @@ const INTERACTIVE_COMMANDS = new Set([
   "session",
   "timeline",
   "workspaces",
+  "workspace",
   "status",
   "hooks",
   "backfill",
@@ -82,6 +87,8 @@ program
 // Register subcommands
 program.addCommand(createInitCommand());
 program.addCommand(createStatusCommand());
+program.addCommand(createSessionsCommand());
+program.addCommand(createTimelineCommand());
 
 // Register emit command (Task 10: emit events with local queue fallback)
 program.addCommand(createEmitCommand());
@@ -97,6 +104,12 @@ program.addCommand(createTranscriptCommand());
 
 // Register backfill command (Task 11: historical session discovery and ingestion)
 program.addCommand(createBackfillCommand());
+
+// Register session detail command (Task 5: session <id> with all flags)
+program.addCommand(createSessionDetailCommand());
+
+// Register workspace commands (Task 6: workspaces list + workspace detail)
+registerWorkspacesCommands(program);
 
 // ---------------------------------------------------------------------------
 // Prompt checking hook — runs before interactive commands
