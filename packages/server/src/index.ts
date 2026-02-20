@@ -22,6 +22,7 @@
 
 import "dotenv/config";
 import { join } from "node:path";
+import { createServer } from "node:http";
 import { createDb } from "./db/postgres.js";
 import { runMigrations } from "./db/migrator.js";
 import { createRedisClient } from "./redis/client.js";
@@ -32,6 +33,7 @@ import { createEventHandler } from "./pipeline/wire.js";
 import { startConsumer } from "./pipeline/consumer.js";
 import { createS3Client } from "./aws/s3.js";
 import { loadS3Config } from "./aws/s3-config.js";
+import { createWsServer } from "./ws/index.js";
 import { loadSummaryConfig, createPipelineQueue, type PipelineDeps } from "@fuel-code/core";
 
 /** Graceful shutdown timeout — force exit if cleanup takes longer than this */
@@ -149,13 +151,28 @@ async function main(): Promise<void> {
   // --- Step 8: Create Express app and start HTTP server ---
   // App gets the non-blocking client (for health checks + XADD writes).
   // s3 and pipelineDeps are passed through for the transcript upload route.
-  const app = createApp({ sql, redis, apiKey: env.API_KEY, s3, pipelineDeps });
+  // Use createServer(app) instead of app.listen() so the WS server can share
+  // the same HTTP server for WebSocket upgrades on /api/ws.
+  // The getWsClientCount callback is a lazy wrapper — the WS server is created
+  // right after the app, and the wrapper captures the reference once available.
+  let wsClientCountFn: (() => number) | undefined;
+  const app = createApp({
+    sql, redis, apiKey: env.API_KEY, s3, pipelineDeps,
+    getWsClientCount: () => wsClientCountFn?.() ?? 0,
+  });
+  const httpServer = createServer(app);
 
-  const server = app.listen(env.PORT, () => {
+  // --- Step 8b: Attach WebSocket server to the HTTP server ---
+  // The WS server handles real-time subscriptions for CLI clients.
+  // It authenticates via the same API key and broadcasts events/session updates.
+  const wsServer = createWsServer({ httpServer, logger, apiKey: env.API_KEY });
+  wsClientCountFn = () => wsServer.getClientCount();
+
+  httpServer.listen(env.PORT, () => {
     const elapsedMs = Math.round(performance.now() - startMs);
     logger.info(
       { elapsed_ms: elapsedMs, port: env.PORT },
-      `Server started in ${elapsedMs}ms. DB: ok. Redis: ok. Port: ${env.PORT}.`,
+      `Server started in ${elapsedMs}ms. DB: ok. Redis: ok. WS: ok. Port: ${env.PORT}.`,
     );
   });
 
@@ -164,8 +181,11 @@ async function main(): Promise<void> {
   // the Redis Stream and dispatches events to the event processor.
   // Consumer gets its own Redis client (blocking XREADGROUP commands).
   // Pipeline deps are passed through so session.end can trigger post-processing.
+  // The broadcaster is passed so processed events are broadcast to WS clients.
   const { registry } = createEventHandler(sql, logger, pipelineDeps);
-  const consumer = startConsumer({ redis: redisConsumer, sql, registry, logger, pipelineDeps });
+  const consumer = startConsumer(
+    { redis: redisConsumer, sql, registry, logger, pipelineDeps, broadcaster: wsServer.broadcaster },
+  );
   logger.info(
     { registeredHandlers: registry.listRegisteredTypes() },
     "Event consumer started",
@@ -219,20 +239,23 @@ async function main(): Promise<void> {
     try {
       // 1. Stop accepting new HTTP connections
       await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
+        httpServer.close((err) => (err ? reject(err) : resolve()));
       });
 
-      // 2. Drain the pipeline queue (stop accepting new work, wait for in-flight)
+      // 2. Shut down WebSocket server (close all WS connections, clear ping interval)
+      await wsServer.shutdown();
+
+      // 3. Drain the pipeline queue (stop accepting new work, wait for in-flight)
       await pipelineQueue.stop();
 
-      // 3. Stop the Redis Stream consumer loop (waits for current iteration to finish)
+      // 4. Stop the Redis Stream consumer loop (waits for current iteration to finish)
       await consumer.stop();
 
-      // 4. Close Redis connections (both app + consumer clients)
+      // 5. Close Redis connections (both app + consumer clients)
       redis.disconnect();
       redisConsumer.disconnect();
 
-      // 5. Close Postgres pool
+      // 6. Close Postgres pool
       await sql.end();
 
       logger.info("Shutdown complete");

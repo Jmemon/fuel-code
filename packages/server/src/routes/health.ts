@@ -26,11 +26,13 @@ const startTime = Date.now();
  *
  * @param sql   - postgres.js client for DB health checks
  * @param redis - ioredis client for Redis health checks
+ * @param opts  - Optional extra dependencies (e.g., WS client count)
  * @returns Express Router with the GET /api/health endpoint
  */
 export function createHealthRouter(
   sql: postgres.Sql,
   redis: Redis,
+  opts?: { getWsClientCount?: () => number },
 ): Router {
   const router = Router();
 
@@ -71,6 +73,7 @@ export function createHealthRouter(
           ...(redisHealth.error ? { error: redisHealth.error } : {}),
         },
       },
+      ws_clients: opts?.getWsClientCount?.() ?? 0,
       uptime_seconds: Math.floor((Date.now() - startTime) / 1000),
       version: VERSION,
     });

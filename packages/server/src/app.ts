@@ -48,6 +48,8 @@ export interface AppDeps {
   s3?: FuelCodeS3Client;
   /** Pipeline dependencies for post-processing (Phase 2 — optional for backwards compat) */
   pipelineDeps?: PipelineDeps;
+  /** Returns the current number of connected WebSocket clients (for health endpoint) */
+  getWsClientCount?: () => number;
 }
 
 /**
@@ -84,7 +86,9 @@ export function createApp(deps: AppDeps): express.Express {
   // --- 5. Auth middleware on /api/* EXCEPT /api/health ---
   // Health endpoint must be unauthenticated for Railway health probes.
   // Mount health BEFORE the auth middleware so it bypasses auth.
-  app.use("/api/health", createHealthRouter(deps.sql, deps.redis));
+  app.use("/api/health", createHealthRouter(deps.sql, deps.redis, {
+    getWsClientCount: deps.getWsClientCount,
+  }));
 
   // Auth middleware applies to all remaining /api/* routes
   app.use("/api", createAuthMiddleware(deps.apiKey));

@@ -18,6 +18,7 @@ import type { Logger } from "pino";
 import type { EventHandlerRegistry, ProcessResult, PipelineDeps } from "@fuel-code/core";
 import type { Event } from "@fuel-code/shared";
 import { processEvent as processEventImpl } from "@fuel-code/core";
+import type { WsBroadcaster } from "../ws/broadcaster.js";
 
 import {
   ensureConsumerGroup as ensureConsumerGroupImpl,
@@ -43,6 +44,8 @@ export interface ConsumerDeps {
   logger: Logger;
   /** Pipeline dependencies for post-processing (Phase 2) — passed through to processEvent */
   pipelineDeps?: PipelineDeps;
+  /** Optional WebSocket broadcaster — when provided, broadcasts events after successful processing */
+  broadcaster?: WsBroadcaster;
 }
 
 /**
@@ -123,7 +126,7 @@ export function startConsumer(
   deps: ConsumerDeps,
   overrides?: ConsumerOverrides,
 ): ConsumerHandle {
-  const { redis, sql, registry, logger, pipelineDeps } = deps;
+  const { redis, sql, registry, logger, pipelineDeps, broadcaster } = deps;
 
   // Resolve function implementations — use overrides for testing, defaults for production
   const ensureGroup = overrides?.ensureConsumerGroup ?? ensureConsumerGroupImpl;
@@ -162,6 +165,12 @@ export function startConsumer(
         statsDuplicates++;
       } else {
         statsProcessed++;
+
+        // Broadcast newly processed events to subscribed WebSocket clients.
+        // Non-blocking — broadcastEvent is fire-and-forget with internal error handling.
+        if (broadcaster) {
+          broadcaster.broadcastEvent(entry.event);
+        }
       }
 
       // Success or duplicate — acknowledge so Redis removes it from PEL
