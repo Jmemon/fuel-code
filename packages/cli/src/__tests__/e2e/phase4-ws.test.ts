@@ -170,27 +170,32 @@ describe("WebSocket connectivity", () => {
     const client = createWsClient();
     await client.connect();
 
-    // Subscribe to all events
-    client.subscribe({ scope: "all" });
+    // Subscribe to the live session specifically
+    const sessionId = ctx.fixtures.sess_1_capturing;
+    client.subscribe({ session_id: sessionId });
     await wait(200);
 
-    // Update a session's lifecycle via PATCH (triggers a session.update broadcast)
-    const sessionId = ctx.fixtures.sess_1_capturing;
-    const patchResponse = await fetch(`${ctx.baseUrl}/api/sessions/${sessionId}`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${ctx.apiKey}`,
-      },
-      body: JSON.stringify({ tags: ["ws-lifecycle-test"] }),
+    // Set up listener BEFORE broadcast to avoid missing the message
+    const received = new Promise<{ session_id: string; lifecycle: string }>((resolve) => {
+      const timeout = setTimeout(() => resolve({ session_id: "", lifecycle: "" }), 5_000);
+      client.on("session.update", (update: any) => {
+        clearTimeout(timeout);
+        resolve(update);
+      });
     });
-    expect(patchResponse.status).toBe(200);
 
-    // session.update events are broadcast by the server on session mutations.
-    // If the server doesn't broadcast on PATCH, we verify via a session.end event.
-    // For now, verify the WS connection is healthy and can receive messages.
-    // The "subscribe all" subscription is confirmed by the fact that Test 16 passed.
-    expect(client.connected).toBe(true);
-    expect(client.state).toBe("connected");
+    // Broadcast a session lifecycle change directly via the broadcaster.
+    // This mirrors what the consumer pipeline does when a session ends.
+    ctx.broadcaster.broadcastSessionUpdate(
+      sessionId,
+      ctx.fixtures.ws_fuel_code,
+      "ended",
+    );
+
+    const update = await received;
+
+    // Assert the WsClient received the session.update with the correct data
+    expect(update.session_id).toBe(sessionId);
+    expect(update.lifecycle).toBe("ended");
   }, 15_000);
 });

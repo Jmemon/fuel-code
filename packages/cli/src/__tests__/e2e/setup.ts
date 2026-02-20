@@ -70,41 +70,19 @@ export interface TestServerContext {
 }
 
 // ---------------------------------------------------------------------------
-// Singleton state: one server shared across all parallel test files
+// Setup: each test file starts its own server instance (each on a different
+// random port). Database seeding uses an advisory lock to ensure only one
+// file TRUNCATEs and seeds at a time, preventing race conditions when bun
+// runs test files in parallel with separate module contexts.
 // ---------------------------------------------------------------------------
 
-let _setupPromise: Promise<TestServerContext> | null = null;
-let _refCount = 0;
-let _realCleanup: (() => Promise<void>) | null = null;
-
 /**
- * Acquire a shared test server. First caller triggers real setup;
- * subsequent callers get the same promise. Each caller increments a
- * reference count. The returned cleanup() decrements it and only
- * tears down when the last reference is released.
+ * Start a fully-wired test server with real Postgres + Redis + WebSocket.
+ * Seeds fixture data into the database using an advisory lock for safety.
+ * Returns context for test use.
  */
 export async function setupTestServer(): Promise<TestServerContext> {
-  _refCount++;
-
-  if (!_setupPromise) {
-    _setupPromise = _doSetup();
-  }
-
-  const shared = await _setupPromise;
-
-  // Each test file gets its own cleanup that decrements the ref count.
-  // Real teardown only fires when the last file finishes.
-  return {
-    ...shared,
-    cleanup: async () => {
-      _refCount--;
-      if (_refCount <= 0 && _realCleanup) {
-        await _realCleanup();
-        _realCleanup = null;
-        _setupPromise = null;
-      }
-    },
-  };
+  return _doSetup();
 }
 
 // ---------------------------------------------------------------------------
@@ -126,16 +104,27 @@ async function _doSetup(): Promise<TestServerContext> {
   const redisConsumer = createRedisClient(REDIS_URL);
   await Promise.all([redis.connect(), redisConsumer.connect()]);
 
-  // 3. Flush Redis for clean state, set up consumer group
-  await redis.flushall();
+  // 3. Set up Redis consumer group (flushall is handled under the advisory lock below)
   await ensureConsumerGroup(redis);
 
-  // 4. Truncate all data tables to ensure clean state from previous test runs.
-  //    CASCADE handles FK constraints. Tables are preserved from migrations.
-  await sql`TRUNCATE events, git_activity, content_blocks, transcript_messages, sessions, workspace_devices, workspaces, devices CASCADE`;
+  // 4. Seed fixture data using a Postgres advisory lock to prevent parallel
+  //    test files from racing on TRUNCATE + INSERT. The first file to acquire
+  //    the lock does the full seed; subsequent files check for our specific
+  //    fixture data and skip if it's already present.
+  //    Advisory lock key 99999 is arbitrary but must be consistent.
+  await sql.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(99999)`;
 
-  // 5. Seed fixture data
-  await seedFixtures(sql);
+    // Check if OUR specific fixture data exists (keyed on a known workspace ID)
+    const [{ count }] = await tx`SELECT count(*) as count FROM workspaces WHERE id = ${IDS.ws_fuel_code}`;
+    if (Number(count) === 0) {
+      // First file (or stale data from a previous run): flush Redis + truncate + seed
+      await redis.flushall();
+      await ensureConsumerGroup(redis);
+      await tx`TRUNCATE events, git_activity, content_blocks, transcript_messages, sessions, workspace_devices, workspaces, devices CASCADE`;
+      await seedFixtures(tx as any);
+    }
+  });
 
   // 6. Create Express app (no S3 in Phase 4 CLI tests — not testing transcript upload)
   const app = createApp({
@@ -169,8 +158,8 @@ async function _doSetup(): Promise<TestServerContext> {
     broadcaster: wsHandle.broadcaster,
   });
 
-  // 10. Store real cleanup function for ref-counted teardown
-  _realCleanup = async () => {
+  // 10. Build cleanup function (tears down in reverse order)
+  const cleanup = async () => {
     // Stop consumer
     if (consumer) await consumer.stop();
 
@@ -199,6 +188,6 @@ async function _doSetup(): Promise<TestServerContext> {
     fixtures: IDS,
     sql,
     broadcaster: wsHandle.broadcaster,
-    cleanup: async () => {}, // placeholder — overridden per-caller in setupTestServer()
+    cleanup,
   };
 }

@@ -9,40 +9,42 @@
  * Fixture layout:
  *   3 workspaces:  fuel-code, api-service, _unassociated
  *   2 devices:     macbook-pro (local), remote-abc (remote)
- *   8 sessions:    mix of lifecycles across workspaces
- *   20+ events:    session lifecycle, git operations
- *   5 git_activity: 3 commits, 1 push, 1 checkout
- *   Transcript data for 3 sessions (4-8 messages each)
+ *   8 sessions:    4 fuel-code, 2 api-service, 2 _unassociated
+ *   20+ events:    session lifecycle, 5 git.commit, 2 git.push, 1 git.checkout
+ *   5 git_activity: 3 commits, 1 push, 1 checkout (all fuel-code)
+ *   Transcript data for 3 fuel-code sessions (4-8 messages each)
  */
 
 import type postgres from "postgres";
 import { generateId } from "@fuel-code/shared";
 
 // ---------------------------------------------------------------------------
-// Stable IDs for cross-referencing in assertions
+// Stable IDs for cross-referencing in assertions.
+// Hardcoded ULIDs so that all test files (which run in separate module
+// contexts in bun) reference the same fixture rows in the database.
 // ---------------------------------------------------------------------------
 
 export const IDS = {
-  // Workspaces
-  ws_fuel_code: generateId(),
-  ws_api_service: generateId(),
-  ws_unassociated: generateId(),
+  // Workspaces  (26-char Crockford Base32: 0-9 A-H J K M N P-T V-Z)
+  ws_fuel_code:    "01E2E0WS0000FC0000000000AA",
+  ws_api_service:  "01E2E0WS0000AP0000000000BB",
+  ws_unassociated: "01E2E0WS0000NA0000000000CC",
 
   // Devices
-  dev_macbook: generateId(),
-  dev_remote: generateId(),
+  dev_macbook: "01E2E0DV0000MB0000000000DD",
+  dev_remote:  "01E2E0DV0000RM0000000000EE",
 
   // Sessions (8 total)
-  sess_1_capturing: generateId(),    // fuel-code, capturing
-  sess_2_summarized: generateId(),   // fuel-code, summarized
-  sess_3_summarized: generateId(),   // fuel-code, summarized
-  sess_4_failed: generateId(),       // fuel-code, failed
-  sess_5_parsed: generateId(),       // api-service, parsed
-  sess_6_summarized: generateId(),   // api-service, summarized
-  sess_7_summarized: generateId(),   // api-service, summarized
-  sess_8_summarized: generateId(),   // _unassociated, summarized
+  sess_1_capturing:  "01E2E0SS0001CA0000000000FF",   // fuel-code, capturing
+  sess_2_summarized: "01E2E0SS0002SM0000000000GG",   // fuel-code, summarized
+  sess_3_summarized: "01E2E0SS0003SM0000000000HH",   // fuel-code, summarized
+  sess_4_failed:     "01E2E0SS0004FA0000000000JJ",   // fuel-code, failed
+  sess_5_parsed:     "01E2E0SS0005PA0000000000KK",   // api-service, parsed
+  sess_6_summarized: "01E2E0SS0006SM0000000000MM",   // api-service, summarized
+  sess_7_summarized: "01E2E0SS0007SM0000000000NN",   // _unassociated, summarized
+  sess_8_summarized: "01E2E0SS0008SM0000000000PP",   // _unassociated, summarized
 
-  // Events — IDs generated inline during seeding
+  // Events — IDs generated inline during seeding (unique per run is fine)
 
   // Git activity — IDs generated inline during seeding
 } as const;
@@ -68,15 +70,15 @@ export async function seedFixtures(sql: postgres.Sql): Promise<void> {
     VALUES
       (${IDS.ws_fuel_code},    'github.com/user/fuel-code',    'fuel-code',    'main',   '{}', ${todayAt(8)}),
       (${IDS.ws_api_service},  'github.com/user/api-service',  'api-service',  'main',   '{}', ${todayAt(8)}),
-      (${IDS.ws_unassociated}, 'github.com/user/_unassociated','_unassociated','develop', '{}', ${todayAt(8)})
+      (${IDS.ws_unassociated}, '_unassociated','_unassociated','develop', '{}', ${todayAt(8)})
   `;
 
   // -- Devices --
   await sql`
     INSERT INTO devices (id, name, type, hostname, os, arch, status, metadata, first_seen_at)
     VALUES
-      (${IDS.dev_macbook}, 'macbook-pro', 'local',  'Johns-MBP.local', 'darwin', 'arm64', 'online',  '{}', ${todayAt(8)}),
-      (${IDS.dev_remote},  'remote-abc',  'remote', 'i-abc123',        'linux',  'x86_64','online',  '{}', ${todayAt(8)})
+      (${IDS.dev_macbook}, 'macbook-pro', 'local',  'Johns-MBP',    'darwin', 'arm64', 'online',  '{}', ${todayAt(8)}),
+      (${IDS.dev_remote},  'remote-abc',  'remote', 'ip-10-0-1-42', 'linux',  'x86_64','online',  '{}', ${todayAt(8)})
   `;
 
   // -- Workspace-Devices --
@@ -158,13 +160,13 @@ export async function seedFixtures(sql: postgres.Sql): Promise<void> {
             18, 7000, 5000, 0.35, 'Added unit tests for API', 'Write tests for the API', 6)
   `;
 
-  // Session 7: api-service, summarized
+  // Session 7: _unassociated, summarized
   await sql`
     INSERT INTO sessions (id, workspace_id, device_id, lifecycle, parse_status, started_at, ended_at, duration_ms,
                           model, git_branch, total_messages, tokens_in, tokens_out, cost_estimate_usd, summary)
-    VALUES (${IDS.sess_7_summarized}, ${IDS.ws_api_service}, ${IDS.dev_remote}, 'summarized', 'completed',
+    VALUES (${IDS.sess_7_summarized}, ${IDS.ws_unassociated}, ${IDS.dev_macbook}, 'summarized', 'completed',
             ${todayAt(15, 0)}, ${todayAt(15, 15)}, ${15 * 60_000},
-            'claude-sonnet-4-20250514', 'main',
+            'claude-sonnet-4-20250514', 'develop',
             10, 4000, 3000, 0.20, 'Fixed deployment pipeline')
   `;
 
@@ -226,18 +228,24 @@ export async function seedFixtures(sql: postgres.Sql): Promise<void> {
     { type: "git.push", ts: todayAt(10, 40), device: IDS.dev_macbook, ws: IDS.ws_fuel_code, session: IDS.sess_2_summarized,
       data: { branch: "feat/auth", remote: "origin", commit_count: 2 } },
 
-    // Git events — session 5 (api-service)
-    { type: "git.commit", ts: todayAt(13, 10), device: IDS.dev_macbook, ws: IDS.ws_api_service, session: IDS.sess_5_parsed,
-      data: { commit_sha: "ghi7890123456", message: "feat: add user CRUD endpoints", branch: "feat/api", files_changed: 8, additions: 200, deletions: 15 } },
+    // Git events — session 3 (fuel-code, main branch)
+    { type: "git.commit", ts: todayAt(11, 10), device: IDS.dev_remote, ws: IDS.ws_fuel_code, session: IDS.sess_3_summarized,
+      data: { commit_sha: "ghi7890123456", message: "refactor: optimize slow queries", branch: "main", files_changed: 8, additions: 200, deletions: 15 } },
+    { type: "git.commit", ts: todayAt(11, 15), device: IDS.dev_remote, ws: IDS.ws_fuel_code, session: IDS.sess_3_summarized,
+      data: { commit_sha: "jkl0123456789", message: "fix: add missing index on events table", branch: "main", files_changed: 2, additions: 10, deletions: 0 } },
+    { type: "git.commit", ts: todayAt(11, 20), device: IDS.dev_remote, ws: IDS.ws_fuel_code, session: IDS.sess_3_summarized,
+      data: { commit_sha: "mno3456789012", message: "test: add query performance benchmarks", branch: "main", files_changed: 3, additions: 85, deletions: 5 } },
+    { type: "git.push", ts: todayAt(11, 25), device: IDS.dev_remote, ws: IDS.ws_fuel_code, session: IDS.sess_3_summarized,
+      data: { branch: "main", remote: "origin", commit_count: 3 } },
 
     // Git checkout event (orphan — no session)
     { type: "git.checkout", ts: todayAt(8, 30), device: IDS.dev_macbook, ws: IDS.ws_fuel_code, session: null,
       data: { from: "main", to: "feat/auth", branch: "feat/auth" } },
 
-    // Session 7 events
-    { type: "session.start", ts: todayAt(15, 0), device: IDS.dev_remote, ws: IDS.ws_api_service, session: IDS.sess_7_summarized,
+    // Session 7 events (_unassociated workspace)
+    { type: "session.start", ts: todayAt(15, 0), device: IDS.dev_macbook, ws: IDS.ws_unassociated, session: IDS.sess_7_summarized,
       data: { cc_session_id: IDS.sess_7_summarized } },
-    { type: "session.end", ts: todayAt(15, 15), device: IDS.dev_remote, ws: IDS.ws_api_service, session: IDS.sess_7_summarized,
+    { type: "session.end", ts: todayAt(15, 15), device: IDS.dev_macbook, ws: IDS.ws_unassociated, session: IDS.sess_7_summarized,
       data: { cc_session_id: IDS.sess_7_summarized, duration_ms: 15 * 60_000, end_reason: "exit" } },
 
     // Session 8 events
@@ -254,23 +262,23 @@ export async function seedFixtures(sql: postgres.Sql): Promise<void> {
     `;
   }
 
-  // -- Git Activity (5 records) --
+  // -- Git Activity (5 records, all linked to fuel-code sessions) --
   // 3 commits, 1 push, 1 checkout
   await sql`
     INSERT INTO git_activity (id, workspace_id, device_id, session_id, type, branch, commit_sha, message, files_changed, insertions, deletions, timestamp, data)
     VALUES
-      (${generateId()}, ${IDS.ws_fuel_code}, ${IDS.dev_macbook}, ${IDS.sess_2_summarized}, 'commit',   'feat/auth', 'abc1234567890', 'fix: auth token validation',    3, 45,  12, ${todayAt(10, 15)}, '{}'),
-      (${generateId()}, ${IDS.ws_fuel_code}, ${IDS.dev_macbook}, ${IDS.sess_2_summarized}, 'commit',   'feat/auth', 'def4567890123', 'feat: add refresh token flow',  5, 120,  8, ${todayAt(10, 30)}, '{}'),
-      (${generateId()}, ${IDS.ws_fuel_code}, ${IDS.dev_macbook}, ${IDS.sess_2_summarized}, 'push',     'feat/auth', NULL,             NULL,                            NULL, NULL, NULL, ${todayAt(10, 40)}, '{"remote":"origin","commit_count":2}'),
-      (${generateId()}, ${IDS.ws_api_service}, ${IDS.dev_macbook}, ${IDS.sess_5_parsed},   'commit',   'feat/api',  'ghi7890123456', 'feat: add user CRUD endpoints', 8, 200, 15, ${todayAt(13, 10)}, '{}'),
-      (${generateId()}, ${IDS.ws_fuel_code}, ${IDS.dev_macbook}, NULL,                     'checkout', 'feat/auth', NULL,             NULL,                            NULL, NULL, NULL, ${todayAt(8, 30)},  '{"from":"main","to":"feat/auth"}')
+      (${generateId()}, ${IDS.ws_fuel_code}, ${IDS.dev_macbook}, ${IDS.sess_2_summarized}, 'commit',   'feat/auth', 'abc1234567890', 'fix: auth token validation',       3,  45, 12, ${todayAt(10, 15)}, '{}'),
+      (${generateId()}, ${IDS.ws_fuel_code}, ${IDS.dev_macbook}, ${IDS.sess_2_summarized}, 'commit',   'feat/auth', 'def4567890123', 'feat: add refresh token flow',     5, 120,  8, ${todayAt(10, 30)}, '{}'),
+      (${generateId()}, ${IDS.ws_fuel_code}, ${IDS.dev_remote},  ${IDS.sess_3_summarized}, 'commit',   'main',      'ghi7890123456', 'refactor: optimize slow queries',  8, 200, 15, ${todayAt(11, 10)}, '{}'),
+      (${generateId()}, ${IDS.ws_fuel_code}, ${IDS.dev_macbook}, ${IDS.sess_2_summarized}, 'push',     'feat/auth', NULL,             NULL,                              NULL, NULL, NULL, ${todayAt(10, 40)}, '{"remote":"origin","commit_count":2}'),
+      (${generateId()}, ${IDS.ws_fuel_code}, ${IDS.dev_macbook}, NULL,                     'checkout', 'feat/auth', NULL,             NULL,                              NULL, NULL, NULL, ${todayAt(8, 30)},  '{"from":"main","to":"feat/auth"}')
   `;
 
   // -- Transcript Messages & Content Blocks --
-  // Seed for sessions 2, 5, and 6 (these have parse_status = completed)
+  // Seed for fuel-code summarized sessions + the live session (spec line 81)
   await seedTranscriptData(sql, IDS.sess_2_summarized, 8);
-  await seedTranscriptData(sql, IDS.sess_5_parsed, 6);
-  await seedTranscriptData(sql, IDS.sess_6_summarized, 4);
+  await seedTranscriptData(sql, IDS.sess_3_summarized, 6);
+  await seedTranscriptData(sql, IDS.sess_1_capturing, 4);
 }
 
 /**
