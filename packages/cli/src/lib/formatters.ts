@@ -11,7 +11,7 @@
 
 import pc from "picocolors";
 import type { SessionLifecycle } from "@fuel-code/shared";
-import { ApiError, ApiConnectionError, type WorkspaceSummary } from "./api-client.js";
+import { ApiError, ApiConnectionError } from "./api-client.js";
 
 // ---------------------------------------------------------------------------
 // ANSI Utilities

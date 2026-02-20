@@ -331,6 +331,7 @@ export class FuelApiClient implements ApiClient {
     },
   ): Promise<T> {
     // Build URL with query parameters, omitting keys with undefined values
+    // baseUrl must be origin-only (no path suffix) — new URL() drops path components from the base
     const url = new URL(path, this.baseUrl);
     if (options?.query) {
       for (const [key, value] of Object.entries(options.query)) {

@@ -140,6 +140,15 @@ describe("FuelApiClient — constructor", () => {
   });
 });
 
+describe("FuelApiClient — fromConfig", () => {
+  it("creates client with baseUrl and apiKey from config", () => {
+    const client = FuelApiClient.fromConfig({
+      backend: { url: "http://localhost:4000", api_key: "cfg-key" },
+    } as any);
+    expect(client).toBeInstanceOf(FuelApiClient);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Tests: Authentication
 // ---------------------------------------------------------------------------
