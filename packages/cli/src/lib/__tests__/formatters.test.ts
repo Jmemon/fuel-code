@@ -212,10 +212,11 @@ describe("formatLifecycle", () => {
     expect(stripped).toContain("ENDED");
   });
 
-  it("formats 'parsed' with yellow color", () => {
+  it("formats 'parsed' with dotted circle icon and PARSING label", () => {
     const result = formatLifecycle("parsed");
     const stripped = stripAnsi(result);
-    expect(stripped).toContain("PARSED");
+    expect(stripped).toContain("\u25CC");
+    expect(stripped).toContain("PARSING");
   });
 
   it("formats 'summarized' with green color", () => {
@@ -231,11 +232,11 @@ describe("formatLifecycle", () => {
     expect(stripped).toContain("ARCHIVED");
   });
 
-  it("formats 'failed' with red color", () => {
+  it("formats 'failed' with red color and FAIL label", () => {
     const result = formatLifecycle("failed");
     const stripped = stripAnsi(result);
     expect(stripped).toContain("\u2717");
-    expect(stripped).toContain("FAILED");
+    expect(stripped).toContain("FAIL");
   });
 
   it("returns unknown lifecycle as dimmed uppercase", () => {

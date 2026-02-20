@@ -334,11 +334,11 @@ describe("formatSessionsTable", () => {
     expect(plain).toContain("DONE");
   });
 
-  it("renders failed lifecycle as FAILED", () => {
+  it("renders failed lifecycle as FAIL", () => {
     const sessions = [makeSession({ lifecycle: "failed" })] as any;
     const output = formatSessionsTable(sessions);
     const plain = stripAnsi(output);
-    expect(plain).toContain("FAILED");
+    expect(plain).toContain("FAIL");
   });
 
   it("renders multiple sessions as multiple rows", () => {

@@ -158,10 +158,10 @@ const LIFECYCLE_STYLES: Record<SessionLifecycle, LifecycleStyle> = {
   detected:    { icon: "\u25CB", label: "DETECTED",  color: pc.dim },
   capturing:   { icon: "\u25CF", label: "LIVE",      color: pc.green },
   ended:       { icon: "\u25D0", label: "ENDED",     color: pc.yellow },
-  parsed:      { icon: "\u25D1", label: "PARSED",    color: pc.yellow },
+  parsed:      { icon: "\u25CC", label: "PARSING",   color: pc.yellow },
   summarized:  { icon: "\u2713", label: "DONE",      color: pc.green },
   archived:    { icon: "\u25AA", label: "ARCHIVED",  color: pc.dim },
-  failed:      { icon: "\u2717", label: "FAILED",    color: pc.red },
+  failed:      { icon: "\u2717", label: "FAIL",      color: pc.red },
 };
 
 /**
