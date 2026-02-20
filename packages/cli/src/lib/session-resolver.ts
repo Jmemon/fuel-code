@@ -61,11 +61,19 @@ export async function resolveSessionId(api: FuelApiClient, idArg: string): Promi
     return matches[0].id;
   }
 
-  // Multiple matches — list candidates for the user
+  // Multiple matches — list candidates with rich metadata for disambiguation
   const candidates = matches
-    .map((s) => `  ${s.id}`)
+    .map((s) => {
+      const short = s.id.slice(0, 8);
+      const ws = (s as Record<string, unknown>).workspace_name ?? s.workspace_id;
+      const relTime = formatRelativeTime(s.started_at);
+      const summary = (s as Record<string, unknown>).summary
+        ?? (s as Record<string, unknown>).initial_prompt
+        ?? "(no summary)";
+      return `  ${short}  ${ws}  ${relTime}  "${summary}"`;
+    })
     .join("\n");
   throw new Error(
-    `Ambiguous session prefix "${trimmed}". Multiple matches:\n${candidates}`,
+    `Ambiguous session prefix "${trimmed}". Matches:\n${candidates}`,
   );
 }

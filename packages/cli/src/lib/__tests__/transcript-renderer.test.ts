@@ -117,9 +117,9 @@ describe("renderMessage — assistant with tools", () => {
     });
     const result = renderMessage(msg, 3, { colorize: false });
     // First tool gets the intermediate connector
-    expect(result).toContain("\u251C Read /src/main.ts");
+    expect(result).toContain("\u251C Read: /src/main.ts");
     // Last tool gets the terminating connector
-    expect(result).toContain("\u2514 Edit /src/main.ts");
+    expect(result).toContain("\u2514 Edit: /src/main.ts");
   });
 });
 
@@ -128,67 +128,67 @@ describe("renderMessage — assistant with tools", () => {
 // ---------------------------------------------------------------------------
 
 describe("formatToolSummary — Read tool", () => {
-  it("shows filepath", () => {
+  it("shows filepath with colon separator", () => {
     const block = makeBlock({ block_type: "tool_use", tool_name: "Read", tool_input: { file_path: "/src/app.ts" } });
-    expect(formatToolSummary(block)).toBe("Read /src/app.ts");
+    expect(formatToolSummary(block)).toBe("Read: /src/app.ts");
   });
 });
 
 describe("formatToolSummary — Edit tool", () => {
-  it("shows filepath with +/- counts", () => {
+  it("shows filepath with colon separator and +/- counts", () => {
     const block = makeBlock({
       block_type: "tool_use",
       tool_name: "Edit",
       tool_input: { file_path: "/src/app.ts", old_string: "line1\nline2", new_string: "new1\nnew2\nnew3" },
     });
     const result = formatToolSummary(block);
-    expect(result).toContain("Edit /src/app.ts");
+    expect(result).toContain("Edit: /src/app.ts");
     expect(result).toContain("+3");
     expect(result).toContain("-2");
   });
 });
 
 describe("formatToolSummary — Write tool", () => {
-  it("shows filepath", () => {
+  it("shows filepath with colon separator", () => {
     const block = makeBlock({ block_type: "tool_use", tool_name: "Write", tool_input: { file_path: "/src/new.ts" } });
-    expect(formatToolSummary(block)).toBe("Write /src/new.ts");
+    expect(formatToolSummary(block)).toBe("Write: /src/new.ts");
   });
 });
 
 describe("formatToolSummary — Bash tool", () => {
-  it("shows truncated command", () => {
+  it("shows truncated command with colon separator", () => {
     const longCmd = "npm run build && npm run test && npm run lint && npm run deploy --production";
     const block = makeBlock({ block_type: "tool_use", tool_name: "Bash", tool_input: { command: longCmd } });
     const result = formatToolSummary(block);
-    expect(result).toContain("Bash");
-    // Should be truncated to ~60 chars
-    expect(result.length).toBeLessThanOrEqual(65);
+    expect(result).toContain("Bash:");
+    // "Bash: " (6 chars) + truncated command (max 60 chars) = max 66 chars
+    expect(result.length).toBeLessThanOrEqual(67);
   });
 
-  it("shows short command in full", () => {
+  it("shows short command in full with colon separator", () => {
     const block = makeBlock({ block_type: "tool_use", tool_name: "Bash", tool_input: { command: "ls -la" } });
-    expect(formatToolSummary(block)).toBe("Bash ls -la");
+    expect(formatToolSummary(block)).toBe("Bash: ls -la");
   });
 });
 
 describe("formatToolSummary — Grep tool", () => {
-  it("shows pattern", () => {
+  it("shows pattern with colon separator", () => {
     const block = makeBlock({ block_type: "tool_use", tool_name: "Grep", tool_input: { pattern: "TODO|FIXME" } });
-    expect(formatToolSummary(block)).toBe("Grep TODO|FIXME");
+    expect(formatToolSummary(block)).toBe("Grep: TODO|FIXME");
   });
 });
 
 describe("formatToolSummary — Glob tool", () => {
-  it("shows pattern", () => {
+  it("shows pattern with colon separator", () => {
     const block = makeBlock({ block_type: "tool_use", tool_name: "Glob", tool_input: { pattern: "**/*.ts" } });
-    expect(formatToolSummary(block)).toBe("Glob **/*.ts");
+    expect(formatToolSummary(block)).toBe("Glob: **/*.ts");
   });
 });
 
 describe("formatToolSummary — unknown tool", () => {
-  it("shows tool name only", () => {
+  it("shows tool name with colon and truncated input preview", () => {
     const block = makeBlock({ block_type: "tool_use", tool_name: "CustomTool", tool_input: {} });
-    expect(formatToolSummary(block)).toBe("CustomTool");
+    expect(formatToolSummary(block)).toBe("CustomTool: {}");
   });
 });
 

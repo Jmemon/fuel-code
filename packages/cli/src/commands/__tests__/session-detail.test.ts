@@ -24,6 +24,7 @@ import {
   formatSessionEvents,
   formatSessionGitActivity,
   generateMarkdownExport,
+  runSessionDetail,
   type SessionDetail,
   type SessionExportData,
 } from "../session-detail.js";
@@ -606,7 +607,7 @@ describe("session resolver — not found", () => {
 });
 
 describe("session resolver — ambiguous prefix", () => {
-  it("throws listing candidates when multiple sessions match", async () => {
+  it("throws listing candidates with rich metadata when multiple sessions match", async () => {
     const sess1 = makeSession({ id: "01JTEST1111111111111111111" });
     const sess2 = makeSession({ id: "01JTEST1222222222222222222" });
     routeHandlers["GET /api/sessions"] = () => ({
@@ -619,9 +620,12 @@ describe("session resolver — ambiguous prefix", () => {
       await resolveSessionId(api, "01JTEST1");
       expect(true).toBe(false);
     } catch (err) {
-      expect((err as Error).message).toContain("Ambiguous");
-      expect((err as Error).message).toContain("01JTEST1111111111111111111");
-      expect((err as Error).message).toContain("01JTEST1222222222222222222");
+      const msg = (err as Error).message;
+      expect(msg).toContain("Ambiguous");
+      // Should show 8-char prefix IDs, workspace name, and summary
+      expect(msg).toContain("01JTEST1");
+      expect(msg).toContain("my-project");
+      expect(msg).toContain("Implemented session detail");
     }
   });
 });
@@ -653,18 +657,55 @@ describe("session resolver — full ULID", () => {
 // ---------------------------------------------------------------------------
 
 describe("session detail — capturing + --transcript", () => {
-  it("indicates transcript is not yet available", async () => {
+  it("shows transcript not available message for capturing sessions", async () => {
     const session = makeSession({ lifecycle: "capturing" });
-    // For capturing sessions, the handler should show a message
-    expect(session.lifecycle).toBe("capturing");
-    // The actual CLI handler checks lifecycle before fetching transcript
+    setupSessionRoutes(session);
+
+    // Capture stdout by temporarily replacing process.stdout.write
+    let captured = "";
+    const origWrite = process.stdout.write;
+    process.stdout.write = ((chunk: string) => {
+      captured += chunk;
+      return true;
+    }) as typeof process.stdout.write;
+
+    // Stub FuelApiClient.fromConfig to return our mock client
+    const origFromConfig = FuelApiClient.fromConfig;
+    FuelApiClient.fromConfig = () => makeClient();
+
+    try {
+      await runSessionDetail(session.id, { transcript: true });
+      expect(captured).toContain("Transcript not yet available. Session is currently capturing.");
+    } finally {
+      process.stdout.write = origWrite;
+      FuelApiClient.fromConfig = origFromConfig;
+    }
   });
 });
 
 describe("session detail — failed + --transcript", () => {
-  it("indicates transcript parsing failed", async () => {
+  it("shows transcript parsing failed message for failed sessions", async () => {
     const session = makeSession({ lifecycle: "failed" });
-    expect(session.lifecycle).toBe("failed");
-    // The actual CLI handler checks lifecycle before fetching transcript
+    setupSessionRoutes(session);
+
+    // Capture stdout by temporarily replacing process.stdout.write
+    let captured = "";
+    const origWrite = process.stdout.write;
+    process.stdout.write = ((chunk: string) => {
+      captured += chunk;
+      return true;
+    }) as typeof process.stdout.write;
+
+    // Stub FuelApiClient.fromConfig to return our mock client
+    const origFromConfig = FuelApiClient.fromConfig;
+    FuelApiClient.fromConfig = () => makeClient();
+
+    try {
+      await runSessionDetail(session.id, { transcript: true });
+      expect(captured).toContain("Transcript parsing failed. Use --reparse to retry.");
+    } finally {
+      process.stdout.write = origWrite;
+      FuelApiClient.fromConfig = origFromConfig;
+    }
   });
 });
