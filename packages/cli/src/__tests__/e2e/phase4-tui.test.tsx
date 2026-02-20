@@ -12,7 +12,7 @@ import { render, cleanup } from "ink-testing-library";
 import { EventEmitter } from "events";
 
 import { setupTestServer, type TestServerContext } from "./setup.js";
-import { createTestClient } from "./helpers.js";
+import { createTestClient, stripAnsi, wait } from "./helpers.js";
 import { Dashboard } from "../../tui/Dashboard.js";
 import type { FuelApiClient } from "../../lib/api-client.js";
 
@@ -46,13 +46,9 @@ afterAll(async () => {
 // ANSI stripping helper
 // ---------------------------------------------------------------------------
 
-const ANSI_REGEX = /\x1b\[[0-9;]*[a-zA-Z]/g;
+/** Strip ANSI codes, handling undefined from ink's lastFrame() */
 function strip(s: string | undefined): string {
-  return (s ?? "").replace(ANSI_REGEX, "");
-}
-
-function wait(ms: number = 100): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return stripAnsi(s ?? "");
 }
 
 // ---------------------------------------------------------------------------

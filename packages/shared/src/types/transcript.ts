@@ -94,7 +94,7 @@ export interface TranscriptMessage {
   tokens_out: number | null;
   cache_read: number | null;
   cache_write: number | null;
-  cost_usd: number | null;
+  cost_usd: number | string | null;
   compact_sequence: number;
   is_compacted: boolean;
   timestamp: string | null;
