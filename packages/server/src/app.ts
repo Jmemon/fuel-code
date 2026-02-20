@@ -33,6 +33,8 @@ import { createSessionActionsRouter } from "./routes/session-actions.js";
 import { createSessionsRouter } from "./routes/sessions.js";
 import { createTimelineRouter } from "./routes/timeline.js";
 import { createPromptsRouter } from "./routes/prompts.js";
+import { createWorkspacesRouter } from "./routes/workspaces.js";
+import { createDevicesRouter } from "./routes/devices.js";
 
 /** Dependencies injected into createApp for testability */
 export interface AppDeps {
@@ -124,6 +126,11 @@ export function createApp(deps: AppDeps): express.Express {
   // --- 6f. Prompts endpoint (Task 4) ---
   // Auto-prompt for git hook installation: pending prompts + dismiss actions.
   app.use("/api", createPromptsRouter({ sql: deps.sql, logger }));
+
+  // --- 6g. Workspace and device query routes (Phase 4) ---
+  // Read-only aggregation endpoints for workspaces and devices.
+  app.use("/api", createWorkspacesRouter({ sql: deps.sql, logger }));
+  app.use("/api", createDevicesRouter({ sql: deps.sql, logger }));
 
   // --- 7. Error handler — MUST be registered last ---
   app.use(errorHandler);
