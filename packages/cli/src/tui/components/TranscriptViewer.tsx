@@ -29,6 +29,7 @@ export function TranscriptViewer({
   messages,
   scrollOffset,
   onScrollChange,
+  pageSize,
   isLive,
   lifecycle,
 }: TranscriptViewerProps): React.ReactElement {
@@ -78,6 +79,12 @@ export function TranscriptViewer({
   // Sort messages by ordinal for chronological display
   const sorted = [...messages].sort((a, b) => a.ordinal - b.ordinal);
 
+  // Windowed rendering: only render a visible slice of messages to avoid
+  // rendering the entire transcript at once (which causes perf issues with
+  // large conversations). Default visible window size is 10 messages.
+  const visibleWindow = pageSize ?? 10;
+  const windowedMessages = sorted.slice(scrollOffset, scrollOffset + visibleWindow);
+
   return (
     <Box flexDirection="column">
       {/* Scroll position indicator */}
@@ -87,11 +94,11 @@ export function TranscriptViewer({
         </Text>
       </Box>
 
-      {/* Render messages around the scroll offset for visibility */}
-      {sorted.map((msg, idx) => (
+      {/* Render only the visible window of messages */}
+      {windowedMessages.map((msg, idx) => (
         <Box key={msg.id || idx} flexDirection="column">
           <MessageBlock message={msg} ordinal={msg.ordinal} />
-          {idx < sorted.length - 1 && <Text>{" "}</Text>}
+          {idx < windowedMessages.length - 1 && <Text>{" "}</Text>}
         </Box>
       ))}
     </Box>

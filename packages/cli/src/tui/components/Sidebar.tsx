@@ -40,11 +40,35 @@ export function extractToolCounts(messages: TranscriptMessageWithBlocks[]): Reco
 }
 
 /**
- * Extract modified file paths from transcript messages.
- * Looks at tool_use blocks for Edit, Write, and Read tools.
+ * Extract modified file paths from transcript messages and git activity.
+ * Sources:
+ *   1. git_activity[].data.files — file lists from commits (if available)
+ *   2. content_blocks where tool_name in (Edit, Write) — files touched by tools
  */
-export function extractModifiedFiles(messages: TranscriptMessageWithBlocks[]): string[] {
+export function extractModifiedFiles(
+  messages: TranscriptMessageWithBlocks[],
+  gitActivity?: GitActivity[],
+): string[] {
   const files: string[] = [];
+
+  // Source 1: git activity file lists (from commit data if available)
+  if (gitActivity) {
+    for (const ga of gitActivity) {
+      const data = (ga.data ?? {}) as Record<string, unknown>;
+      const fileList = data.files ?? data.file_list;
+      if (Array.isArray(fileList)) {
+        for (const f of fileList) {
+          if (typeof f === "string" && f) files.push(f);
+          // Handle objects like { filename: "path", status: "M" }
+          else if (f && typeof f === "object" && typeof (f as any).filename === "string") {
+            files.push((f as any).filename);
+          }
+        }
+      }
+    }
+  }
+
+  // Source 2: transcript tool_use blocks for Edit/Write
   for (const msg of messages) {
     for (const block of msg.content_blocks ?? []) {
       if (block.block_type === "tool_use") {
@@ -62,7 +86,7 @@ export function extractModifiedFiles(messages: TranscriptMessageWithBlocks[]): s
 
 export function Sidebar({ gitActivity, messages }: SidebarProps): React.ReactElement {
   const toolCounts = extractToolCounts(messages);
-  const modifiedFiles = extractModifiedFiles(messages);
+  const modifiedFiles = extractModifiedFiles(messages, gitActivity);
 
   return (
     <Box flexDirection="column" paddingLeft={1}>

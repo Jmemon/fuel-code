@@ -21,6 +21,7 @@
 
 import React, { useState, useCallback } from "react";
 import { Box, Text, useInput, useApp } from "ink";
+import * as fs from "node:fs";
 import type { FuelApiClient } from "../lib/api-client.js";
 import type { WsClient } from "../lib/ws-client.js";
 import { useSessionDetail } from "./hooks/useSessionDetail.js";
@@ -97,10 +98,9 @@ export function SessionDetailView({
     loading,
     error,
     fetchEvents,
+    isLive,
     getExportData,
   } = useSessionDetail(apiClient, wsClient, sessionId);
-
-  const isLive = session?.lifecycle === "capturing";
 
   // Scroll helpers
   const maxScroll = useCallback(() => {
@@ -178,10 +178,9 @@ export function SessionDetailView({
       if (data) {
         const filename = `session-${sessionId.slice(0, 8)}.json`;
         try {
-          const fs = require("node:fs");
           fs.writeFileSync(filename, JSON.stringify(data, null, 2));
-        } catch {
-          // Export failed silently in TUI context
+        } catch (err) {
+          process.stderr.write(`Export failed: ${err instanceof Error ? err.message : String(err)}\n`);
         }
       }
       return;
@@ -271,14 +270,20 @@ export function SessionDetailView({
                 <Text dimColor>No events for this session.</Text>
               ) : (
                 <Box flexDirection="column">
+                  {/* Scroll position indicator */}
+                  <Box>
+                    <Text dimColor>
+                      Event {scrollOffset + 1} of {events.length}
+                    </Text>
+                  </Box>
                   {/* Events table header */}
                   <Box>
                     <Box width={12}><Text bold>TIME</Text></Box>
                     <Box width={22}><Text bold>TYPE</Text></Box>
                     <Box><Text bold>DATA</Text></Box>
                   </Box>
-                  {/* Event rows */}
-                  {events.map((evt, idx) => (
+                  {/* Windowed event rows: only render visible slice */}
+                  {events.slice(scrollOffset, scrollOffset + pageSize).map((evt, idx) => (
                     <Box key={evt.id || idx}>
                       <Box width={12}><Text>{formatEventTime(evt.timestamp)}</Text></Box>
                       <Box width={22}><Text>{evt.type}</Text></Box>

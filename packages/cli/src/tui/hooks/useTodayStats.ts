@@ -1,7 +1,7 @@
 /**
- * Hook to compute today's aggregate statistics for the StatusBar.
+ * Hook to compute aggregate statistics for the StatusBar.
  *
- * Derives stats from the current workspace list: total sessions today,
+ * Derives totals from the current workspace list: total sessions,
  * total duration, total cost, and total commits. Recomputes whenever
  * workspaces data changes.
  */
@@ -18,8 +18,8 @@ export interface TodayStats {
 
 /**
  * Compute aggregate stats across all workspaces.
- * For a true "today" filter we'd need a separate API call with date filtering,
- * but for the dashboard we show totals across all workspaces as a useful summary.
+ * Shows lifetime totals. A per-day breakdown would require a separate API call
+ * with date filtering; displaying totals is more useful for an at-a-glance view.
  */
 export function useTodayStats(workspaces: WorkspaceSummary[]): TodayStats {
   return useMemo(() => {

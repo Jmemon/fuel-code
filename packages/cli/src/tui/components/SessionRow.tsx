@@ -31,18 +31,25 @@ function formatToolCounts(counts: Record<string, number>): string {
     .join(" ");
 }
 
+/**
+ * Extended Session type with display fields returned by the API's session list.
+ * The base Session type (from shared) only has core DB columns; the API response
+ * includes extra joined/computed fields for display purposes.
+ */
+export interface SessionDisplayData extends Session {
+  device_name?: string;
+  workspace_name?: string;
+  summary?: string | null;
+  cost_estimate_usd?: number | null;
+  total_messages?: number | null;
+  tool_uses?: number | null;
+  commit_messages?: string[] | null;
+  /** Per-tool usage counts for live sessions, e.g. { Edit: 3, Bash: 2, Read: 5 } */
+  tool_counts?: Record<string, number> | null;
+}
+
 export interface SessionRowProps {
-  session: Session & {
-    device_name?: string;
-    workspace_name?: string;
-    summary?: string | null;
-    cost_estimate_usd?: number | null;
-    total_messages?: number | null;
-    tool_uses?: number | null;
-    commit_messages?: string[] | null;
-    /** Per-tool usage counts for live sessions, e.g. { Edit: 3, Bash: 2, Read: 5 } */
-    tool_counts?: Record<string, number> | null;
-  };
+  session: SessionDisplayData;
   selected: boolean;
 }
 
@@ -50,18 +57,17 @@ export function SessionRow({
   session,
   selected,
 }: SessionRowProps): React.ReactElement {
-  const ext = session as any;
   const display = LIFECYCLE_DISPLAY[session.lifecycle] ?? {
     icon: "?",
     label: session.lifecycle.toUpperCase(),
     color: "gray",
   };
 
-  const deviceName = ext.device_name ?? session.device_id;
+  const deviceName = session.device_name ?? session.device_id;
   const duration = formatDuration(session.duration_ms);
-  const cost = formatCost(ext.cost_estimate_usd ?? null);
-  const summary = ext.summary ?? "(no summary)";
-  const commitMessages: string[] = ext.commit_messages ?? [];
+  const cost = formatCost(session.cost_estimate_usd ?? null);
+  const summary = session.summary ?? "(no summary)";
+  const commitMessages: string[] = session.commit_messages ?? [];
   const overflowCount = Math.max(0, commitMessages.length - 2);
   const overflowText = overflowCount > 0 ? "... " + overflowCount + " more commits" : "";
 
@@ -87,12 +93,12 @@ export function SessionRow({
         </Text>
       </Box>
       {/* Live sessions: show per-tool breakdown or aggregate counts */}
-      {session.lifecycle === "capturing" && ext.total_messages != null && (
+      {session.lifecycle === "capturing" && session.total_messages != null && (
         <Box paddingLeft={4}>
           <Text color="green">
-            {ext.tool_counts
-              ? formatToolCounts(ext.tool_counts as Record<string, number>)
-              : `${ext.total_messages} messages${ext.tool_uses != null ? ` / ${ext.tool_uses} tool uses` : ""}`}
+            {session.tool_counts
+              ? formatToolCounts(session.tool_counts)
+              : `${session.total_messages} messages${session.tool_uses != null ? ` / ${session.tool_uses} tool uses` : ""}`}
           </Text>
         </Box>
       )}

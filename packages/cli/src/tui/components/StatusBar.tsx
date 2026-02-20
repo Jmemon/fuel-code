@@ -1,7 +1,7 @@
 /**
  * Status bar for the bottom of the Dashboard.
  *
- * Displays today's aggregate statistics, WebSocket connection status,
+ * Displays aggregate statistics across all workspaces, WebSocket connection status,
  * and keyboard shortcut hints.
  */
 
@@ -40,7 +40,7 @@ export function StatusBar({
     <Box flexDirection="column" borderStyle="single" borderTop borderBottom={false} borderLeft={false} borderRight={false}>
       <Box>
         <Text>
-          Today: {stats.sessions} sessions {"\u00B7"}{" "}
+          All: {stats.sessions} sessions {"\u00B7"}{" "}
           {formatDuration(stats.durationMs)} {"\u00B7"}{" "}
           {formatCost(stats.costUsd)}
           {stats.commits > 0 ? ` \u00B7 ${stats.commits} commits` : ""}

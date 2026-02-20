@@ -23,13 +23,13 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Box, Text, useInput } from "ink";
 import type { FuelApiClient } from "../lib/api-client.js";
 import type { WsClient } from "../lib/ws-client.js";
-import type { Event } from "@fuel-code/shared";
+import type { Event, Session } from "@fuel-code/shared";
 import { useWorkspaces } from "./hooks/useWorkspaces.js";
 import { useSessions } from "./hooks/useSessions.js";
 import { useWsConnection } from "./hooks/useWsConnection.js";
 import { useTodayStats } from "./hooks/useTodayStats.js";
 import { WorkspaceItem } from "./components/WorkspaceItem.js";
-import { SessionRow } from "./components/SessionRow.js";
+import { SessionRow, type SessionDisplayData } from "./components/SessionRow.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { Spinner } from "./components/Spinner.js";
 import { ErrorBanner } from "./components/ErrorBanner.js";
@@ -46,7 +46,7 @@ export interface DashboardProps {
  */
 type WsBufferEntry =
   | { type: "update"; sessionId: string; patch: Record<string, unknown> }
-  | { type: "prepend"; session: any };
+  | { type: "prepend"; session: SessionDisplayData };
 
 export function Dashboard({
   api,
@@ -97,7 +97,7 @@ export function Dashboard({
 
     for (const entry of entries) {
       if (entry.type === "update") {
-        updateSession(entry.sessionId, entry.patch as any);
+        updateSession(entry.sessionId, entry.patch as Partial<Session>);
       } else if (entry.type === "prepend") {
         prependSession(entry.session);
       }
@@ -131,7 +131,8 @@ export function Dashboard({
     const onEvent = (event: Event) => {
       if (event.type === "session.start" && selectedWorkspace && event.workspace_id === selectedWorkspace.id) {
         // Create a minimal session object from the event to prepend
-        const newSession: any = {
+        const data = (event.data ?? {}) as Record<string, unknown>;
+        const newSession: SessionDisplayData = {
           id: event.session_id ?? event.id,
           workspace_id: event.workspace_id,
           device_id: event.device_id,
@@ -139,9 +140,9 @@ export function Dashboard({
           started_at: event.timestamp,
           ended_at: null,
           duration_ms: null,
-          cc_session_id: (event.data as any)?.cc_session_id ?? "",
+          cc_session_id: (data.cc_session_id as string) ?? "",
           parse_status: "pending",
-          cwd: (event.data as any)?.cwd ?? "",
+          cwd: (data.cwd as string) ?? "",
           git_branch: null,
           git_remote: null,
           model: null,
@@ -271,7 +272,7 @@ export function Dashboard({
             sessions.map((s, i) => (
               <SessionRow
                 key={s.id}
-                session={s as any}
+                session={s as SessionDisplayData}
                 selected={i === selectedSessionIndex && focusPane === "sessions"}
               />
             ))

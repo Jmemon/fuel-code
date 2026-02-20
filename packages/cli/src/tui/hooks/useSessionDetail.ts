@@ -32,6 +32,8 @@ export interface UseSessionDetailResult {
   fetchEvents: () => void;
   /** Whether events have been fetched */
   eventsFetched: boolean;
+  /** Whether the session is live (capturing) */
+  isLive: boolean;
   /** Export data for the session */
   getExportData: () => SessionExportData | null;
 }
@@ -48,12 +50,13 @@ export function useSessionDetail(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [eventsFetched, setEventsFetched] = useState(false);
-  const fetchedRef = useRef(false);
+  // Track which sessionId was last fetched so we re-fetch if sessionId changes
+  const lastFetchedId = useRef<string | null>(null);
 
   // Parallel fetch on mount: session + transcript + git
   useEffect(() => {
-    if (fetchedRef.current) return;
-    fetchedRef.current = true;
+    if (lastFetchedId.current === sessionId) return;
+    lastFetchedId.current = sessionId;
 
     async function load() {
       try {
@@ -149,6 +152,7 @@ export function useSessionDetail(
     error,
     fetchEvents: fetchEventsCallback,
     eventsFetched,
+    isLive: session?.lifecycle === "capturing",
     getExportData,
   };
 }
