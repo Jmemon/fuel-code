@@ -111,6 +111,12 @@ export class WsClient extends EventEmitter {
    * open so that an immediate auth-rejection close frame can arrive first.
    */
   async connect(): Promise<void> {
+    // Guard against double-connect (TUI re-renders could trigger this)
+    if (this._state === "connected") return;
+    if (this._state === "connecting") {
+      throw new Error("Connection already in progress");
+    }
+
     return new Promise<void>((resolve, reject) => {
       this.intentionalClose = false;
       this._state = "connecting";
@@ -175,9 +181,12 @@ export class WsClient extends EventEmitter {
         }
 
         // Normal post-connect close: emit disconnected and maybe reconnect.
+        // Skip emit if intentional (disconnect() already handled cleanup).
+        if (this.intentionalClose) return;
+
         this.emit("disconnected", reasonStr);
 
-        if (!this.intentionalClose && this.options.reconnect) {
+        if (this.options.reconnect) {
           this.scheduleReconnect();
         }
       });
