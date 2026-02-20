@@ -288,6 +288,7 @@ export function formatStatus(data: StatusData): string {
     lines.push(
       `  Backend:    ${pc.red("\u2717")} Unreachable (${data.backend.url})`,
     );
+    lines.push(pc.dim("              Connection timed out. Events will queue locally."));
   }
 
   // Queue
@@ -300,9 +301,11 @@ export function formatStatus(data: StatusData): string {
     lines.push("");
     lines.push("  Active Sessions:");
     if (data.activeSessions.length === 0) {
-      lines.push("    " + pc.dim("(none)"));
+      lines.push("    " + pc.dim("No active sessions"));
     } else {
-      for (const session of data.activeSessions) {
+      // Cap displayed active sessions at 5 with overflow indicator
+      const displayed = data.activeSessions.slice(0, 5);
+      for (const session of displayed) {
         const ws = (session as any).workspace_name ?? session.workspace_id;
         const dev = (session as any).device_name ?? session.device_id;
         const dur = formatDuration(session.duration_ms);
@@ -312,6 +315,9 @@ export function formatStatus(data: StatusData): string {
         if (summary) {
           lines.push(`      ${pc.dim(summary)}`);
         }
+      }
+      if (data.activeSessions.length > 5) {
+        lines.push(`    ...and ${data.activeSessions.length - 5} more capturing`);
       }
     }
 
