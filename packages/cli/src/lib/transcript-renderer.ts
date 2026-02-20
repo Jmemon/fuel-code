@@ -119,8 +119,9 @@ export function renderMessage(
   if (role === "assistant") {
     const extras: string[] = [];
     if (message.model) extras.push(message.model);
-    if (message.cost_usd != null && message.cost_usd > 0) {
-      extras.push(`$${message.cost_usd.toFixed(4)}`);
+    if (message.cost_usd != null) {
+      const cost = typeof message.cost_usd === "string" ? parseFloat(message.cost_usd) : message.cost_usd;
+      if (cost > 0) extras.push(`$${cost.toFixed(4)}`);
     }
     if (extras.length > 0) {
       header += ` ${opts.colorize ? pc.dim(extras.join(" ")) : extras.join(" ")}`;

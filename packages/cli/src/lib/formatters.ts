@@ -73,11 +73,13 @@ export function formatDuration(ms: number | null | undefined): string {
  * Returns "<$0.01" for positive values under a cent.
  * Otherwise returns "$X.XX" with 2 decimal places.
  */
-export function formatCost(usd: number | null | undefined): string {
+export function formatCost(usd: number | string | null | undefined): string {
   if (usd === null || usd === undefined) return "\u2014";
-  if (usd === 0) return "$0.00";
-  if (usd > 0 && usd < 0.01) return "<$0.01";
-  return `$${usd.toFixed(2)}`;
+  const n = typeof usd === "string" ? parseFloat(usd) : usd;
+  if (Number.isNaN(n)) return "\u2014";
+  if (n === 0) return "$0.00";
+  if (n > 0 && n < 0.01) return "<$0.01";
+  return `$${n.toFixed(2)}`;
 }
 
 // ---------------------------------------------------------------------------

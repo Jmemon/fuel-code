@@ -89,8 +89,9 @@ export function MessageBlock({ message, ordinal }: MessageBlockProps): React.Rea
   if (isAssistant) {
     const parts: string[] = [];
     if (message.model) parts.push(message.model);
-    if (message.cost_usd != null && message.cost_usd > 0) {
-      parts.push(`$${message.cost_usd.toFixed(2)}`);
+    if (message.cost_usd != null) {
+      const cost = typeof message.cost_usd === "string" ? parseFloat(message.cost_usd) : message.cost_usd;
+      if (cost > 0) parts.push(`$${cost.toFixed(2)}`);
     }
     if (parts.length > 0) extras = ` ${parts.join(" \u00B7 ")}`;
   }
