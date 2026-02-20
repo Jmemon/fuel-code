@@ -57,11 +57,21 @@ describe("Error handling", () => {
     try {
       await fetchSessions(badClient, { limit: 10 });
       // Should not reach here
-      expect(true).toBe(false);
+      throw new Error("Expected function to throw");
     } catch (err) {
+      if ((err as Error).message === "Expected function to throw") throw err;
       // Should be an ApiConnectionError (network failure)
       expect(err instanceof ApiConnectionError).toBe(true);
-      expect((err as Error).message).toBeTruthy();
+      const msg = (err as Error).message;
+      expect(msg).toBeTruthy();
+
+      // Error message should indicate a connection problem
+      const lcMsg = msg.toLowerCase();
+      expect(lcMsg.includes("connect") || lcMsg.includes("backend")).toBe(true);
+
+      // Should NOT contain common stack trace patterns (user-friendly error)
+      expect(msg).not.toContain("at ");
+      expect(msg).not.toMatch(/^Error:/);
     }
   }, 15_000);
 
@@ -71,8 +81,9 @@ describe("Error handling", () => {
     try {
       await resolveWorkspaceName(api, "nonexistent-workspace-xyz");
       // Should not reach here
-      expect(true).toBe(false);
+      throw new Error("Expected function to throw");
     } catch (err) {
+      if ((err as Error).message === "Expected function to throw") throw err;
       // resolveWorkspaceName throws ApiError(404) when no match
       expect(err instanceof ApiError).toBe(true);
       expect((err as ApiError).statusCode).toBe(404);
@@ -90,11 +101,21 @@ describe("Error handling", () => {
     try {
       await fetchSessions(badKeyClient, { limit: 10 });
       // Should not reach here
-      expect(true).toBe(false);
+      throw new Error("Expected function to throw");
     } catch (err) {
+      if ((err as Error).message === "Expected function to throw") throw err;
       // Should be an ApiError with 401 status
       expect(err instanceof ApiError).toBe(true);
       expect((err as ApiError).statusCode).toBe(401);
+
+      // Error message should indicate an authentication problem
+      // Auth middleware returns "Missing or invalid API key" (lowercase)
+      const msg = (err as Error).message.toLowerCase();
+      const hasAuthIndication =
+        msg.includes("unauthorized") ||
+        msg.includes("invalid") ||
+        msg.includes("401");
+      expect(hasAuthIndication).toBe(true);
     }
   }, 15_000);
 });

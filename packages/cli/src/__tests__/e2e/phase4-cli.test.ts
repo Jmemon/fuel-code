@@ -83,6 +83,11 @@ describe("Sessions command", () => {
     expect(output).toContain("STATUS");
     expect(output).toContain("WORKSPACE");
     expect(output).toContain("DEVICE");
+
+    // Check status icons appear: LIVE for capturing, DONE for summarized, FAIL for failed
+    expect(output).toContain("LIVE");
+    expect(output).toContain("DONE");
+    expect(output).toContain("FAIL");
   }, 15_000);
 
   test("Test 2: sessions --workspace fuel-code shows only fuel-code sessions", async () => {
@@ -147,6 +152,12 @@ describe("Session detail command", () => {
     expect(output).toContain("macbook-pro");
     expect(output).toContain("DONE");
     expect(output).toContain("Fixed authentication flow");
+
+    // Check Duration and Cost fields are present with values
+    expect(output).toContain("Duration:");
+    expect(output).toContain("45m");
+    expect(output).toContain("Cost:");
+    expect(output).toContain("$0.42");
   }, 15_000);
 
   test("Test 6: session <id> --transcript shows conversation turns with tool trees", async () => {
@@ -158,9 +169,15 @@ describe("Session detail command", () => {
     // Render the transcript and check it contains expected content
     const output = stripAnsi(renderTranscript(messages as any));
 
-    // Should contain Human and Assistant turns
+    // Should contain Human and Assistant turn labels
     expect(output).toContain("Human");
     expect(output).toContain("Assistant");
+
+    // Should contain tool use names from the seeded tool_use content blocks.
+    // Tools cycle as toolNames[i % 4] for assistant messages (odd i, i>0):
+    // i=1 -> Edit, i=3 -> Grep, i=5 -> Edit, i=7 -> Grep
+    expect(output).toContain("Edit");
+    expect(output).toContain("Grep");
   }, 15_000);
 
   test("Test 7: session <id> --git shows git activity table", async () => {
@@ -174,6 +191,9 @@ describe("Session detail command", () => {
     // Check commit messages appear
     expect(output).toContain("auth token validation");
     expect(output).toContain("refresh token flow");
+    // Check commit hash prefixes (7-char prefix from formatSessionGitActivity)
+    expect(output).toContain("abc1234");
+    expect(output).toContain("def4567");
     // Check push info
     expect(output).toContain("push");
     expect(output).toContain("feat/auth");
@@ -343,10 +363,12 @@ describe("Error handling", () => {
     try {
       await fetchSessionDetail(api, fakeId);
       // Should not reach here
-      expect(true).toBe(false);
+      throw new Error("Expected fetchSessionDetail to throw for nonexistent ID");
     } catch (err: any) {
-      // The API should return a 404 or similar error
+      if (err.message?.includes("Expected fetchSessionDetail")) throw err;
+      // The API should return a 404 or similar error containing "not found"
       expect(err.message).toBeTruthy();
+      expect(err.message.toLowerCase()).toContain("not found");
     }
   }, 15_000);
 });
