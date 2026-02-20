@@ -91,9 +91,13 @@ export async function fetchSessions(
  * Columns: STATUS, ID, WORKSPACE, DEVICE, DURATION, COST, STARTED, SUMMARY
  * ID column shows 8-char prefix in dimmed text.
  */
-export function formatSessionsTable(sessions: Session[]): string {
+export function formatSessionsTable(sessions: Session[], hasFilters?: boolean): string {
   if (sessions.length === 0) {
-    return formatEmpty("sessions");
+    const msg = formatEmpty("sessions");
+    if (hasFilters) {
+      return msg + "\nTry removing filters or expanding the date range.";
+    }
+    return msg;
   }
 
   const rows = sessions.map((s) => {
@@ -254,7 +258,9 @@ export async function runSessions(opts: {
     if (opts.json) {
       outputResult(result, { json: true, format: () => "" });
     } else {
-      const table = formatSessionsTable(result.sessions);
+      // Determine if any filters were applied so the empty state can show a hint
+      const hasFilters = !!(opts.workspace || opts.device || opts.today || opts.live || opts.lifecycle || opts.tag);
+      const table = formatSessionsTable(result.sessions, hasFilters);
       const footer = formatPaginationFooter(result.cursor, result.total);
       process.stdout.write(table + footer + "\n");
     }

@@ -11,6 +11,7 @@
  */
 
 import type { FuelApiClient } from "./api-client.js";
+import { formatRelativeTime } from "./formatters.js";
 
 /** Result of resolving a session ID — either a full ULID or an error */
 export interface ResolveResult {

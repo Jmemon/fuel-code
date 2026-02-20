@@ -178,7 +178,7 @@ packages/cli/
         hooks-git.test.ts
         transcript.test.ts
     lib/
-      api-client.ts                         # createApiClient() — HTTP client for server API (ingest method)
+      api-client.ts                         # createApiClient() — HTTP client for server API (ingest, health methods)
       config.ts                             # loadConfig(), saveConfig(), configExists() — ~/.fuel-code/config.yaml
       drain.ts                              # drainQueue() — batch event drain with retry
       drain-background.ts                   # Background drain worker
@@ -226,15 +226,11 @@ packages/hooks/
 tasks/
   CORE.md                                   # Master specification (1506 lines)
   downstream-template.md                    # Template for downstream impact reviews
-  phase-1-implementation-review.md
-  phase-1-downstream-review.md
-  phase-2-implementation-review.md
-  phase-2-downstream-review.md
-  phase-2-post-impl-updates-review.md
-  phase-3-implementation-review.md
-  phase-3-downstream-review.md
   repo-index.md                             # (this file)
-  phase-1/ through phase-7/                 # DAGs + per-task spec files
+  phase-1/                                  # DAG + task specs + __implementation-review.md, __downstream-review.md
+  phase-2/                                  # DAG + task specs + __implementation-review.md, __downstream-review.md, __post-impl-updates-review.md
+  phase-3/                                  # DAG + task specs + __implementation-review.md, __downstream-review.md
+  phase-4/ through phase-7/                 # DAGs + per-task spec files
 docker-compose.test.yml                     # Postgres + Redis + LocalStack for E2E tests
 package.json                                # Root workspace: { "workspaces": ["packages/*"] }
 ```
@@ -317,7 +313,7 @@ package.json                                # Root workspace: { "workspaces": ["
 - `fuel-code hooks install|status` -- install CC hooks + git hooks, check status
 - `fuel-code transcript upload` -- POST transcript file to server for pipeline processing
 - `fuel-code backfill` -- scan `~/.claude/projects/` for historical sessions, upload, process
-- **API client**: `createApiClient()` with `ingest()` method for HTTP transport
+- **API client**: `createApiClient()` with `ingest()` and `health()` methods for HTTP transport
 - **Local event queue**: `~/.fuel-code/queue/` with ULID-named JSON files, atomic writes (tmp+rename)
 - **Queue drainer**: batch processing with attempt tracking, dead-letter at 100 attempts
 - **Git hook installer**: `installGitHooks()` with global `core.hooksPath`, competing hook manager detection, `--per-repo` mode, backup + chaining
@@ -515,7 +511,7 @@ detected -> capturing -> ended -> parsed -> summarized -> archived
 #### [CROSS.10] CLI ApiClient is minimal -- Severity: MEDIUM
 
 **Phase 4 Task 3 spec**: Replaces existing `createApiClient()` with comprehensive `ApiClient` class with methods for sessions, workspaces, timeline, health, etc.
-**Actual state**: `packages/cli/src/lib/api-client.ts` has only `createApiClient()` with `ingest()` method
+**Actual state**: `packages/cli/src/lib/api-client.ts` has `createApiClient()` with `ingest()` and `health()` methods
 **Impact**: Phase 4 must expand this significantly while maintaining backward compatibility for `emit.ts` and `drain.ts` which import `createApiClient`. The spec explicitly calls this out.
 
 #### [CROSS.11] `capturing` lifecycle state transition -- Severity: NONE (resolved)

@@ -241,7 +241,7 @@ describe("formatTimeline", () => {
     const output = formatTimeline(data);
     const plain = stripAnsi(output);
 
-    expect(plain).toContain("fuel-code@macbook");
+    expect(plain).toContain("fuel-code \u00b7 macbook");
     expect(plain).toContain("1h30m");
     expect(plain).toContain("$1.50");
   });
@@ -297,7 +297,7 @@ describe("formatTimeline", () => {
     const plain = stripAnsi(output);
 
     expect(plain).toContain("git");
-    expect(plain).toContain("fuel-code@macbook");
+    expect(plain).toContain("fuel-code \u00b7 macbook");
     expect(plain).toContain("abc1234");
     expect(plain).toContain("fix: resolve login bug");
   });

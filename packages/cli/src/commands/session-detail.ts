@@ -202,7 +202,9 @@ export function formatSessionEvents(events: Event[]): string {
   }
 
   const rows = events.map((evt) => {
-    const time = formatRelativeTime(evt.timestamp);
+    // Use absolute HH:MM:SS for event timestamps (not relative time)
+    const d = new Date(evt.timestamp);
+    const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
     const type = evt.type;
     const data = formatEventData(evt);
     return [time, type, data];
@@ -543,8 +545,13 @@ async function handleReparse(api: FuelApiClient, sessionId: string): Promise<voi
 function formatEventData(evt: Event): string {
   const data = evt.data ?? {};
   switch (evt.type) {
-    case "session.start":
-      return [data.branch, data.model].filter(Boolean).join(" ") || "-";
+    case "session.start": {
+      // Show labeled key=value pairs for session start context
+      const parts: string[] = [];
+      if (data.branch) parts.push(`branch=${data.branch}`);
+      if (data.model) parts.push(`model=${data.model}`);
+      return parts.join(", ") || "-";
+    }
     case "session.end":
       return [
         data.duration_ms ? formatDuration(data.duration_ms as number) : null,

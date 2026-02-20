@@ -240,7 +240,7 @@ export function formatToolSummary(block: ParsedContentBlock): string {
   switch (name.toLowerCase()) {
     case "read": {
       const filePath = (input.file_path ?? input.path ?? "") as string;
-      return `Read ${filePath || "(unknown file)"}`;
+      return `Read: ${filePath || "(unknown file)"}`;
     }
     case "edit": {
       const filePath = (input.file_path ?? input.path ?? "") as string;
@@ -249,27 +249,31 @@ export function formatToolSummary(block: ParsedContentBlock): string {
       const newStr = (input.new_string ?? "") as string;
       const added = newStr.split("\n").length;
       const removed = oldStr.split("\n").length;
-      return `Edit ${filePath || "(unknown file)"} (+${added} -${removed})`;
+      return `Edit: ${filePath || "(unknown file)"} (+${added} -${removed})`;
     }
     case "write": {
       const filePath = (input.file_path ?? input.path ?? "") as string;
-      return `Write ${filePath || "(unknown file)"}`;
+      return `Write: ${filePath || "(unknown file)"}`;
     }
     case "bash": {
       const command = (input.command ?? "") as string;
       const truncated = command.length > 60 ? command.slice(0, 57) + "..." : command;
-      return `Bash ${truncated}`;
+      return `Bash: ${truncated}`;
     }
     case "grep": {
       const pattern = (input.pattern ?? "") as string;
-      return `Grep ${pattern || "(no pattern)"}`;
+      return `Grep: ${pattern || "(no pattern)"}`;
     }
     case "glob": {
       const pattern = (input.pattern ?? "") as string;
-      return `Glob ${pattern || "(no pattern)"}`;
+      return `Glob: ${pattern || "(no pattern)"}`;
     }
-    default:
-      return name;
+    default: {
+      // Unknown tools: show tool name followed by a truncated preview of the input
+      const inputStr = JSON.stringify(input);
+      const preview = inputStr.length > 60 ? inputStr.slice(0, 60) + "..." : inputStr;
+      return `${name}: ${preview}`;
+    }
   }
 }
 

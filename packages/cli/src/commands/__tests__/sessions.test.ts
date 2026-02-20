@@ -218,6 +218,20 @@ describe("formatSessionsTable", () => {
     expect(stripAnsi(output)).toContain("No sessions found");
   });
 
+  it("appends filter hint on empty result when filters are applied", () => {
+    const output = formatSessionsTable([], true);
+    const plain = stripAnsi(output);
+    expect(plain).toContain("No sessions found");
+    expect(plain).toContain("Try removing filters or expanding the date range.");
+  });
+
+  it("does not append filter hint on empty result without filters", () => {
+    const output = formatSessionsTable([], false);
+    const plain = stripAnsi(output);
+    expect(plain).toContain("No sessions found");
+    expect(plain).not.toContain("Try removing filters");
+  });
+
   it("renders table with STATUS, ID, WORKSPACE, DEVICE columns", () => {
     const sessions = [makeSession()] as any;
     const output = formatSessionsTable(sessions);
@@ -404,7 +418,7 @@ describe("sessions — error handling", () => {
   });
 
   it("ApiError 404 for workspace not found", () => {
-    const err = new ApiError('Workspace not found: "nope"', 404);
+    const err = new ApiError('Workspace "nope" not found.', 404);
     expect(err.statusCode).toBe(404);
     expect(err.message).toContain("not found");
   });

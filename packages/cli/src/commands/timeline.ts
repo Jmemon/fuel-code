@@ -157,15 +157,13 @@ function formatDateHeader(dateKey: string): string {
 }
 
 /**
- * Format a time from an ISO string: "3:45 PM" style.
+ * Format a time from an ISO string in 24-hour format: "14:30" style.
  */
 function formatTimeShort(iso: string): string {
   const date = new Date(iso);
-  let hours = date.getHours();
-  const minutes = date.getMinutes();
-  const ampm = hours >= 12 ? "PM" : "AM";
-  hours = hours % 12 || 12;
-  return `${hours}:${String(minutes).padStart(2, "0")} ${ampm}`;
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
 }
 
 /**
@@ -179,7 +177,7 @@ function renderSessionItem(item: TimelineSessionItem): string {
   // Session header line: time + lifecycle + workspace@device + duration + cost
   const time = formatTimeShort(s.started_at);
   const lifecycle = formatLifecycle(s.lifecycle);
-  const location = `${s.workspace_name}@${s.device_name}`;
+  const location = `${s.workspace_name} \u00b7 ${s.device_name}`;
   const duration = formatDuration(s.duration_ms);
   const cost = formatCost(s.cost_estimate_usd);
 
@@ -221,7 +219,7 @@ function renderSessionItem(item: TimelineSessionItem): string {
 function renderOrphanItem(item: TimelineOrphanItem): string {
   const lines: string[] = [];
   const time = formatTimeShort(item.started_at);
-  const location = `${item.workspace_name}@${item.device_name}`;
+  const location = `${item.workspace_name} \u00b7 ${item.device_name}`;
 
   lines.push(`  ${pc.dim(time)}  ${pc.dim("git")}  ${location}`);
 
@@ -389,10 +387,14 @@ export async function runTimeline(opts: {
 
     // Date range: --week, --after, --before, default to --today
     if (opts.week) {
-      const weekAgo = new Date();
-      weekAgo.setDate(weekAgo.getDate() - 7);
-      weekAgo.setHours(0, 0, 0, 0);
-      params.after = weekAgo.toISOString();
+      // Calculate Monday 00:00 of the current week (ISO week starts on Monday)
+      const now = new Date();
+      const day = now.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+      const diff = day === 0 ? 6 : day - 1; // days since Monday
+      const monday = new Date(now);
+      monday.setDate(monday.getDate() - diff);
+      monday.setHours(0, 0, 0, 0);
+      params.after = monday.toISOString();
     } else if (opts.after) {
       params.after = parseRelativeDate(opts.after);
     } else {

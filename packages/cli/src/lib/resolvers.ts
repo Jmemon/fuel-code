@@ -69,7 +69,7 @@ export async function resolveWorkspaceName(
   // No match — list available workspaces in the error for discoverability
   const available = workspaces.map((w) => w.display_name).join(", ");
   throw new ApiError(
-    `Workspace not found: "${nameOrId}". Available: ${available || "(none)"}`,
+    `Workspace "${nameOrId}" not found. Available workspaces: ${available || "(none)"}`,
     404,
   );
 }
@@ -120,7 +120,7 @@ export async function resolveDeviceName(
   // No match
   const available = devices.map((d) => d.name).join(", ");
   throw new ApiError(
-    `Device not found: "${nameOrId}". Available: ${available || "(none)"}`,
+    `Device "${nameOrId}" not found. Available devices: ${available || "(none)"}`,
     404,
   );
 }
