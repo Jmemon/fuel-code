@@ -111,6 +111,12 @@ program.addCommand(createSessionDetailCommand());
 // Register workspace commands (Task 6: workspaces list + workspace detail)
 registerWorkspacesCommands(program);
 
+// Default action: launch TUI dashboard when no subcommand is given
+program.action(async () => {
+  const { launchTui } = await import("./tui/App.js");
+  await launchTui();
+});
+
 // ---------------------------------------------------------------------------
 // Prompt checking hook — runs before interactive commands
 // ---------------------------------------------------------------------------
