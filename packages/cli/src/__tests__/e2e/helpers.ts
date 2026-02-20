@@ -32,3 +32,20 @@ export { stripAnsi };
 export function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/**
+ * Poll a predicate until it returns true or timeout expires.
+ * Replaces hardcoded `await wait(N)` patterns for timing-sensitive assertions.
+ */
+export async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 5_000,
+  pollIntervalMs = 50,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await predicate()) return;
+    await wait(pollIntervalMs);
+  }
+  throw new Error(`waitFor: condition not met after ${timeoutMs}ms`);
+}

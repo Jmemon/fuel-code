@@ -12,7 +12,7 @@ import { render, cleanup } from "ink-testing-library";
 import { EventEmitter } from "events";
 
 import { setupTestServer, type TestServerContext } from "./setup.js";
-import { createTestClient, stripAnsi, wait } from "./helpers.js";
+import { createTestClient, stripAnsi, wait, waitFor } from "./helpers.js";
 import { Dashboard } from "../../tui/Dashboard.js";
 import type { FuelApiClient } from "../../lib/api-client.js";
 
@@ -95,8 +95,11 @@ describe("TUI Dashboard E2E", () => {
       />,
     );
 
-    // Wait for data to load from the real backend
-    await wait(500);
+    // Poll until workspace data loads from the real backend
+    await waitFor(() => {
+      const output = strip(instance.lastFrame());
+      return output.includes("fuel-code") && output.includes("api-service");
+    });
 
     const output = strip(instance.lastFrame());
 
@@ -119,14 +122,15 @@ describe("TUI Dashboard E2E", () => {
       />,
     );
 
-    // Wait for initial data load
-    await wait(500);
+    // Poll until session lifecycle indicators appear (data loaded)
+    await waitFor(() => {
+      const output = strip(instance.lastFrame());
+      return output.includes("LIVE") || output.includes("DONE") || output.includes("FAIL");
+    });
 
     const output = strip(instance.lastFrame());
 
     // The first workspace is selected by default. Sessions for it should show.
-    // We should see session lifecycle indicators (LIVE, DONE, FAIL)
-    // At least one of these should appear since we have sessions in various states.
     const hasLifecycleIndicator =
       output.includes("LIVE") ||
       output.includes("DONE") ||
@@ -147,16 +151,20 @@ describe("TUI Dashboard E2E", () => {
       />,
     );
 
-    // Wait for data to load
-    await wait(500);
+    // Poll until data loads (sessions visible)
+    await waitFor(() => {
+      const output = strip(instance.lastFrame());
+      return output.includes("LIVE") || output.includes("DONE") || output.includes("FAIL");
+    });
 
     // Switch focus to sessions pane (Tab), then press Enter
     instance.stdin.write("\t");
     await wait(100);
     instance.stdin.write("\r");
-    await wait(100);
 
-    // onSelectSession should have been called with a session ID
+    // Poll until onSelectSession fires
+    await waitFor(() => selectedId.length > 0, 3_000);
+
     expect(selectedId).toBeTruthy();
     expect(selectedId.length).toBeGreaterThan(0);
   }, 15_000);

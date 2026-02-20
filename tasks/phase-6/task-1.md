@@ -81,7 +81,8 @@ export function isRetryableAwsError(error: unknown): boolean;
 export function isRetryableHttpError(error: unknown): boolean;
 // Checks: error.code in ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT',
 //   'EPIPE', 'UND_ERR_CONNECT_TIMEOUT', 'FETCH_ERROR']
-// Also checks: error.status in [429, 500, 502, 503, 504]
+// Also checks: error.statusCode in [429, 500, 502, 503, 504]
+//   (Phase 4's ApiError uses .statusCode, not .status — check both for compat)
 // Does NOT retry: 400, 401, 403, 404, 409, 422 (client errors are not transient)
 
 // Network-level errors (subset used by queue drain)

@@ -232,20 +232,23 @@ describe("Session detail command", () => {
   }, 15_000);
 
   test("Test 9: session <id> --tag adds tag and verifies via API", async () => {
-    // Fetch the session before tagging
+    // Fetch the session before tagging to capture original state
     const before = await fetchSessionDetail(api, ctx.fixtures.sess_5_parsed);
-    const tagsBefore = (before as any).tags ?? [];
+    const tagsBefore: string[] = (before as any).tags ?? [];
 
-    // Add a tag via the API (same as CLI --tag does)
-    const newTag = "test-e2e";
-    if (!tagsBefore.includes(newTag)) {
+    try {
+      // Add a tag via the API (same as CLI --tag does)
+      const newTag = "test-e2e";
       const newTags = [...tagsBefore, newTag];
       await api.updateSession(ctx.fixtures.sess_5_parsed, { tags: newTags });
-    }
 
-    // Verify the tag was added
-    const after = await fetchSessionDetail(api, ctx.fixtures.sess_5_parsed);
-    expect((after as any).tags).toContain("test-e2e");
+      // Verify the tag was added
+      const after = await fetchSessionDetail(api, ctx.fixtures.sess_5_parsed);
+      expect((after as any).tags).toContain("test-e2e");
+    } finally {
+      // Restore original tags so we don't pollute shared fixture data
+      await api.updateSession(ctx.fixtures.sess_5_parsed, { tags: tagsBefore });
+    }
   }, 15_000);
 });
 

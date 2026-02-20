@@ -69,14 +69,14 @@ export class ApiClient {
         });
 
         if (!response.ok) {
-          // Create an error with status code for retry predicate
+          // Throw Phase 4's ApiError which already has a statusCode property.
+          // isRetryableHttpError checks error.statusCode for retry decisions.
           const errorBody = await response.text().catch(() => '');
-          const error = new NetworkError(
+          throw new ApiError(
             `HTTP ${response.status}: ${errorBody || response.statusText}`,
-            { code: this.httpStatusToErrorCode(response.status) },
+            response.status,
+            errorBody || undefined,
           );
-          (error as any).status = response.status;
-          throw error;
         }
 
         return response.json() as T;
@@ -143,7 +143,7 @@ The `signal` parameter flows from the constructor through to `withRetry` and `fe
 
 Replace the hardcoded 2-second timeout with a more generous default since retries handle transient slowness:
 
-- Default timeout per individual request: 10 seconds (up from 2s)
+- Default timeout per individual request: 10 seconds (Phase 4 already uses 10s)
 - Total worst-case for 3 retries: ~10s + 1s delay + 10s + 2s delay + 10s = ~33s
 - Event ingestion timeout: 5 seconds (events are small payloads)
 
