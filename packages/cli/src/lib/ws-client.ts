@@ -311,7 +311,7 @@ export class WsClient extends EventEmitter {
   private buildWsUrl(): string {
     let base = this.options.baseUrl.replace(/\/+$/, "");
     base = base.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
-    return `${base}/api/ws?token=${this.options.apiKey}`;
+    return `${base}/api/ws?token=${encodeURIComponent(this.options.apiKey)}`;
   }
 
   /**
