@@ -17,10 +17,13 @@
  * All temp directories are cleaned up after each test.
  */
 
-import { describe, it, expect, afterEach, beforeEach } from "bun:test";
+import { describe, it, expect, afterEach, beforeEach, setDefaultTimeout } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+
+// Hook tests spawn background processes with python3 — need generous timeouts
+setDefaultTimeout(15000);
 import { execSync } from "node:child_process";
 
 // ---------------------------------------------------------------------------
@@ -140,8 +143,9 @@ function gitExec(
     ...process.env,
     // Prepend mock bin dir to PATH so hooks find our mock fuel-code
     PATH: `${mockBinDir}:${process.env.PATH}`,
-    // Prevent git from using system-wide hooks
+    // Prevent git from using system-wide or global config (e.g. core.hooksPath)
     GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
   };
 
   try {
@@ -591,6 +595,210 @@ describe("pre-push hook", () => {
     const pushEntries = entries.filter((e) => e.args.includes("git.push"));
 
     expect(pushEntries.length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: Repo-local hook dispatch (core.hooksPath scenario)
+// ---------------------------------------------------------------------------
+
+/**
+ * Set up a test scenario simulating global core.hooksPath:
+ *   - fuel-code hooks live in a separate directory (not .git/hooks/)
+ *   - core.hooksPath is set to that directory
+ *   - repo-local .git/hooks/ can contain user hooks that should still fire
+ */
+function setupGlobalHooksRepo(prefix: string): {
+  repoDir: string;
+  captureFile: string;
+  mockBinDir: string;
+  globalHooksDir: string;
+} {
+  const baseDir = makeTempDir(prefix);
+  const repoDir = path.join(baseDir, "repo");
+  const mockBinDir = path.join(baseDir, "bin");
+  const captureFile = path.join(baseDir, "captured.jsonl");
+  const globalHooksDir = path.join(baseDir, "global-hooks");
+
+  fs.mkdirSync(repoDir);
+  fs.mkdirSync(mockBinDir);
+  fs.mkdirSync(globalHooksDir);
+
+  // Initialize git repo
+  execSync("git init", { cwd: repoDir, stdio: "pipe" });
+  execSync('git config user.email "test@test.com"', { cwd: repoDir, stdio: "pipe" });
+  execSync('git config user.name "Test User"', { cwd: repoDir, stdio: "pipe" });
+
+  // Mock fuel-code binary
+  const mockScript = `#!/usr/bin/env bash
+STDIN_DATA=""
+for arg in "$@"; do
+  if [ "$arg" = "--data-stdin" ]; then
+    STDIN_DATA=$(cat)
+    break
+  fi
+done
+echo "ARGS: $@" >> "${captureFile}"
+echo "STDIN: $STDIN_DATA" >> "${captureFile}"
+echo "---" >> "${captureFile}"
+`;
+  fs.writeFileSync(path.join(mockBinDir, "fuel-code"), mockScript, { mode: 0o755 });
+
+  // Install fuel-code hooks into the GLOBAL hooks dir (not .git/hooks/)
+  fs.copyFileSync(
+    path.join(HOOKS_DIR, "resolve-workspace.sh"),
+    path.join(globalHooksDir, "resolve-workspace.sh"),
+  );
+  fs.chmodSync(path.join(globalHooksDir, "resolve-workspace.sh"), 0o755);
+
+  for (const hook of ["post-commit", "post-checkout", "post-merge", "pre-push"]) {
+    fs.copyFileSync(
+      path.join(HOOKS_DIR, hook),
+      path.join(globalHooksDir, hook),
+    );
+    fs.chmodSync(path.join(globalHooksDir, hook), 0o755);
+  }
+
+  // Set core.hooksPath to the global hooks dir (repo-local config only)
+  execSync(`git config core.hooksPath "${globalHooksDir}"`, {
+    cwd: repoDir,
+    stdio: "pipe",
+  });
+
+  // Add a remote so resolve-workspace.sh works
+  execSync("git remote add origin https://github.com/test/hook-test-repo.git", {
+    cwd: repoDir,
+    stdio: "pipe",
+  });
+
+  return { repoDir, captureFile, mockBinDir, globalHooksDir };
+}
+
+describe("repo-local hook dispatch (core.hooksPath scenario)", () => {
+  it("dispatches to repo-local .git/hooks/post-commit alongside fuel-code", async () => {
+    const { repoDir, captureFile, mockBinDir } = setupGlobalHooksRepo("hook-local-pc-");
+
+    // Place a local hook in .git/hooks/post-commit that writes a marker
+    const markerFile = path.join(repoDir, "..", "local-hook-ran");
+    const localHook = `#!/usr/bin/env bash
+echo "local-post-commit" > "${markerFile}"
+`;
+    const gitHooksDir = path.join(repoDir, ".git", "hooks");
+    fs.mkdirSync(gitHooksDir, { recursive: true });
+    fs.writeFileSync(path.join(gitHooksDir, "post-commit"), localHook, { mode: 0o755 });
+
+    // Make a commit
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "content");
+    gitExec(repoDir, mockBinDir, "git add file.txt");
+    gitExec(repoDir, mockBinDir, 'git commit -m "test local dispatch"');
+
+    // Both should have fired
+    const captured = await waitForCapture(captureFile);
+    const entries = parseCaptured(captured);
+    const commitEntry = entries.find((e) => e.args.includes("git.commit"));
+    expect(commitEntry).toBeDefined();
+
+    // Local hook should have run too
+    await Bun.sleep(200);
+    expect(fs.existsSync(markerFile)).toBe(true);
+    expect(fs.readFileSync(markerFile, "utf-8").trim()).toBe("local-post-commit");
+  });
+
+  it("skips repo-local hook if it is a fuel-code hook (prevents double-execution)", async () => {
+    const { repoDir, captureFile, mockBinDir } = setupGlobalHooksRepo("hook-local-skip-");
+
+    // Place a fuel-code hook in .git/hooks/post-commit (simulating leftover per-repo install)
+    const gitHooksDir = path.join(repoDir, ".git", "hooks");
+    fs.mkdirSync(gitHooksDir, { recursive: true });
+    fs.copyFileSync(
+      path.join(HOOKS_DIR, "post-commit"),
+      path.join(gitHooksDir, "post-commit"),
+    );
+    fs.chmodSync(path.join(gitHooksDir, "post-commit"), 0o755);
+
+    // Make a commit
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "content");
+    gitExec(repoDir, mockBinDir, "git add file.txt");
+    gitExec(repoDir, mockBinDir, 'git commit -m "no double fire"');
+
+    const captured = await waitForCapture(captureFile);
+    const entries = parseCaptured(captured);
+
+    // Should only have ONE git.commit event (not two)
+    const commitEntries = entries.filter((e) => e.args.includes("git.commit"));
+    expect(commitEntries.length).toBe(1);
+  });
+
+  it("repo-local pre-push hook can block the push", async () => {
+    const { repoDir, captureFile, mockBinDir, globalHooksDir } = setupGlobalHooksRepo("hook-local-pp-block-");
+
+    // Place a local pre-push hook that exits non-zero
+    const gitHooksDir = path.join(repoDir, ".git", "hooks");
+    fs.mkdirSync(gitHooksDir, { recursive: true });
+    const blockingHook = `#!/usr/bin/env bash
+# Read stdin (required for pre-push hooks)
+cat > /dev/null
+exit 1
+`;
+    fs.writeFileSync(path.join(gitHooksDir, "pre-push"), blockingHook, { mode: 0o755 });
+
+    // Create a commit
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "content");
+    gitExec(repoDir, mockBinDir, "git add file.txt");
+    gitExec(repoDir, mockBinDir, 'git commit -m "initial"');
+
+    await Bun.sleep(1500);
+    if (fs.existsSync(captureFile)) fs.unlinkSync(captureFile);
+
+    const headSha = execSync("git rev-parse HEAD", {
+      cwd: repoDir,
+      stdio: "pipe",
+    }).toString().trim();
+
+    // Run pre-push directly
+    const hookPath = path.join(globalHooksDir, "pre-push");
+    const stdinInput = `refs/heads/main ${headSha} refs/heads/main 0000000000000000000000000000000000000000\n`;
+
+    const proc = Bun.spawn(["bash", hookPath, "origin", "https://github.com/test/repo.git"], {
+      cwd: repoDir,
+      stdout: "pipe",
+      stderr: "pipe",
+      stdin: new Blob([stdinInput]),
+      env: {
+        ...process.env,
+        PATH: `${mockBinDir}:${process.env.PATH}`,
+      },
+    });
+
+    const exitCode = await proc.exited;
+
+    // Should have exited non-zero (local hook blocked it)
+    expect(exitCode).not.toBe(0);
+
+    // fuel-code emit should NOT have been called (push was blocked)
+    await Bun.sleep(500);
+    const captured = fs.existsSync(captureFile)
+      ? fs.readFileSync(captureFile, "utf-8")
+      : "";
+    const entries = parseCaptured(captured);
+    const pushEntries = entries.filter((e) => e.args.includes("git.push"));
+    expect(pushEntries.length).toBe(0);
+  });
+
+  it("does not dispatch if no repo-local hook exists", async () => {
+    const { repoDir, captureFile, mockBinDir } = setupGlobalHooksRepo("hook-local-none-");
+
+    // No local hooks in .git/hooks/ — just fuel-code global hooks
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "content");
+    gitExec(repoDir, mockBinDir, "git add file.txt");
+    gitExec(repoDir, mockBinDir, 'git commit -m "no local hooks"');
+
+    const captured = await waitForCapture(captureFile);
+    const entries = parseCaptured(captured);
+    const commitEntry = entries.find((e) => e.args.includes("git.commit"));
+
+    // fuel-code should still work
+    expect(commitEntry).toBeDefined();
   });
 });
 

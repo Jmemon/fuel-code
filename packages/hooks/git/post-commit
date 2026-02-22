@@ -3,7 +3,16 @@
 # Emits git.commit event with commit metadata.
 # SAFETY: Always exits 0. Never blocks git. Fire-and-forget.
 
-# Chain to user's existing hook if present
+# Dispatch to repo-local .git/hooks/post-commit (core.hooksPath overrides it)
+REPO_GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
+if [ -n "$REPO_GIT_DIR" ]; then
+  LOCAL_HOOK="$REPO_GIT_DIR/hooks/post-commit"
+  if [ -x "$LOCAL_HOOK" ] && ! head -5 "$LOCAL_HOOK" | grep -q "fuel-code:" 2>/dev/null; then
+    "$LOCAL_HOOK" "$@" || true
+  fi
+fi
+
+# Chain to previous global hook if present
 USER_HOOK="$(dirname "$0")/post-commit.user"
 if [ -x "$USER_HOOK" ]; then
   "$USER_HOOK" "$@" || true

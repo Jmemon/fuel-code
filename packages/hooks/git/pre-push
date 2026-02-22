@@ -12,14 +12,26 @@ while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
   PUSH_REFS+="${local_ref} ${local_sha} ${remote_ref} ${remote_sha}\n"
 done
 
-# Chain user hook — pipe stdin to it. User hook CAN block the push.
+# Dispatch to repo-local .git/hooks/pre-push (core.hooksPath overrides it).
+# Local hook CAN block the push — respect its exit code.
+REPO_GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
+if [ -n "$REPO_GIT_DIR" ]; then
+  LOCAL_HOOK="$REPO_GIT_DIR/hooks/pre-push"
+  if [ -x "$LOCAL_HOOK" ] && ! head -5 "$LOCAL_HOOK" | grep -q "fuel-code:" 2>/dev/null; then
+    printf '%b' "$PUSH_REFS" | "$LOCAL_HOOK" "$@"
+    LOCAL_EXIT=$?
+    if [ $LOCAL_EXIT -ne 0 ]; then
+      exit $LOCAL_EXIT
+    fi
+  fi
+fi
+
+# Chain to previous global hook — pipe stdin to it. User hook CAN block the push.
 USER_HOOK="$(dirname "$0")/pre-push.user"
 if [ -x "$USER_HOOK" ]; then
-  # Re-feed the refs to the user hook
   printf '%b' "$PUSH_REFS" | "$USER_HOOK" "$@"
   USER_EXIT=$?
   if [ $USER_EXIT -ne 0 ]; then
-    # User's hook blocked the push. Respect that. Don't emit event.
     exit $USER_EXIT
   fi
 fi
