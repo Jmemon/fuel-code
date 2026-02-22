@@ -32,7 +32,7 @@ import {
 // ---------------------------------------------------------------------------
 
 /** Pattern for valid device names: 1-64 chars, alphanumeric/hyphens/underscores */
-const DEVICE_NAME_REGEX = /^[a-zA-Z0-9_-]{1,64}$/;
+const DEVICE_NAME_REGEX = /^[a-zA-Z0-9._-]{1,64}$/;
 
 /**
  * Validate a device name string.
