@@ -11,10 +11,11 @@ CLI-first developer activity tracking. Captures Claude Code sessions, git activi
 - [Prerequisites](#prerequisites)
 - [Setup](#setup)
   - [1. Install Dependencies](#1-install-dependencies)
-  - [2. Start Infrastructure](#2-start-infrastructure)
-  - [3. Configure and Start the Server](#3-configure-and-start-the-server)
-  - [4. Initialize the CLI](#4-initialize-the-cli)
-  - [5. Install Hooks](#5-install-hooks)
+  - [2. Install the CLI](#2-install-the-cli)
+  - [3. Start Infrastructure](#3-start-infrastructure)
+  - [4. Configure and Start the Server](#4-configure-and-start-the-server)
+  - [5. Initialize the CLI](#5-initialize-the-cli)
+  - [6. Install Hooks](#6-install-hooks)
 - [Verification Workflows](#verification-workflows)
   - [Workflow 1: Health Check and Status](#workflow-1-health-check-and-status)
   - [Workflow 2: Hook Installation and Verification](#workflow-2-hook-installation-and-verification)
@@ -58,7 +59,15 @@ cd /path/to/fuel-code
 bun install
 ```
 
-### 2. Start Infrastructure
+### 2. Install the CLI
+
+```bash
+cd packages/cli && bun link
+```
+
+This makes the `fuel-code` command globally available.
+
+### 3. Start Infrastructure
 
 The project uses Docker Compose for Postgres 16 and Redis 7. The compose file uses non-standard ports to avoid conflicts with any local instances:
 
@@ -81,7 +90,7 @@ docker compose -f docker-compose.test.yml ps
 
 All three should show as "running".
 
-### 3. Configure and Start the Server
+### 4. Configure and Start the Server
 
 Create the server `.env` file:
 
@@ -126,10 +135,10 @@ Event consumer started { registeredHandlers: [...] }
 
 **Leave this terminal running.** Open a new terminal for the next steps.
 
-### 4. Initialize the CLI
+### 5. Initialize the CLI
 
 ```bash
-bun run packages/cli/src/index.ts init \
+fuel-code init \
   --url http://localhost:3020 \
   --api-key fc_local_dev_key_123
 ```
@@ -148,19 +157,19 @@ fuel-code initialized successfully!
 
 This creates `~/.fuel-code/config.yaml` with your device identity and backend connection info.
 
-### 5. Install Hooks
+### 6. Install Hooks
 
 Install both Claude Code hooks and git hooks:
 
 ```bash
-bun run packages/cli/src/index.ts hooks install
+fuel-code hooks install
 ```
 
 Expected output:
 ```
 Claude Code hooks installed successfully.
-  SessionStart → /path/to/packages/hooks/claude/SessionStart.sh
-  Stop         → /path/to/packages/hooks/claude/SessionEnd.sh
+  SessionStart → bash -c 'fuel-code cc-hook session-start &'
+  Stop         → bash -c 'fuel-code cc-hook session-end &'
   Settings     → ~/.claude/settings.json
 
 Git hooks installed successfully.
@@ -175,17 +184,6 @@ You are now fully set up. Every Claude Code session and git operation in any rep
 ## Verification Workflows
 
 Each workflow describes what to do, what commands to run, and what output to expect. They are ordered from simple infrastructure checks to full end-to-end flows.
-
-> **Shorthand**: Throughout these workflows, `fuel-code` means:
-> ```bash
-> bun run /path/to/fuel-code/packages/cli/src/index.ts
-> ```
-> You can create an alias for convenience:
-> ```bash
-> alias fuel-code="bun run /path/to/fuel-code/packages/cli/src/index.ts"
-> ```
-
----
 
 ### Workflow 1: Health Check and Status
 
