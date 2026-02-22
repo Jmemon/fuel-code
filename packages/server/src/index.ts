@@ -132,6 +132,7 @@ async function main(): Promise<void> {
   // transcript upload route (Phase 2 Task 8).
   const s3Config = loadS3Config();
   const s3 = createS3Client(s3Config, logger);
+  await s3.ensureBucket();
   const summaryConfig = loadSummaryConfig();
   const pipelineDeps: PipelineDeps = { sql, s3, summaryConfig, logger };
 

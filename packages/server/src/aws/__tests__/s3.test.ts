@@ -111,6 +111,7 @@ describe("createS3Client — interface shape", () => {
     expect(typeof s3.headObject).toBe("function");
     expect(typeof s3.delete).toBe("function");
     expect(typeof s3.healthCheck).toBe("function");
+    expect(typeof s3.ensureBucket).toBe("function");
   });
 });
 
@@ -154,6 +155,19 @@ describe("createS3Client — error handling (no real S3)", () => {
       // Could be NOT_FOUND or DOWNLOAD_FAILED depending on the error type
       expect(code).toMatch(/STORAGE_S3_(NOT_FOUND|DOWNLOAD_FAILED)/);
     }
+  });
+
+  test("ensureBucket throws on connection failure (unreachable endpoint)", async () => {
+    const logger = createMockLogger();
+    const config: S3Config = {
+      bucket: "nonexistent-bucket",
+      region: "us-east-1",
+      endpoint: "http://localhost:1",
+      forcePathStyle: true,
+    };
+    const s3 = createS3Client(config, logger);
+
+    await expect(s3.ensureBucket()).rejects.toThrow();
   });
 
   test("healthCheck returns ok:false on connection failure (never throws)", async () => {
@@ -283,6 +297,34 @@ describe.skipIf(!hasS3)("S3 integration tests (LocalStack)", () => {
       expect(err).toBeInstanceOf(StorageError);
       expect((err as StorageError).code).toContain("NOT_FOUND");
     }
+  });
+
+  test("ensureBucket is a no-op when bucket already exists", async () => {
+    // Should not throw — bucket was created before the test suite
+    await s3.ensureBucket();
+    expect(logger.info).toHaveBeenCalled();
+  });
+
+  test("ensureBucket creates a missing bucket", async () => {
+    const freshLogger = createMockLogger();
+    const tempBucket = `fuel-code-test-ensure-${randomUUID().slice(0, 8)}`;
+    const config: S3Config = {
+      bucket: tempBucket,
+      region: process.env.S3_REGION || "us-east-1",
+      endpoint: process.env.S3_ENDPOINT,
+      forcePathStyle: true,
+    };
+    const tempS3 = createS3Client(config, freshLogger);
+
+    // Bucket doesn't exist yet — ensureBucket should create it
+    await tempS3.ensureBucket();
+
+    // Verify bucket is now accessible
+    const health = await tempS3.healthCheck();
+    expect(health.ok).toBe(true);
+
+    // Calling again should be idempotent (no-op)
+    await tempS3.ensureBucket();
   });
 
   test("healthCheck returns { ok: true } when bucket is accessible", async () => {

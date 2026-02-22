@@ -23,6 +23,7 @@ import {
   GetObjectCommand,
   HeadObjectCommand,
   HeadBucketCommand,
+  CreateBucketCommand,
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -74,6 +75,8 @@ export interface FuelCodeS3Client {
   delete(key: string): Promise<void>;
   /** Check bucket accessibility — returns ok:true if the bucket is reachable */
   healthCheck(): Promise<HealthCheckResult>;
+  /** Ensure the configured bucket exists, creating it if necessary (idempotent) */
+  ensureBucket(): Promise<void>;
 }
 
 /**
@@ -400,6 +403,28 @@ export function createS3Client(config: S3Config, logger: pino.Logger): FuelCodeS
      * Returns { ok: true } on success, { ok: false, error } on failure.
      * Never throws — the result object communicates the status.
      */
+    /**
+     * Ensure the S3 bucket exists, creating it if it doesn't.
+     * Called at server startup so transcript uploads never hit NoSuchBucket.
+     */
+    async ensureBucket(): Promise<void> {
+      try {
+        await client.send(new HeadBucketCommand({ Bucket: bucket }));
+        logger.info({ bucket }, `S3 bucket exists: ${bucket}`);
+      } catch (err) {
+        const statusCode = (err as any)?.$metadata?.httpStatusCode;
+        const errorName = (err as any)?.name || "";
+
+        if (statusCode === 404 || errorName === "NotFound" || errorName === "NoSuchBucket") {
+          logger.info({ bucket }, `S3 bucket not found, creating: ${bucket}`);
+          await client.send(new CreateBucketCommand({ Bucket: bucket }));
+          logger.info({ bucket }, `S3 bucket created: ${bucket}`);
+        } else {
+          throw err;
+        }
+      }
+    },
+
     async healthCheck(): Promise<HealthCheckResult> {
       try {
         await client.send(
