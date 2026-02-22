@@ -30,6 +30,7 @@ import { createTimelineCommand } from "./commands/timeline.js";
 import { createEmitCommand } from "./commands/emit.js";
 import { createQueueCommand } from "./commands/queue.js";
 import { createHooksCommand } from "./commands/hooks.js";
+import { createCCHookCommand } from "./commands/cc-hook.js";
 import { createTranscriptCommand } from "./commands/transcript.js";
 import { createBackfillCommand } from "./commands/backfill.js";
 import { createSessionDetailCommand } from "./commands/session-detail.js";
@@ -98,6 +99,9 @@ program.addCommand(createQueueCommand());
 
 // Register hooks command (Task 13: Claude Code hook installation and management)
 program.addCommand(createHooksCommand());
+
+// Register cc-hook command (internal: called by CC hooks in settings.json)
+program.addCommand(createCCHookCommand());
 
 // Register transcript command (Task 8: transcript upload for session post-processing)
 program.addCommand(createTranscriptCommand());

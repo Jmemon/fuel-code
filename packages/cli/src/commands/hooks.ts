@@ -43,11 +43,18 @@ const CLAUDE_SETTINGS_PATH = path.join(
 );
 
 /**
- * Marker substring in hook command paths that identifies a fuel-code hook.
- * Used during upsert to find and replace existing fuel-code entries
- * without disturbing hooks from other tools.
+ * Check if a hook command string belongs to fuel-code.
+ * Matches both old format (shell script paths containing "fuel-code" or
+ * "SessionStart.sh"/"SessionEnd.sh") and new format ("cc-hook" commands).
  */
-const FUEL_CODE_HOOK_MARKER = "fuel-code";
+function isFuelCodeHookCommand(command: string): boolean {
+  return (
+    command.includes("cc-hook") ||
+    command.includes("fuel-code") ||
+    command.includes("SessionStart.sh") ||
+    command.includes("SessionEnd.sh")
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -162,36 +169,26 @@ function createInstallSubcommand(): Command {
 
 /**
  * Install Claude Code hooks into ~/.claude/settings.json.
- * This is the original install logic from Phase 1, extracted into its own function
- * so the install subcommand can orchestrate CC + git installs together.
+ *
+ * Writes self-contained commands (`fuel-code cc-hook session-start/end`)
+ * directly into settings.json. The commands are wrapped in `bash -c '... &'`
+ * to fork to background so they never block Claude Code startup/shutdown.
+ *
+ * No external shell scripts are referenced — the CLI itself handles all
+ * hook logic via the `cc-hook` subcommand.
  */
 export async function runCCInstall(): Promise<void> {
   const settingsPath = getSettingsPath();
   const settingsDir = path.dirname(settingsPath);
 
-  // Resolve absolute paths to the hook shell scripts.
-  // The hooks package is at packages/hooks relative to the monorepo root.
-  // We resolve from this file's location back to the hooks package.
-  const hooksDir = resolveHooksDir();
-  const sessionStartScript = path.join(hooksDir, "claude", "SessionStart.sh");
-  const sessionEndScript = path.join(hooksDir, "claude", "SessionEnd.sh");
+  // Resolve how to invoke the fuel-code CLI from settings.json hooks.
+  // Prefers the global `fuel-code` binary; falls back to `bun run <abs-path>`.
+  const cliCommand = resolveCliCommand();
 
-  // Verify hook scripts exist
-  if (!fs.existsSync(sessionStartScript)) {
-    console.error(
-      `Error: SessionStart.sh not found at ${sessionStartScript}`,
-    );
-    console.error(
-      "The hooks package may not be installed correctly. Try reinstalling.",
-    );
-    process.exit(1);
-  }
-  if (!fs.existsSync(sessionEndScript)) {
-    console.error(
-      `Error: SessionEnd.sh not found at ${sessionEndScript}`,
-    );
-    process.exit(1);
-  }
+  // Construct hook commands. Uses bash -c '... &' to fork to background
+  // so the hook exits immediately and doesn't block Claude Code.
+  const sessionStartCmd = `bash -c '${cliCommand} cc-hook session-start &'`;
+  const sessionEndCmd = `bash -c '${cliCommand} cc-hook session-end &'`;
 
   // Ensure ~/.claude/ directory exists
   if (!fs.existsSync(settingsDir)) {
@@ -220,23 +217,19 @@ export async function runCCInstall(): Promise<void> {
   }
 
   // Upsert SessionStart hook
-  upsertHook(settings.hooks, "SessionStart", sessionStartScript);
+  upsertHook(settings.hooks, "SessionStart", sessionStartCmd);
 
   // Upsert Stop hook (CC uses "Stop" for session end, not "SessionEnd")
-  upsertHook(settings.hooks, "Stop", sessionEndScript);
+  upsertHook(settings.hooks, "Stop", sessionEndCmd);
 
   // Write settings atomically: write to a tmp file then rename
   const tmpPath = settingsPath + `.tmp-${crypto.randomUUID()}`;
   fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
   fs.renameSync(tmpPath, settingsPath);
 
-  // Ensure hook scripts are executable
-  fs.chmodSync(sessionStartScript, 0o755);
-  fs.chmodSync(sessionEndScript, 0o755);
-
   console.log("Claude Code hooks installed successfully.");
-  console.log(`  SessionStart → ${sessionStartScript}`);
-  console.log(`  Stop         → ${sessionEndScript}`);
+  console.log(`  SessionStart → ${sessionStartCmd}`);
+  console.log(`  Stop         → ${sessionEndCmd}`);
   console.log(`  Settings     → ${settingsPath}`);
 
   // Auto-trigger: scan for historical Claude Code sessions and start background backfill
@@ -498,40 +491,59 @@ export async function runTest(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// CLI command resolution
 // ---------------------------------------------------------------------------
 
-/**
- * Resolve the absolute path to the hooks package directory.
- *
- * Uses the known monorepo structure: this file is in packages/cli/src/commands/,
- * and the hooks package is at packages/hooks/.
- */
-function resolveHooksDir(): string {
-  // Navigate from packages/cli/src/commands/ → packages/hooks/
-  const thisDir = path.dirname(new URL(import.meta.url).pathname);
-  return path.resolve(thisDir, "..", "..", "..", "hooks");
+/** Override the CLI command (for tests only). Set to undefined to reset. */
+let cliCommandOverride: string | undefined;
+
+export function overrideCliCommand(cmd: string | undefined): void {
+  cliCommandOverride = cmd;
 }
+
+/**
+ * Resolve the fuel-code CLI invocation command for use in settings.json hooks.
+ *
+ * Prefers a globally available `fuel-code` binary. Falls back to
+ * `bun run <absolute-path-to-cli>` using the current script's path.
+ * The path is double-quoted to handle directories with spaces.
+ */
+function resolveCliCommand(): string {
+  if (cliCommandOverride) return cliCommandOverride;
+
+  const which = Bun.which("fuel-code");
+  if (which) return "fuel-code";
+
+  // Fall back to bun run with absolute path to the CLI entry point
+  const scriptPath = path.resolve(process.argv[1]);
+  // Double-quote the path to handle spaces in directory names
+  const escaped = scriptPath.replace(/"/g, '\\"');
+  return `bun run "${escaped}"`;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 /**
  * Upsert a fuel-code hook into a Claude Code hook event slot.
  *
  * If the slot already has a fuel-code hook (identified by FUEL_CODE_HOOK_MARKER
- * in the command path), replace it. Otherwise, append a new entry.
+ * in the command string), replace it. Otherwise, append a new entry.
  * Non-fuel-code hooks from other tools are always preserved.
  *
  * @param hooks - The hooks object from settings.json
  * @param eventName - CC hook event name (e.g., "SessionStart", "Stop")
- * @param scriptPath - Absolute path to the hook shell script
+ * @param command - The full command string to register as a hook
  */
 function upsertHook(
   hooks: Record<string, ClaudeHookConfig[]>,
   eventName: string,
-  scriptPath: string,
+  command: string,
 ): void {
   const newEntry: ClaudeHookEntry = {
     type: "command",
-    command: scriptPath,
+    command,
   };
 
   // If no configs exist for this event, create a fresh one
@@ -549,11 +561,7 @@ function upsertHook(
     }
 
     const fuelCodeIdx = config.hooks.findIndex(
-      (h) =>
-        h.command &&
-        (h.command.includes(FUEL_CODE_HOOK_MARKER) ||
-          h.command.includes("SessionStart.sh") ||
-          h.command.includes("SessionEnd.sh")),
+      (h) => h.command && isFuelCodeHookCommand(h.command),
     );
 
     if (fuelCodeIdx !== -1) {
@@ -593,11 +601,7 @@ function removeHook(
     if (!config.hooks || !Array.isArray(config.hooks)) continue;
 
     config.hooks = config.hooks.filter(
-      (h) =>
-        !h.command ||
-        (!h.command.includes(FUEL_CODE_HOOK_MARKER) &&
-          !h.command.includes("SessionStart.sh") &&
-          !h.command.includes("SessionEnd.sh")),
+      (h) => !h.command || !isFuelCodeHookCommand(h.command),
     );
   }
 
@@ -629,11 +633,7 @@ function hasHook(
     (config) =>
       Array.isArray(config.hooks) &&
       config.hooks.some(
-        (h) =>
-          h.command &&
-          (h.command.includes(FUEL_CODE_HOOK_MARKER) ||
-            h.command.includes("SessionStart.sh") ||
-            h.command.includes("SessionEnd.sh")),
+        (h) => h.command && isFuelCodeHookCommand(h.command),
       ),
   );
 }

@@ -20,7 +20,7 @@ import {
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { overrideSettingsPath, runInstall, runStatus } from "../hooks.js";
+import { overrideSettingsPath, overrideCliCommand, runInstall, runStatus } from "../hooks.js";
 
 // ---------------------------------------------------------------------------
 // Test setup/teardown — each test gets a fresh temp directory
@@ -36,10 +36,13 @@ beforeEach(() => {
   fs.mkdirSync(claudeDir, { recursive: true });
   settingsPath = path.join(claudeDir, "settings.json");
   overrideSettingsPath(settingsPath);
+  // Use a stable CLI command so tests don't depend on PATH or process.argv
+  overrideCliCommand("fuel-code");
 });
 
 afterEach(() => {
   overrideSettingsPath(undefined);
+  overrideCliCommand(undefined);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -95,21 +98,21 @@ describe("hooks install", () => {
       hooks: Record<string, Array<{ matcher: string; hooks: Array<{ type: string; command: string }> }>>;
     };
 
-    // SessionStart should exist
+    // SessionStart should exist with cc-hook inline command
     expect(settings.hooks.SessionStart).toBeDefined();
     expect(settings.hooks.SessionStart).toHaveLength(1);
     expect(settings.hooks.SessionStart[0].matcher).toBe("");
     expect(settings.hooks.SessionStart[0].hooks).toHaveLength(1);
     expect(settings.hooks.SessionStart[0].hooks[0].type).toBe("command");
     expect(settings.hooks.SessionStart[0].hooks[0].command).toContain(
-      "SessionStart.sh",
+      "cc-hook session-start",
     );
 
-    // Stop (session end) should exist
+    // Stop (session end) should exist with cc-hook inline command
     expect(settings.hooks.Stop).toBeDefined();
     expect(settings.hooks.Stop).toHaveLength(1);
     expect(settings.hooks.Stop[0].hooks[0].command).toContain(
-      "SessionEnd.sh",
+      "cc-hook session-end",
     );
   });
 
@@ -169,7 +172,7 @@ describe("hooks install", () => {
 
     // And our hook should be added too
     const fuelCodeHook = sessionStartHooks.find((h) =>
-      h.command.includes("SessionStart.sh"),
+      h.command.includes("cc-hook session-start"),
     );
     expect(fuelCodeHook).toBeDefined();
 
@@ -189,8 +192,8 @@ describe("hooks install", () => {
     expect(settings.hooks).toBeDefined();
   });
 
-  it("replaces existing fuel-code hook with updated path", async () => {
-    // Pre-populate with an old fuel-code hook path
+  it("replaces existing fuel-code hook with updated command", async () => {
+    // Pre-populate with an old fuel-code hook (shell script path format)
     const existingSettings = {
       hooks: {
         SessionStart: [
@@ -220,12 +223,12 @@ describe("hooks install", () => {
 
     // Should still have exactly 1 hook (replaced, not appended)
     expect(settings.hooks.SessionStart[0].hooks).toHaveLength(1);
-    // And the path should be the new one (not the old one)
+    // Old shell script path should be gone, replaced with cc-hook command
     expect(settings.hooks.SessionStart[0].hooks[0].command).not.toContain(
       "/old/path/",
     );
     expect(settings.hooks.SessionStart[0].hooks[0].command).toContain(
-      "SessionStart.sh",
+      "cc-hook session-start",
     );
   });
 });
