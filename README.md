@@ -110,10 +110,10 @@ S3_FORCE_PATH_STYLE=true
 # ANTHROPIC_API_KEY=sk-ant-your-key-here
 ```
 
-Start the server (migrations run automatically on first startup):
+Start the server (migrations run automatically on first startup). You must run from the `packages/server/` directory so dotenv picks up the `.env` file:
 
 ```bash
-bun run packages/server/src/index.ts
+cd packages/server && bun run src/index.ts
 ```
 
 You should see log output including:
@@ -824,7 +824,7 @@ ls ~/.fuel-code/queue/
 
 5. Restart the server:
 ```bash
-bun run packages/server/src/index.ts
+cd packages/server && bun run src/index.ts
 ```
 
 6. Drain the queue:
@@ -1139,7 +1139,7 @@ Ensure `packages/server/.env` exists and has `DATABASE_URL`, `REDIS_URL`, and `A
 
 ### "Backend connectivity: FAILED" during `fuel-code init`
 The server isn't reachable. Verify:
-- Server is running (`bun run packages/server/src/index.ts`)
+- Server is running (`cd packages/server && bun run src/index.ts`)
 - The `--url` matches the server's port
 - No firewall blocking localhost connections
 
