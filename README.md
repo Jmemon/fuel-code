@@ -169,7 +169,7 @@ Expected output:
 ```
 Claude Code hooks installed successfully.
   SessionStart → bash -c 'fuel-code cc-hook session-start &'
-  Stop         → bash -c 'fuel-code cc-hook session-end &'
+  SessionEnd   → bash -c 'fuel-code cc-hook session-end &'
   Settings     → ~/.claude/settings.json
 
 Git hooks installed successfully.
@@ -261,7 +261,7 @@ fuel-code hooks status
 ```
 Claude Code hooks:
   SessionStart: installed
-  Stop:         installed
+  SessionEnd:   installed
 
 Git hooks:
   core.hooksPath: ~/.fuel-code/git-hooks
@@ -273,7 +273,7 @@ Git hooks:
 
 2. Verify CC hooks are in Claude's settings:
 ```bash
-cat ~/.claude/settings.json | jq '.hooks.SessionStart, .hooks.Stop'
+cat ~/.claude/settings.json | jq '.hooks.SessionStart, .hooks.SessionEnd'
 ```
 
 **Verify**: Both have entries with commands pointing to `fuel-code` hook scripts.

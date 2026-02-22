@@ -12,7 +12,7 @@
  *
  * Subcommands:
  *   session-start — Handle SessionStart hook (emits session.start event)
- *   session-end   — Handle Stop hook (emits session.end event + transcript upload)
+ *   session-end   — Handle SessionEnd hook (emits session.end event + transcript upload)
  *
  * Constraints:
  *   - Must produce NO stdout (could confuse CC)
@@ -132,7 +132,7 @@ function createSessionStartHandler(): Command {
 
 function createSessionEndHandler(): Command {
   return new Command("session-end")
-    .description("Handle Claude Code Stop hook")
+    .description("Handle Claude Code SessionEnd hook")
     .action(async () => {
       try {
         const input = await readStdin();
@@ -155,7 +155,9 @@ function createSessionEndHandler(): Command {
         const transcriptPath = String(
           context.transcript_path ?? "",
         ).trim();
-        const endReason = String(context.end_reason ?? "exit").trim();
+        const endReason = mapSessionEndReason(
+          String(context.reason ?? "exit").trim(),
+        );
 
         const workspace = resolveWorkspace(cwd);
 
@@ -259,6 +261,23 @@ function resolveWorkspace(cwd: string): WorkspaceInfo {
   );
 
   return { workspaceId, gitBranch, gitRemote };
+}
+
+/**
+ * Map SessionEnd `reason` values to fuel-code's end_reason enum.
+ * SessionEnd provides: prompt_input_exit, clear, logout, etc.
+ */
+function mapSessionEndReason(reason: string): string {
+  switch (reason) {
+    case "prompt_input_exit":
+      return "exit";
+    case "clear":
+      return "clear";
+    case "logout":
+      return "logout";
+    default:
+      return "exit";
+  }
 }
 
 function execSilent(cmd: string, cwd: string): string | null {

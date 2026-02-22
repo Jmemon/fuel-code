@@ -96,7 +96,7 @@ function countJsonFiles(dir: string): number {
 
 /**
  * Check if CC (Claude Code) hooks are installed by reading ~/.claude/settings.json
- * and looking for fuel-code hook entries in SessionStart or Stop events.
+ * and looking for fuel-code hook entries in SessionStart or SessionEnd events.
  */
 function checkCCHooksInstalled(): boolean {
   try {
@@ -108,7 +108,7 @@ function checkCCHooksInstalled(): boolean {
     if (!hooks || typeof hooks !== "object") return false;
 
     // Check if SessionStart or Stop has a fuel-code hook entry
-    for (const eventName of ["SessionStart", "Stop"]) {
+    for (const eventName of ["SessionStart", "SessionEnd"]) {
       const configs = hooks[eventName];
       if (!Array.isArray(configs)) continue;
       for (const config of configs) {

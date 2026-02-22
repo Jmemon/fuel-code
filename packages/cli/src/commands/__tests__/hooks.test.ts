@@ -91,7 +91,7 @@ describe("hooks install", () => {
     expect(settings.hooks).toBeDefined();
   });
 
-  it("creates settings.json with SessionStart and Stop hooks", async () => {
+  it("creates settings.json with SessionStart and SessionEnd hooks", async () => {
     await runInstall();
 
     const settings = readSettings() as {
@@ -108,10 +108,10 @@ describe("hooks install", () => {
       "cc-hook session-start",
     );
 
-    // Stop (session end) should exist with cc-hook inline command
-    expect(settings.hooks.Stop).toBeDefined();
-    expect(settings.hooks.Stop).toHaveLength(1);
-    expect(settings.hooks.Stop[0].hooks[0].command).toContain(
+    // SessionEnd should exist with cc-hook inline command
+    expect(settings.hooks.SessionEnd).toBeDefined();
+    expect(settings.hooks.SessionEnd).toHaveLength(1);
+    expect(settings.hooks.SessionEnd[0].hooks[0].command).toContain(
       "cc-hook session-end",
     );
   });
@@ -128,8 +128,8 @@ describe("hooks install", () => {
     expect(settings.hooks.SessionStart).toHaveLength(1);
     expect(settings.hooks.SessionStart[0].hooks).toHaveLength(1);
 
-    expect(settings.hooks.Stop).toHaveLength(1);
-    expect(settings.hooks.Stop[0].hooks).toHaveLength(1);
+    expect(settings.hooks.SessionEnd).toHaveLength(1);
+    expect(settings.hooks.SessionEnd[0].hooks).toHaveLength(1);
   });
 
   it("preserves existing non-fuel-code hooks", async () => {
@@ -262,12 +262,12 @@ describe("hooks status", () => {
 
     const output = lines.join("\n");
     expect(output).toContain("SessionStart:");
-    expect(output).toContain("Stop:");
+    expect(output).toContain("SessionEnd:");
     // The CC hooks section should show "installed" for both CC hooks.
     // Git hooks section may show "not installed" since we only installed CC hooks.
-    // Check that SessionStart and Stop lines specifically say "installed" (not "not installed")
+    // Check that SessionStart and SessionEnd lines specifically say "installed" (not "not installed")
     const ccLines = output.split("\n").filter(
-      (l) => l.includes("SessionStart:") || l.includes("Stop:"),
+      (l) => l.includes("SessionStart:") || l.includes("SessionEnd:"),
     );
     expect(ccLines).toHaveLength(2);
     for (const line of ccLines) {

@@ -5,7 +5,7 @@
  * for fuel-code activity tracking.
  *
  * CC hooks: bash scripts registered in ~/.claude/settings.json that fire
- * on SessionStart/Stop events.
+ * on SessionStart/SessionEnd events.
  *
  * Git hooks: bash scripts installed via core.hooksPath (global) or
  * .git/hooks/ (per-repo) that fire on post-commit, post-checkout,
@@ -219,8 +219,8 @@ export async function runCCInstall(): Promise<void> {
   // Upsert SessionStart hook
   upsertHook(settings.hooks, "SessionStart", sessionStartCmd);
 
-  // Upsert Stop hook (CC uses "Stop" for session end, not "SessionEnd")
-  upsertHook(settings.hooks, "Stop", sessionEndCmd);
+  // Upsert SessionEnd hook (fires once when the session actually terminates)
+  upsertHook(settings.hooks, "SessionEnd", sessionEndCmd);
 
   // Write settings atomically: write to a tmp file then rename
   const tmpPath = settingsPath + `.tmp-${crypto.randomUUID()}`;
@@ -229,7 +229,7 @@ export async function runCCInstall(): Promise<void> {
 
   console.log("Claude Code hooks installed successfully.");
   console.log(`  SessionStart → ${sessionStartCmd}`);
-  console.log(`  Stop         → ${sessionEndCmd}`);
+  console.log(`  SessionEnd   → ${sessionEndCmd}`);
   console.log(`  Settings     → ${settingsPath}`);
 
   // Auto-trigger: scan for historical Claude Code sessions and start background backfill
@@ -302,7 +302,7 @@ function createUninstallSubcommand(): Command {
 
 /**
  * Remove fuel-code CC hooks from ~/.claude/settings.json.
- * Removes the SessionStart and Stop hook entries that contain fuel-code markers.
+ * Removes the SessionStart and SessionEnd hook entries that contain fuel-code markers.
  */
 async function runCCUninstall(): Promise<void> {
   const settingsPath = getSettingsPath();
@@ -327,9 +327,9 @@ async function runCCUninstall(): Promise<void> {
     return;
   }
 
-  // Remove fuel-code entries from SessionStart and Stop
+  // Remove fuel-code entries from SessionStart and SessionEnd
   removeHook(settings.hooks, "SessionStart");
-  removeHook(settings.hooks, "Stop");
+  removeHook(settings.hooks, "SessionEnd");
 
   // Write back
   const tmpPath = settingsPath + `.tmp-${crypto.randomUUID()}`;
@@ -362,7 +362,7 @@ export async function runStatus(): Promise<void> {
 
   if (!fs.existsSync(settingsPath)) {
     console.log("  SessionStart: not installed");
-    console.log("  Stop:         not installed");
+    console.log("  SessionEnd:   not installed");
   } else {
     let settings: ClaudeSettings;
     try {
@@ -376,13 +376,13 @@ export async function runStatus(): Promise<void> {
 
     const hooks = settings.hooks ?? {};
     const sessionStartInstalled = hasHook(hooks, "SessionStart");
-    const stopInstalled = hasHook(hooks, "Stop");
+    const sessionEndInstalled = hasHook(hooks, "SessionEnd");
 
     console.log(
       `  SessionStart: ${sessionStartInstalled ? "installed" : "not installed"}`,
     );
     console.log(
-      `  Stop:         ${stopInstalled ? "installed" : "not installed"}`,
+      `  SessionEnd:   ${sessionEndInstalled ? "installed" : "not installed"}`,
     );
   }
 
@@ -533,7 +533,7 @@ function resolveCliCommand(): string {
  * Non-fuel-code hooks from other tools are always preserved.
  *
  * @param hooks - The hooks object from settings.json
- * @param eventName - CC hook event name (e.g., "SessionStart", "Stop")
+ * @param eventName - CC hook event name (e.g., "SessionStart", "SessionEnd")
  * @param command - The full command string to register as a hook
  */
 function upsertHook(
@@ -588,7 +588,7 @@ function upsertHook(
  * Preserves non-fuel-code hooks. Removes empty config blocks.
  *
  * @param hooks - The hooks object from settings.json
- * @param eventName - CC hook event name (e.g., "SessionStart", "Stop")
+ * @param eventName - CC hook event name (e.g., "SessionStart", "SessionEnd")
  */
 function removeHook(
   hooks: Record<string, ClaudeHookConfig[]>,
@@ -620,7 +620,7 @@ function removeHook(
  * Check if a fuel-code hook is installed for a given event name.
  *
  * @param hooks - The hooks object from settings.json
- * @param eventName - CC hook event name (e.g., "SessionStart", "Stop")
+ * @param eventName - CC hook event name (e.g., "SessionStart", "SessionEnd")
  */
 function hasHook(
   hooks: Record<string, ClaudeHookConfig[]>,

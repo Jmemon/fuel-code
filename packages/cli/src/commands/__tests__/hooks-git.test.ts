@@ -405,7 +405,7 @@ describe("hooks install (default — both CC and git)", () => {
     expect(fs.existsSync(settingsPath)).toBe(true);
     const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
     expect(settings.hooks?.SessionStart).toBeDefined();
-    expect(settings.hooks?.Stop).toBeDefined();
+    expect(settings.hooks?.SessionEnd).toBeDefined();
 
     // Git hooks should be installed
     expect(gitResult.installed).toEqual([...GIT_HOOK_NAMES]);
