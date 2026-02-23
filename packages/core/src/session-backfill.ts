@@ -106,6 +106,8 @@ export interface IngestDeps {
   throttleMs?: number;
   /** Set of session IDs already ingested (for resume) */
   alreadyIngested?: Set<string>;
+  /** Number of sessions to process concurrently (default: 10) */
+  concurrency?: number;
 }
 
 /** Entry from a sessions-index.json file */
@@ -139,6 +141,32 @@ const DEFAULT_SKIP_ACTIVE_THRESHOLD_MS = 300_000;
 
 /** HTTP timeout for dedup checks and transcript uploads (2 minutes) */
 const HTTP_TIMEOUT_MS = 120_000;
+
+/**
+ * Combine the user's abort signal with a timeout into a single signal.
+ * When either fires, the combined signal aborts — enabling immediate
+ * cancellation of in-flight HTTP requests on Ctrl-C.
+ */
+function combinedSignal(userSignal?: AbortSignal): AbortSignal {
+  if (!userSignal) return AbortSignal.timeout(HTTP_TIMEOUT_MS);
+  return AbortSignal.any([userSignal, AbortSignal.timeout(HTTP_TIMEOUT_MS)]);
+}
+
+/**
+ * Abort-aware sleep: resolves after `ms` milliseconds OR rejects immediately
+ * if the abort signal fires. This ensures retry backoff loops don't block
+ * cancellation.
+ */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    }, { once: true });
+  });
+}
 
 // ---------------------------------------------------------------------------
 // projectDirToPath: convert Claude projects directory name to filesystem path
@@ -414,13 +442,16 @@ export async function scanForSessions(
 /**
  * Ingest discovered sessions into the fuel-code backend.
  *
+ * Processes sessions concurrently (configurable via deps.concurrency, default 10).
  * For each session:
  *   1. Check if already ingested (dedup via GET /api/sessions/:id)
- *   2. Upload transcript file (POST /api/sessions/:id/transcript/upload)
- *   3. Emit synthetic session.start + session.end events via POST /api/events/ingest
- *   4. Report progress
+ *   2. Emit synthetic session.start event and wait for the row to exist
+ *   3. Upload transcript file (POST /api/sessions/:id/transcript/upload)
+ *   4. Emit synthetic session.end event
+ *   5. Report progress
  *
- * Events are batched and throttled to avoid overwhelming the backend.
+ * Handles rate limiting (429) with shared backoff across all workers.
+ * Session.end events are batched and flushed periodically.
  *
  * @param sessions - Array of discovered sessions to ingest
  * @param deps - Injected dependencies (API client, config, callbacks)
@@ -434,6 +465,7 @@ export async function ingestBackfillSessions(
   const throttleMs = deps.throttleMs ?? 100;
   const alreadyIngested = deps.alreadyIngested ?? new Set<string>();
   const baseUrl = deps.serverUrl.replace(/\/+$/, "");
+  const concurrency = deps.concurrency ?? 10;
 
   const result: BackfillResult = {
     ingested: 0,
@@ -444,48 +476,87 @@ export async function ingestBackfillSessions(
     durationMs: 0,
   };
 
-  // Collect events for batched ingestion
+  // Shared rate limit state: when any worker hits 429, all workers pause.
+  // rateLimitUntil is a timestamp (ms) until which workers should wait.
+  let rateLimitUntil = 0;
+
+  // Collect session.end events for batched ingestion. JS is single-threaded
+  // so concurrent pushes are safe; flushing is coordinated below.
   let eventBatch: Event[] = [];
+  let flushInProgress = false;
 
-  for (let i = 0; i < sessions.length; i++) {
-    const session = sessions[i];
+  /**
+   * Flush the accumulated session.end event batch to the backend.
+   * Prevents concurrent flushes via a simple flag (JS is single-threaded).
+   */
+  async function tryFlushBatch(force = false): Promise<void> {
+    if (flushInProgress) return;
+    if (!force && eventBatch.length < batchSize) return;
+    if (eventBatch.length === 0) return;
 
-    // Check for cancellation
-    if (deps.signal?.aborted) {
-      break;
+    flushInProgress = true;
+    const batch = eventBatch;
+    eventBatch = [];
+
+    try {
+      await flushEventBatch(baseUrl, deps.apiKey, batch);
+      if (throttleMs > 0) await sleep(throttleMs);
+    } catch {
+      // If batch flush fails, the transcripts are already uploaded.
+      // Session.end events will be re-emitted on next backfill run.
+    } finally {
+      flushInProgress = false;
     }
+  }
 
-    // Report progress
-    deps.onProgress?.({
-      total: sessions.length,
-      completed: result.ingested + result.skipped + result.failed,
-      skipped: result.skipped,
-      failed: result.failed,
-      currentSession: session.sessionId,
-    });
+  /**
+   * Wait if a rate limit is active. Returns false if the signal was aborted
+   * during the wait.
+   */
+  async function waitForRateLimit(): Promise<boolean> {
+    const now = Date.now();
+    if (rateLimitUntil > now) {
+      const waitMs = rateLimitUntil - now;
+      try {
+        await abortableSleep(waitMs, deps.signal);
+      } catch {
+        return false;
+      }
+    }
+    return !deps.signal?.aborted;
+  }
+
+  /**
+   * Process a single session: emit events, upload transcript, handle errors.
+   * Called concurrently by the worker pool.
+   */
+  async function processSession(session: DiscoveredSession): Promise<void> {
+    // Check for cancellation
+    if (deps.signal?.aborted) return;
 
     // Skip if already ingested in a previous (interrupted) run
     if (alreadyIngested.has(session.sessionId)) {
       result.skipped++;
-      continue;
+      return;
     }
 
     try {
+      // Wait if rate-limited
+      if (!(await waitForRateLimit())) return;
+
       // Step 1: Dedup check — does this session already exist in the backend?
       const exists = await checkSessionExists(
         baseUrl,
         deps.apiKey,
         session.sessionId,
+        deps.signal,
       );
       if (exists) {
         result.skipped++;
-        continue;
+        return;
       }
 
-      // Step 2: Build and emit synthetic session.start event FIRST.
-      // The session must exist in the DB before we can upload a transcript,
-      // because the upload endpoint requires the session row to exist (for
-      // the workspace lookup that builds the S3 key).
+      // Step 2: Emit synthetic session.start event so the session row is created.
       const now = new Date().toISOString();
 
       const startEvent: Event = {
@@ -509,22 +580,25 @@ export async function ingestBackfillSessions(
         blob_refs: [],
       };
 
-      // Flush session.start immediately so the session row is created
-      await flushEventBatch(baseUrl, deps.apiKey, [startEvent]);
+      await flushEventBatchWithRateLimit(baseUrl, deps.apiKey, [startEvent], (until) => {
+        rateLimitUntil = Math.max(rateLimitUntil, until);
+      }, deps.signal);
 
-      // Step 3: Upload transcript file with retry (session.start event may
-      // still be processing through Redis → consumer → handler). Retry on
-      // 404 with exponential backoff since there's a small race window.
+      // Step 3: Wait for the session row to exist in the DB (async Redis
+      // consumer creates it). Then upload the transcript.
+      if (!(await waitForRateLimit())) return;
+
       await uploadTranscriptWithRetry(
         baseUrl,
         deps.apiKey,
         session.sessionId,
         session.transcriptPath,
+        15,   // maxRetries — generous to handle consumer backlog
+        (until) => { rateLimitUntil = Math.max(rateLimitUntil, until); },
+        deps.signal,
       );
 
-      // Step 4: Build and queue session.end event for batched delivery.
-      // The transcript is uploaded, so when session.end is processed and
-      // finds transcript_s3_key already set, it triggers the pipeline.
+      // Step 4: Queue session.end event for batched delivery.
       let durationMs = 0;
       if (session.firstTimestamp && session.lastTimestamp) {
         durationMs = Math.max(
@@ -552,17 +626,7 @@ export async function ingestBackfillSessions(
       };
 
       eventBatch.push(endEvent);
-
-      // Step 5: Flush batch if it's full
-      if (eventBatch.length >= batchSize) {
-        await flushEventBatch(baseUrl, deps.apiKey, eventBatch);
-        eventBatch = [];
-
-        // Throttle between batches
-        if (throttleMs > 0) {
-          await sleep(throttleMs);
-        }
-      }
+      await tryFlushBatch();
 
       result.ingested++;
       result.totalSizeBytes += session.fileSizeBytes;
@@ -575,24 +639,79 @@ export async function ingestBackfillSessions(
     }
   }
 
-  // Flush any remaining events in the batch
-  if (eventBatch.length > 0) {
-    try {
-      await flushEventBatch(baseUrl, deps.apiKey, eventBatch);
-    } catch (err) {
-      // If the final batch flush fails, those sessions' events are lost
-      // but the transcripts are already uploaded
+  // --- Concurrent worker pool ---
+  // Process sessions with bounded concurrency. A simple approach: maintain
+  // an array of in-flight promises, starting new work as slots open up.
+  // The abort signal is raced so Ctrl-C breaks out immediately.
+  const inFlight = new Set<Promise<void>>();
+  let sessionIndex = 0;
+  let lastReportedSession: string | null = null;
+
+  // A promise that rejects when the abort signal fires, used to race against
+  // in-flight work so the pool loop exits immediately on Ctrl-C.
+  const abortPromise = deps.signal
+    ? new Promise<void>((_, reject) => {
+        if (deps.signal!.aborted) { reject(new Error("Aborted")); return; }
+        deps.signal!.addEventListener("abort", () => reject(new Error("Aborted")), { once: true });
+      })
+    : null;
+
+  function reportProgress(currentSession: string | null): void {
+    deps.onProgress?.({
+      total: sessions.length,
+      completed: result.ingested + result.skipped + result.failed,
+      skipped: result.skipped,
+      failed: result.failed,
+      currentSession: currentSession ?? lastReportedSession,
+    });
+  }
+
+  try {
+    while (sessionIndex < sessions.length) {
+      if (deps.signal?.aborted) break;
+
+      // Fill up to concurrency limit
+      while (inFlight.size < concurrency && sessionIndex < sessions.length) {
+        if (deps.signal?.aborted) break;
+
+        const session = sessions[sessionIndex++];
+
+        // Report progress as each session is launched
+        lastReportedSession = session.sessionId;
+        reportProgress(session.sessionId);
+
+        const p = processSession(session).then(() => {
+          inFlight.delete(p);
+          reportProgress(session.sessionId);
+        });
+        inFlight.add(p);
+      }
+
+      // Wait for at least one to complete, or abort signal
+      if (inFlight.size >= concurrency) {
+        const raceTargets: Promise<void>[] = [...inFlight];
+        if (abortPromise) raceTargets.push(abortPromise);
+        await Promise.race(raceTargets);
+      }
+    }
+
+    // Wait for remaining in-flight sessions (they'll exit fast if aborted
+    // since all their fetches use the combined signal)
+    if (inFlight.size > 0) {
+      await Promise.allSettled(inFlight);
+    }
+  } catch {
+    // AbortError from the race — wait for in-flight to drain
+    if (inFlight.size > 0) {
+      await Promise.allSettled(inFlight);
     }
   }
 
+  // Flush any remaining session.end events
+  await tryFlushBatch(true);
+
   // Final progress report
-  deps.onProgress?.({
-    total: sessions.length,
-    completed: result.ingested + result.skipped + result.failed,
-    skipped: result.skipped,
-    failed: result.failed,
-    currentSession: null,
-  });
+  reportProgress(null);
 
   result.durationMs = Date.now() - startTime;
   return result;
@@ -770,6 +889,7 @@ async function checkSessionExists(
   baseUrl: string,
   apiKey: string,
   sessionId: string,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   try {
     const response = await fetch(
@@ -777,37 +897,64 @@ async function checkSessionExists(
       {
         method: "GET",
         headers: { Authorization: `Bearer ${apiKey}` },
-        signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+        signal: combinedSignal(signal),
       },
     );
     return response.ok;
-  } catch {
+  } catch (err) {
+    // If aborted by user, rethrow so processSession exits immediately
+    if (signal?.aborted) throw err;
     // Network error or timeout — treat as "not exists" to allow ingestion
     return false;
   }
 }
 
 /**
- * Upload a transcript with retry logic to handle the race condition where the
- * session.start event hasn't been fully processed yet (session row not in DB).
- * Retries up to 3 times with exponential backoff on 404 responses.
+ * Upload a transcript with retry logic to handle:
+ * 1. Race condition: session.start event hasn't been processed yet (404)
+ * 2. Rate limiting: server returns 429 with Retry-After
+ * 3. Transient errors: EAGAIN, connection resets, timeouts
+ *
+ * Uses exponential backoff with jitter, capped at 10s per retry.
+ * With 15 retries the total max wait is ~90s, enough for any consumer backlog.
  */
 async function uploadTranscriptWithRetry(
   baseUrl: string,
   apiKey: string,
   sessionId: string,
   transcriptPath: string,
-  maxRetries = 3,
+  maxRetries = 15,
+  onRateLimit?: (until: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (signal?.aborted) throw new Error("Aborted");
     try {
-      await uploadTranscript(baseUrl, apiKey, sessionId, transcriptPath);
+      await uploadTranscript(baseUrl, apiKey, sessionId, transcriptPath, signal);
       return;
     } catch (err) {
-      // Retry on 404 — the session.start event may not be processed yet
-      const is404 = err instanceof Error && err.message.includes("404");
-      if (is404 && attempt < maxRetries) {
-        await sleep(1000 * (attempt + 1));
+      // If user cancelled, bail immediately — no retries
+      if (signal?.aborted) throw err;
+
+      const msg = err instanceof Error ? err.message : String(err);
+      const is404 = msg.includes("404");
+      const is429 = msg.includes("429");
+      const isTransient = msg.includes("EAGAIN") || msg.includes("ECONNRESET")
+        || msg.includes("ETIMEDOUT") || msg.includes("UND_ERR_CONNECT_TIMEOUT");
+
+      if ((is404 || is429 || isTransient) && attempt < maxRetries) {
+        let waitMs: number;
+
+        if (is429) {
+          const retryMatch = msg.match(/Retry-After:\s*(\d+)/i);
+          waitMs = retryMatch ? parseInt(retryMatch[1], 10) * 1000 : 10_000;
+          if (onRateLimit) onRateLimit(Date.now() + waitMs);
+        } else {
+          const base = Math.min(500 * Math.pow(2, attempt), 10_000);
+          waitMs = base + Math.random() * 500;
+        }
+
+        await abortableSleep(waitMs, signal);
         continue;
       }
       throw err;
@@ -819,13 +966,15 @@ async function uploadTranscriptWithRetry(
  * Upload a transcript JSONL file to the backend for a specific session.
  *
  * Uses streaming for large files to avoid loading entire transcripts into memory.
- * Throws on failure so the caller can record the error.
+ * Throws on failure so the caller can record the error. Includes rate limit
+ * headers in error messages so the retry logic can parse them.
  */
 async function uploadTranscript(
   baseUrl: string,
   apiKey: string,
   sessionId: string,
   transcriptPath: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const url = `${baseUrl}/api/sessions/${sessionId}/transcript/upload`;
 
@@ -845,13 +994,16 @@ async function uploadTranscript(
       Authorization: `Bearer ${apiKey}`,
     },
     body,
-    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    signal: combinedSignal(signal),
   });
 
   if (!response.ok) {
     const responseBody = await response.text().catch(() => "<unreadable>");
+    // Include Retry-After header in error message so retry logic can parse it
+    const retryAfter = response.headers.get("Retry-After");
+    const retryInfo = retryAfter ? ` Retry-After: ${retryAfter}` : "";
     throw new Error(
-      `Transcript upload failed (HTTP ${response.status}): ${responseBody}`,
+      `Transcript upload failed (HTTP ${response.status}): ${responseBody}${retryInfo}`,
     );
   }
 }
@@ -863,6 +1015,7 @@ async function flushEventBatch(
   baseUrl: string,
   apiKey: string,
   events: Event[],
+  signal?: AbortSignal,
 ): Promise<void> {
   const url = `${baseUrl}/api/events/ingest`;
 
@@ -873,12 +1026,45 @@ async function flushEventBatch(
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({ events }),
-    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    signal: combinedSignal(signal),
   });
 
   if (!response.ok) {
     const body = await response.text().catch(() => "<unreadable>");
-    throw new Error(`Event ingest failed (HTTP ${response.status}): ${body}`);
+    const retryAfter = response.headers.get("Retry-After");
+    const retryInfo = retryAfter ? ` Retry-After: ${retryAfter}` : "";
+    throw new Error(`Event ingest failed (HTTP ${response.status}): ${body}${retryInfo}`);
+  }
+}
+
+/**
+ * Flush events with rate limit detection and retry.
+ * On 429, waits and retries once. Calls onRateLimit so other workers can pause.
+ */
+async function flushEventBatchWithRateLimit(
+  baseUrl: string,
+  apiKey: string,
+  events: Event[],
+  onRateLimit: (until: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (signal?.aborted) throw new Error("Aborted");
+    try {
+      await flushEventBatch(baseUrl, apiKey, events, signal);
+      return;
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("429") && attempt < 2) {
+        const retryMatch = msg.match(/Retry-After:\s*(\d+)/i);
+        const waitMs = retryMatch ? parseInt(retryMatch[1], 10) * 1000 : 10_000;
+        onRateLimit(Date.now() + waitMs);
+        await abortableSleep(waitMs, signal);
+        continue;
+      }
+      throw err;
+    }
   }
 }
 

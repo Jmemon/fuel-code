@@ -50,6 +50,11 @@ export function createBackfillCommand(): Command {
       "Run even if a backfill appears to be in progress",
       false,
     )
+    .option(
+      "--concurrency <n>",
+      "Number of sessions to process concurrently (default: 10)",
+      "10",
+    )
     .action(async (opts: BackfillOptions) => {
       await runBackfill(opts);
     });
@@ -66,6 +71,7 @@ interface BackfillOptions {
   dryRun: boolean;
   status: boolean;
   force: boolean;
+  concurrency: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -163,12 +169,16 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
   process.on("SIGINT", onSigint);
 
   try {
+    const concurrency = Math.max(1, parseInt(opts.concurrency, 10) || 10);
+    console.error(`Processing with concurrency: ${concurrency}`);
+
     const result = await ingestBackfillSessions(scanResult.discovered, {
       serverUrl: config.backend.url,
       apiKey: config.backend.api_key,
       deviceId: config.device.id,
       signal: abortController.signal,
       alreadyIngested,
+      concurrency,
       onProgress: (progress: BackfillProgress) => {
         // Print progress line (overwrite previous with \r)
         const bar = buildProgressBar(progress.completed, progress.total, 30);
