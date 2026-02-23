@@ -52,7 +52,8 @@ export async function handleGitCommit(ctx: EventHandlerContext): Promise<void> {
 
   // Wrap INSERT + UPDATE in a transaction so both succeed or both roll back.
   // Prevents inconsistent state where git_activity has session_id but events doesn't.
-  await sql.begin(async (tx) => {
+  // tx typed as any: postgres.js TransactionSql loses call signature via Omit (TS 5.9)
+  await sql.begin(async (tx: any) => {
     // Insert into git_activity — stores the structured git data
     // data JSONB holds author info and file list for detailed queries
     await tx`
