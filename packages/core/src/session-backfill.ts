@@ -942,10 +942,12 @@ async function uploadTranscriptWithRetry(
       const msg = err instanceof Error ? err.message : String(err);
       const is404 = msg.includes("404");
       const is429 = msg.includes("429");
+      // S3/storage failures surface as 503 via the server error handler
+      const is503 = msg.includes("503");
       const isTransient = msg.includes("EAGAIN") || msg.includes("ECONNRESET")
         || msg.includes("ETIMEDOUT") || msg.includes("UND_ERR_CONNECT_TIMEOUT");
 
-      if ((is404 || is429 || isTransient) && attempt < maxRetries) {
+      if ((is404 || is429 || is503 || isTransient) && attempt < maxRetries) {
         let waitMs: number;
 
         if (is429) {

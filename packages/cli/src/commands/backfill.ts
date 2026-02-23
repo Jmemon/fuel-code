@@ -52,8 +52,8 @@ export function createBackfillCommand(): Command {
     )
     .option(
       "--concurrency <n>",
-      "Number of sessions to process concurrently (default: 10)",
-      "10",
+      "Number of sessions to process concurrently (default: 5)",
+      "5",
     )
     .action(async (opts: BackfillOptions) => {
       await runBackfill(opts);

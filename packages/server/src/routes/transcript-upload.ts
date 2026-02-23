@@ -139,10 +139,17 @@ export function createTranscriptUploadRouter(deps: {
           `Streaming transcript upload for session ${sessionId} (${contentLength} bytes)`,
         );
 
-        // --- Step 6: Stream request body directly to S3 ---
-        // The req object is a Node Readable stream. By not using express.raw(),
-        // the body hasn't been buffered into memory — we pipe it straight to S3.
-        await s3.uploadStream(s3Key, req, contentLength, "application/x-ndjson");
+        // --- Step 6: Buffer request body then upload to S3 ---
+        // Buffering decouples the client→server and server→S3 connections so a
+        // client disconnect mid-stream can't corrupt the S3 upload. Memory is
+        // bounded by MAX_UPLOAD_BYTES (200MB) checked in step 1.
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        const body = Buffer.concat(chunks);
+
+        await s3.upload(s3Key, body, "application/x-ndjson");
 
         // --- Step 7: Update session with the S3 key ---
         await sql`
