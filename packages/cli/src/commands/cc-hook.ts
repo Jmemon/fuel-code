@@ -21,8 +21,8 @@
  */
 
 import { Command } from "commander";
-import { execSync } from "node:child_process";
-import { deriveWorkspaceCanonicalId } from "@fuel-code/shared";
+import { execSync } from "../lib/exec.js";
+import { deriveWorkspaceCanonicalId } from "../lib/workspace.js";
 import { runEmit } from "./emit.js";
 import { runTranscriptUpload } from "./transcript.js";
 

@@ -309,7 +309,7 @@ pipeline:
       expect(event!.type).toBe("git.commit");
       expect(event!.workspace_id).toBe("ws-test");
       expect(event!.session_id).toBe("sess-001");
-      expect(event!.data).toEqual({ sha: "abc123", message: "test commit" });
+      expect(event!.data).toEqual({ sha: "abc123", message: "test commit", _device_name: "test-device", _device_type: "local" });
       expect(event!.device_id).toBe("01HZDEVICE0000000000000001");
     } finally {
       globalThis.fetch = originalFetch;
@@ -394,7 +394,7 @@ pipeline:
 
       const event = readQueuedEvent(queued[0]);
       expect(event).not.toBeNull();
-      expect(event!.data).toEqual({ _raw: "not valid json at all" });
+      expect(event!.data).toEqual({ _raw: "not valid json at all", _device_name: "test-device", _device_type: "local" });
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -436,7 +436,7 @@ pipeline:
 
       const event = readQueuedEvent(queued[0]);
       expect(event).not.toBeNull();
-      expect(event!.data).toEqual({ _raw: "[1, 2, 3]" });
+      expect(event!.data).toEqual({ _raw: "[1, 2, 3]", _device_name: "test-device", _device_type: "local" });
     } finally {
       globalThis.fetch = originalFetch;
     }

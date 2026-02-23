@@ -192,6 +192,43 @@ describe("hooks install", () => {
     expect(settings.hooks).toBeDefined();
   });
 
+  it("removes stale Stop hook from pre-migration installs", async () => {
+    // Pre-populate settings.json with a Stop hook (old format used before SessionEnd)
+    const existingSettings = {
+      hooks: {
+        Stop: [
+          {
+            matcher: "",
+            hooks: [
+              {
+                type: "command",
+                command: "fuel-code cc-hook session-end",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify(existingSettings, null, 2),
+      "utf-8",
+    );
+
+    await runInstall();
+
+    const settings = readSettings() as {
+      hooks: Record<string, unknown>;
+    };
+
+    // Stop hook should be completely removed
+    expect(settings.hooks.Stop).toBeUndefined();
+
+    // SessionStart and SessionEnd should be present instead
+    expect(settings.hooks.SessionStart).toBeDefined();
+    expect(settings.hooks.SessionEnd).toBeDefined();
+  });
+
   it("replaces existing fuel-code hook with updated command", async () => {
     // Pre-populate with an old fuel-code hook (shell script path format)
     const existingSettings = {

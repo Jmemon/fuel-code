@@ -482,6 +482,48 @@ describe("processEvent", () => {
     expect(workspaceCall.values[3]).toBe("develop");
   });
 
+  test("passes device hints from event.data to resolveOrCreateDevice", async () => {
+    const event = makeSessionStartEvent({
+      data: {
+        ...makeSessionStartEvent().data,
+        _device_name: "my-laptop",
+        _device_type: "local",
+      },
+    });
+    const registry = new EventHandlerRegistry();
+    const logger = createMockLogger();
+
+    const { sql, calls } = createMockSql(standardResultSets([{ id: event.id }]));
+
+    await processEvent(sql, event, registry, logger);
+
+    // The device resolve call (index 1) should receive the device hints.
+    // resolveOrCreateDevice is called with (sql, deviceId, hints).
+    // In the SQL: VALUES (deviceId, name, type, hostname, os, arch, metadata)
+    // With hints, name="my-laptop" and type="local" instead of defaults.
+    const deviceCall = calls[1];
+    expect(deviceCall.values[0]).toBe("device-abc");    // device_id
+    expect(deviceCall.values[1]).toBe("my-laptop");     // name from hint
+    expect(deviceCall.values[2]).toBe("local");         // type from hint
+  });
+
+  test("uses default device name when no hints in event.data", async () => {
+    // Event without _device_name/_device_type fields
+    const event = makeSessionStartEvent();
+    const registry = new EventHandlerRegistry();
+    const logger = createMockLogger();
+
+    const { sql, calls } = createMockSql(standardResultSets([{ id: event.id }]));
+
+    await processEvent(sql, event, registry, logger);
+
+    // Without hints, resolveOrCreateDevice uses defaults: "unknown-device", "local"
+    const deviceCall = calls[1];
+    expect(deviceCall.values[0]).toBe("device-abc");
+    expect(deviceCall.values[1]).toBe("unknown-device");
+    expect(deviceCall.values[2]).toBe("local");
+  });
+
   test("uses 'unknown' for local path when event.data.cwd is missing", async () => {
     const event = makeSessionStartEvent({
       data: {
