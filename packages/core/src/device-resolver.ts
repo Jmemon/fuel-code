@@ -51,6 +51,7 @@ export async function resolveOrCreateDevice(
     VALUES (${deviceId}, ${name}, ${type}, ${hints?.hostname ?? null}, ${hints?.os ?? null}, ${hints?.arch ?? null}, ${JSON.stringify({})})
     ON CONFLICT (id) DO UPDATE SET
       last_seen_at = now(),
+      name = CASE WHEN devices.name = 'unknown-device' AND ${name} != 'unknown-device' THEN ${name} ELSE devices.name END,
       hostname = COALESCE(EXCLUDED.hostname, devices.hostname),
       os = COALESCE(EXCLUDED.os, devices.os),
       arch = COALESCE(EXCLUDED.arch, devices.arch)

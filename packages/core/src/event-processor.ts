@@ -145,8 +145,16 @@ export async function processEvent(
     extractHints(event),
   );
 
-  // 2. Resolve device: ensure device row exists
-  await resolveOrCreateDevice(sql, event.device_id);
+  // 2. Resolve device: ensure device row exists.
+  // Extract device hints from the event data (injected by the CLI emit command)
+  // so the device name is populated on first registration.
+  const deviceHints = event.data._device_name
+    ? {
+        name: event.data._device_name as string,
+        type: (event.data._device_type as "local" | "remote") ?? "local",
+      }
+    : undefined;
+  await resolveOrCreateDevice(sql, event.device_id, deviceHints);
 
   // 3. Link workspace to device with the working directory from the event
   const localPath =

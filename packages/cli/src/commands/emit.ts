@@ -140,7 +140,14 @@ export async function runEmit(
     }
   }
 
-  // 3. Construct the Event object
+  // 3. Construct the Event object.
+  // Include device hints so the backend can populate the device name on first
+  // registration (resolveOrCreateDevice uses these to avoid "unknown-device").
+  if (config?.device.name) {
+    data._device_name = config.device.name;
+    data._device_type = config.device.type;
+  }
+
   const event: Event = {
     id: generateId(),
     type: eventType as EventType,
