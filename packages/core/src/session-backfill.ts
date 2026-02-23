@@ -587,21 +587,10 @@ export async function ingestBackfillSessions(
         rateLimitUntil = Math.max(rateLimitUntil, until);
       }, deps.signal);
 
-      // Step 3: Wait for the session row to exist in the DB (async Redis
-      // consumer creates it). Then upload the transcript.
-      if (!(await waitForRateLimit())) return;
-
-      await uploadTranscriptWithRetry(
-        baseUrl,
-        deps.apiKey,
-        session.sessionId,
-        session.transcriptPath,
-        15,   // maxRetries — generous to handle consumer backlog
-        (until) => { rateLimitUntil = Math.max(rateLimitUntil, until); },
-        deps.signal,
-      );
-
-      // Step 4: Queue session.end event for batched delivery.
+      // Step 3: Emit session.end immediately (not batched) so the session
+      // reaches "ended" state before we attempt the transcript upload.
+      // If the upload fails, the session is cleanly "ended" and retryable,
+      // rather than stuck at "detected" as a zombie row.
       let durationMs = 0;
       if (session.firstTimestamp && session.lastTimestamp) {
         durationMs = Math.max(
@@ -628,8 +617,25 @@ export async function ingestBackfillSessions(
         blob_refs: [],
       };
 
-      eventBatch.push(endEvent);
-      await tryFlushBatch();
+      if (!(await waitForRateLimit())) return;
+      await flushEventBatchWithRateLimit(baseUrl, deps.apiKey, [endEvent], (until) => {
+        rateLimitUntil = Math.max(rateLimitUntil, until);
+      }, deps.signal);
+
+      // Step 4: Upload the transcript. The session is already "ended", so
+      // the upload route will trigger the pipeline. If this fails, the
+      // session is still cleanly ended and can be retried later.
+      if (!(await waitForRateLimit())) return;
+
+      await uploadTranscriptWithRetry(
+        baseUrl,
+        deps.apiKey,
+        session.sessionId,
+        session.transcriptPath,
+        15,   // maxRetries — generous to handle consumer backlog
+        (until) => { rateLimitUntil = Math.max(rateLimitUntil, until); },
+        deps.signal,
+      );
 
       result.ingested++;
       result.totalSizeBytes += session.fileSizeBytes;
