@@ -145,7 +145,7 @@ export function createWorkspacesRouter(deps: WorkspacesRouterDeps): Router {
           WITH workspace_agg AS (
             SELECT w.*,
               COUNT(s.id) AS session_count,
-              COUNT(CASE WHEN s.lifecycle = 'capturing' THEN 1 END) AS active_session_count,
+              COUNT(CASE WHEN s.lifecycle IN ('detected', 'capturing') THEN 1 END) AS active_session_count,
               MAX(s.started_at) AS last_session_at,
               COUNT(DISTINCT s.device_id) AS device_count,
               COALESCE(SUM(s.cost_estimate_usd), 0) AS total_cost_usd,
@@ -271,7 +271,7 @@ export function createWorkspacesRouter(deps: WorkspacesRouterDeps): Router {
             sql`
               SELECT
                 COUNT(*)::int AS total_sessions,
-                COUNT(CASE WHEN lifecycle = 'capturing' THEN 1 END)::int AS active_sessions,
+                COUNT(CASE WHEN lifecycle IN ('detected', 'capturing') THEN 1 END)::int AS active_sessions,
                 COALESCE(SUM(duration_ms), 0) AS total_duration_ms,
                 COALESCE(SUM(cost_estimate_usd), 0) AS total_cost_usd,
                 COALESCE(SUM(total_messages), 0) AS total_messages,

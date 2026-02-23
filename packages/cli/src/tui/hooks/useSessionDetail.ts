@@ -81,7 +81,7 @@ export function useSessionDetail(
 
   // WS subscription for live sessions
   useEffect(() => {
-    if (!session || !wsClient || session.lifecycle !== "capturing") return;
+    if (!session || !wsClient || (session.lifecycle !== "detected" && session.lifecycle !== "capturing")) return;
 
     // Subscribe to this session's updates
     wsClient.subscribe({ session_id: sessionId });
@@ -151,7 +151,7 @@ export function useSessionDetail(
     error,
     fetchEvents: fetchEventsCallback,
     eventsFetched,
-    isLive: session?.lifecycle === "capturing",
+    isLive: session?.lifecycle === "detected" || session?.lifecycle === "capturing",
     getExportData,
   };
 }

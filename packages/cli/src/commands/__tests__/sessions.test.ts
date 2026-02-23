@@ -169,14 +169,14 @@ describe("fetchSessions", () => {
     });
 
     await fetchSessions(makeClient(), {
-      lifecycle: "capturing",
+      lifecycle: "detected,capturing",
       tag: "feature",
       after: "2025-01-01",
       before: "2025-12-31",
       cursor: "page-2",
     });
 
-    expect(lastRequestUrl).toContain("lifecycle=capturing");
+    expect(lastRequestUrl).toContain("lifecycle=detected%2Ccapturing");
     expect(lastRequestUrl).toContain("tag=feature");
     expect(lastRequestUrl).toContain("after=2025-01-01");
     expect(lastRequestUrl).toContain("before=2025-12-31");

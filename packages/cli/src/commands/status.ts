@@ -193,7 +193,7 @@ export async function fetchStatus(
       // Active sessions
       (async (): Promise<SessionsResult> => {
         const { data } = await api.listSessions({
-          lifecycle: "capturing",
+          lifecycle: "detected,capturing",
           limit: 10,
         });
         return data;

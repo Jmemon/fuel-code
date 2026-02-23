@@ -176,6 +176,8 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
       serverUrl: config.backend.url,
       apiKey: config.backend.api_key,
       deviceId: config.device.id,
+      deviceName: config.device.name,
+      deviceType: config.device.type,
       signal: abortController.signal,
       alreadyIngested,
       concurrency,

@@ -23,7 +23,7 @@ export interface SessionHeaderProps {
 }
 
 export function SessionHeader({ session }: SessionHeaderProps): React.ReactElement {
-  const isLive = session.lifecycle === "capturing";
+  const isLive = session.lifecycle === "detected" || session.lifecycle === "capturing";
   const [elapsedMs, setElapsedMs] = useState<number>(() => {
     if (isLive) {
       return Date.now() - new Date(session.started_at).getTime();

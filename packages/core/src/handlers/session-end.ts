@@ -30,7 +30,23 @@ export async function handleSessionEnd(ctx: EventHandlerContext): Promise<void> 
   // Extract fields from the session.end payload
   const ccSessionId = event.data.cc_session_id as string;
   const endReason = event.data.end_reason as string;
-  const durationMs = event.data.duration_ms as number;
+  let durationMs = event.data.duration_ms as number;
+
+  // When duration_ms is 0 or missing (e.g. hooks send 0 because they don't
+  // know the real duration), compute it from the session's started_at and
+  // the event timestamp (which represents ended_at).
+  if (!durationMs || durationMs <= 0) {
+    const sessionRow = await sql`
+      SELECT started_at FROM sessions WHERE id = ${ccSessionId}
+    `;
+    if (sessionRow.length > 0 && sessionRow[0].started_at) {
+      const startedAt = new Date(sessionRow[0].started_at).getTime();
+      const endedAt = new Date(event.timestamp).getTime();
+      if (!isNaN(startedAt) && !isNaN(endedAt)) {
+        durationMs = Math.max(0, endedAt - startedAt);
+      }
+    }
+  }
 
   logger.info({ ccSessionId, endReason, durationMs }, "Ending session");
 

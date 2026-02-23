@@ -110,6 +110,11 @@ export interface IngestDeps {
   alreadyIngested?: Set<string>;
   /** Number of sessions to process concurrently (default: 10) */
   concurrency?: number;
+  /** Device name hint injected into synthetic events so the backend
+   *  can resolve a real device record instead of creating "unknown-device" */
+  deviceName?: string;
+  /** Device type hint ("local", "remote", etc.) — defaults to "local" */
+  deviceType?: string;
 }
 
 /** Entry from a sessions-index.json file */
@@ -588,6 +593,7 @@ export async function ingestBackfillSessions(
           model: null,
           source: "backfill",
           transcript_path: session.transcriptPath,
+          ...(deps.deviceName ? { _device_name: deps.deviceName, _device_type: deps.deviceType ?? "local" } : {}),
         },
         ingested_at: null,
         blob_refs: [],
@@ -622,6 +628,7 @@ export async function ingestBackfillSessions(
           duration_ms: durationMs,
           end_reason: "exit",
           transcript_path: session.transcriptPath,
+          ...(deps.deviceName ? { _device_name: deps.deviceName, _device_type: deps.deviceType ?? "local" } : {}),
         },
         ingested_at: null,
         blob_refs: [],

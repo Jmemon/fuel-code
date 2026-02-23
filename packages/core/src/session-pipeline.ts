@@ -213,6 +213,7 @@ export async function runSessionPipeline(
     parse_status: "completed",
     parse_error: null,
     initial_prompt: initialPrompt ?? undefined,
+    duration_ms: stats.duration_ms,
     total_messages: stats.total_messages,
     user_messages: stats.user_messages,
     assistant_messages: stats.assistant_messages,

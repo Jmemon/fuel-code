@@ -246,7 +246,7 @@ export async function runSessions(opts: {
 
     // --live implies lifecycle=capturing
     if (opts.live) {
-      params.lifecycle = "capturing";
+      params.lifecycle = "detected,capturing";
     } else if (opts.lifecycle) {
       params.lifecycle = opts.lifecycle;
     }

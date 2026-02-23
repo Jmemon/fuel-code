@@ -59,7 +59,7 @@ export function createDevicesRouter(deps: DevicesRouterDeps): Router {
           WITH device_sessions AS (
             SELECT s.device_id,
               COUNT(*)::int AS session_count,
-              COUNT(CASE WHEN s.lifecycle = 'capturing' THEN 1 END)::int AS active_session_count,
+              COUNT(CASE WHEN s.lifecycle IN ('detected', 'capturing') THEN 1 END)::int AS active_session_count,
               MAX(s.started_at) AS last_session_at,
               COALESCE(SUM(s.cost_estimate_usd), 0) AS total_cost_usd,
               COALESCE(SUM(s.duration_ms), 0) AS total_duration_ms

@@ -135,7 +135,7 @@ export function Dashboard({
           id: event.session_id ?? event.id,
           workspace_id: event.workspace_id,
           device_id: event.device_id,
-          lifecycle: "capturing",
+          lifecycle: "detected",
           started_at: event.timestamp,
           ended_at: null,
           duration_ms: null,

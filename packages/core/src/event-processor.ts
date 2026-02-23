@@ -161,6 +161,12 @@ export async function processEvent(
     typeof event.data.cwd === "string" ? event.data.cwd : "unknown";
   await ensureWorkspaceDeviceLink(sql, resolvedWorkspaceId, event.device_id, localPath);
 
+  // Strip internal transport hints from event.data before persistence.
+  // These fields are injected by the CLI emit command solely for device
+  // resolution and should not leak into the persisted event record.
+  delete event.data._device_name;
+  delete event.data._device_type;
+
   // 4. Insert event row — using resolved workspace ULID, NOT the canonical string.
   //    ON CONFLICT (id) DO NOTHING deduplicates by event ULID.
   const insertResult = await sql`

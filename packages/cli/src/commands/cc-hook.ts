@@ -163,6 +163,7 @@ function createSessionEndHandler(): Command {
 
         const workspace = resolveWorkspace(cwd);
 
+        // duration_ms: 0 signals the server to compute actual duration from started_at and ended_at.
         const payload = {
           cc_session_id: sessionId,
           duration_ms: 0,

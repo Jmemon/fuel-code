@@ -15,7 +15,7 @@ const LIFECYCLE_DISPLAY: Record<
   string,
   { icon: string; label: string; color: string }
 > = {
-  detected: { icon: "\u25CB", label: "DETECTED", color: "gray" },
+  detected: { icon: "\u25CF", label: "LIVE", color: "green" },
   capturing: { icon: "\u25CF", label: "LIVE", color: "green" },
   ended: { icon: "\u25D0", label: "ENDED", color: "yellow" },
   parsed: { icon: "\u25CC", label: "PARSING", color: "yellow" },
@@ -93,7 +93,7 @@ export function SessionRow({
         </Text>
       </Box>
       {/* Live sessions: show per-tool breakdown or aggregate counts */}
-      {session.lifecycle === "capturing" && session.total_messages != null && (
+      {(session.lifecycle === "detected" || session.lifecycle === "capturing") && session.total_messages != null && (
         <Box paddingLeft={4}>
           <Text color="green">
             {session.tool_counts

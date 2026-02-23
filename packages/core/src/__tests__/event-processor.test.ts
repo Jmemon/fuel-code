@@ -482,6 +482,35 @@ describe("processEvent", () => {
     expect(workspaceCall.values[3]).toBe("develop");
   });
 
+  test("strips _device_name and _device_type from event.data before persisting", async () => {
+    const event = makeSessionStartEvent({
+      data: {
+        ...makeSessionStartEvent().data,
+        _device_name: "Johns-MacBook",
+        _device_type: "local",
+      },
+    });
+    const registry = new EventHandlerRegistry();
+    const logger = createMockLogger();
+
+    const { sql, calls } = createMockSql(standardResultSets([{ id: event.id }]));
+
+    await processEvent(sql, event, registry, logger);
+
+    // Verify the INSERT call's data argument (index 3, value index 6 = JSON.stringify(event.data))
+    const eventInsertCall = calls[3];
+    const persistedData = JSON.parse(eventInsertCall.values[6] as string);
+
+    // Transport-only fields must NOT be present in persisted data
+    expect(persistedData._device_name).toBeUndefined();
+    expect(persistedData._device_type).toBeUndefined();
+
+    // Domain data must still be present
+    expect(persistedData.cc_session_id).toBe("cc-sess-001");
+    expect(persistedData.cwd).toBe("/home/user/repo");
+    expect(persistedData.git_branch).toBe("main");
+  });
+
   test("passes device hints from event.data to resolveOrCreateDevice", async () => {
     const event = makeSessionStartEvent({
       data: {
@@ -708,5 +737,76 @@ describe("handleSessionEnd", () => {
 
     // Should NOT have logged a warning
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  test("computes duration_ms from started_at when payload sends 0", async () => {
+    // Event with duration_ms=0, mimicking what the hooks actually send
+    const event = makeSessionEndEvent({
+      data: {
+        cc_session_id: "cc-sess-001",
+        duration_ms: 0,
+        end_reason: "exit",
+        transcript_path: "s3://transcripts/cc-sess-001.json",
+      },
+      timestamp: "2024-06-15T11:30:00.000Z",
+    });
+    const logger = createMockLogger();
+
+    // Mock result sets:
+    //   1. SELECT started_at (the new lookup when duration_ms=0)
+    //   2. transitionSession sql.unsafe UPDATE (returns row = success)
+    const startedAtResult = [{ started_at: "2024-06-15T10:00:00.000Z" }];
+    const transitionResult = [{ lifecycle: "ended" }];
+    const { sql, calls, unsafeCalls } = createMockSql([startedAtResult, transitionResult]);
+
+    await handleSessionEnd({
+      sql,
+      event,
+      workspaceId: "ws-ulid-001",
+      logger,
+    });
+
+    // First SQL call should be the SELECT started_at lookup
+    expect(calls).toHaveLength(1);
+    expect(calls[0].strings.join("$")).toContain("started_at");
+    expect(calls[0].values[0]).toBe("cc-sess-001");
+
+    // transitionSession should have been called with computed duration
+    expect(unsafeCalls).toHaveLength(1);
+    const unsafeCall = unsafeCalls[0];
+    // 90 minutes = 5400000ms (from 10:00 to 11:30)
+    expect(unsafeCall.values[5]).toBe(5400000);
+  });
+
+  test("keeps duration_ms=0 when session has no started_at", async () => {
+    // Event with duration_ms=0 but session not found in DB
+    const event = makeSessionEndEvent({
+      data: {
+        cc_session_id: "cc-sess-missing",
+        duration_ms: 0,
+        end_reason: "exit",
+        transcript_path: "",
+      },
+      timestamp: "2024-06-15T11:30:00.000Z",
+    });
+    const logger = createMockLogger();
+
+    // Mock result sets:
+    //   1. SELECT started_at -> empty (session not found)
+    //   2. transitionSession sql.unsafe UPDATE
+    const emptyResult: Record<string, unknown>[] = [];
+    const transitionResult = [{ lifecycle: "ended" }];
+    const { sql, unsafeCalls } = createMockSql([emptyResult, transitionResult]);
+
+    await handleSessionEnd({
+      sql,
+      event,
+      workspaceId: "ws-ulid-001",
+      logger,
+    });
+
+    // duration_ms should remain 0 since we couldn't compute it
+    expect(unsafeCalls).toHaveLength(1);
+    expect(unsafeCalls[0].values[5]).toBe(0);
   });
 });

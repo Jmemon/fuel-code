@@ -47,8 +47,7 @@ import { resolveWorkspace } from "./resolve-workspace.js";
     const workspace = await resolveWorkspace(cwd);
 
     // 6. Construct session.end payload
-    //    duration_ms is set to 0 — the server computes actual duration
-    //    from the session.start event's timestamp.
+    //    duration_ms: 0 signals the server to compute actual duration from started_at and ended_at.
     const payload = {
       cc_session_id: sessionId,
       duration_ms: 0,

@@ -157,7 +157,7 @@ interface LifecycleStyle {
 }
 
 const LIFECYCLE_STYLES: Record<SessionLifecycle, LifecycleStyle> = {
-  detected:    { icon: "\u25CB", label: "DETECTED",  color: pc.dim },
+  detected:    { icon: "\u25CF", label: "LIVE",      color: pc.green },
   capturing:   { icon: "\u25CF", label: "LIVE",      color: pc.green },
   ended:       { icon: "\u25D0", label: "ENDED",     color: pc.yellow },
   parsed:      { icon: "\u25CC", label: "PARSING",   color: pc.yellow },

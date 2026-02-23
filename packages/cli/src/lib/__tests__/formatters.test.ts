@@ -192,11 +192,11 @@ describe("formatRelativeTime", () => {
 // ---------------------------------------------------------------------------
 
 describe("formatLifecycle", () => {
-  it("formats 'detected' with dim color and circle icon", () => {
+  it("formats 'detected' as LIVE with green color and filled circle icon", () => {
     const result = formatLifecycle("detected");
     const stripped = stripAnsi(result);
-    expect(stripped).toContain("\u25CB");
-    expect(stripped).toContain("DETECTED");
+    expect(stripped).toContain("\u25CF");
+    expect(stripped).toContain("LIVE");
   });
 
   it("formats 'capturing' with green color", () => {
