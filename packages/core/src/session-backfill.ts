@@ -559,13 +559,16 @@ export async function ingestBackfillSessions(
       // Step 2: Emit synthetic session.start event so the session row is created.
       const now = new Date().toISOString();
 
+      // session_id must be null on session.start — the session row doesn't exist
+      // yet (the handler creates it). The events table has a FK constraint
+      // on session_id, so setting it here would violate the FK.
       const startEvent: Event = {
         id: generateId(),
         type: "session.start" as EventType,
         timestamp: session.firstTimestamp ?? now,
         device_id: deps.deviceId,
         workspace_id: session.workspaceCanonicalId,
-        session_id: session.sessionId,
+        session_id: null,
         data: {
           cc_session_id: session.sessionId,
           cwd: session.resolvedCwd,

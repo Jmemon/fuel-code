@@ -20,12 +20,12 @@ export const sessionStartPayloadSchema = z.object({
   git_branch: z.string().nullable(),
   /** Git remote URL at session start (null if not in a git repo) */
   git_remote: z.string().nullable(),
-  /** Claude Code version string */
-  cc_version: z.string(),
+  /** Claude Code version string (null for backfilled historical sessions) */
+  cc_version: z.string().nullable(),
   /** Claude model being used (null if unknown) */
   model: z.string().nullable(),
-  /** How this session was initiated */
-  source: z.enum(["startup", "resume", "clear", "compact"]),
+  /** How this session was initiated ("backfill" for historical session ingestion) */
+  source: z.enum(["startup", "resume", "clear", "compact", "backfill"]),
   /** S3 path where the transcript will be stored */
   transcript_path: z.string(),
 });
