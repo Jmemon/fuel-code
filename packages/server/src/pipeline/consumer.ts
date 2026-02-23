@@ -252,13 +252,26 @@ export function startConsumer(
    * Never throws — all errors are caught and retried.
    */
   async function loop(): Promise<void> {
-    // --- Startup: ensure consumer group and reclaim pending entries ---
-    try {
-      await ensureGroup(redis);
-    } catch (err) {
-      logger.error({ err }, "Failed to ensure consumer group on startup");
-      // Continue anyway — the group may have been created by another process
+    // --- Startup: ensure consumer group exists (retry until success) ---
+    while (!shouldStop) {
+      try {
+        await ensureGroup(redis);
+        break; // Success — proceed to main loop
+      } catch (err) {
+        logger.error(
+          { err },
+          `Failed to ensure consumer group — retrying in ${reconnectDelayMs}ms`,
+        );
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, reconnectDelayMs);
+          if (typeof timer === "object" && "unref" in timer) {
+            timer.unref();
+          }
+        });
+      }
     }
+
+    if (shouldStop) return; // Shutdown requested during startup retry loop
 
     try {
       const pendingEntries = await claimPending(redis, CLAIM_IDLE_MS, CLAIM_COUNT);

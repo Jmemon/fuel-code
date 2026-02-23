@@ -439,11 +439,51 @@ describe("consumer — ensureConsumerGroup on startup", () => {
     expect(overrides._ensureConsumerGroup).toHaveBeenCalled();
   });
 
-  test("continues running even if ensureConsumerGroup fails", async () => {
+  test("retries ensureConsumerGroup on startup until it succeeds", async () => {
+    const overrides = createOverrides();
+    let groupCallCount = 0;
+
+    // Fail the first 2 calls, succeed on the 3rd
+    overrides._ensureConsumerGroup.mockImplementation(() => {
+      groupCallCount++;
+      if (groupCallCount < 3) {
+        return Promise.reject(new Error("Redis not ready"));
+      }
+      return Promise.resolve();
+    });
+
+    overrides._readFromStream.mockImplementation(
+      () => delayedResolve([] as StreamEntry[]),
+    );
+
+    const logger = createMockLogger();
+    const deps = createDeps(logger);
+    const consumer = startConsumer(deps, { ...overrides, reconnectDelayMs: 10 });
+
+    await sleep(300);
+    await consumer.stop();
+
+    // ensureConsumerGroup should have been called at least 3 times (2 failures + 1 success)
+    expect(overrides._ensureConsumerGroup.mock.calls.length).toBeGreaterThanOrEqual(3);
+
+    // readFromStream should have been called (main loop started after success)
+    expect(overrides._readFromStream).toHaveBeenCalled();
+
+    // Should have logged errors for the failed attempts
+    const errorCalls = logger.error.mock.calls;
+    const retryLogs = errorCalls.filter(
+      (call: any[]) =>
+        typeof call[1] === "string" && call[1].includes("retrying in"),
+    );
+    expect(retryLogs.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("startup ensureGroup retry loop exits when stop() is called", async () => {
     const overrides = createOverrides();
 
+    // Always fail — consumer should never reach the main loop
     overrides._ensureConsumerGroup.mockImplementation(() =>
-      Promise.reject(new Error("group creation failed")),
+      Promise.reject(new Error("Redis permanently down")),
     );
 
     overrides._readFromStream.mockImplementation(
@@ -452,16 +492,17 @@ describe("consumer — ensureConsumerGroup on startup", () => {
 
     const logger = createMockLogger();
     const deps = createDeps(logger);
-    const consumer = startConsumer(deps, overrides);
+    const consumer = startConsumer(deps, { ...overrides, reconnectDelayMs: 10 });
 
-    await sleep(200);
+    // Let it retry a few times then stop
+    await sleep(80);
     await consumer.stop();
 
-    // Should have logged the error but continued
-    expect(logger.error).toHaveBeenCalled();
+    // ensureConsumerGroup should have been called multiple times (retrying)
+    expect(overrides._ensureConsumerGroup.mock.calls.length).toBeGreaterThanOrEqual(2);
 
-    // readFromStream should still have been called (loop continued past error)
-    expect(overrides._readFromStream).toHaveBeenCalled();
+    // readFromStream should NOT have been called — loop never started
+    expect(overrides._readFromStream).not.toHaveBeenCalled();
   });
 });
 
