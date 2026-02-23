@@ -504,15 +504,16 @@ describe("formatSessionRow", () => {
     expect(row[1]).toBe("ws-001");
   });
 
-  it("uses cost_estimate_usd field", () => {
+  it("uses tokens_in/tokens_out fields", () => {
     const row = formatSessionRow({
       lifecycle: "ended",
       duration_ms: 1000,
-      cost_estimate_usd: 0.42,
+      tokens_in: 125000,
+      tokens_out: 48000,
       started_at: new Date().toISOString(),
     });
 
-    expect(row[4]).toBe("$0.42");
+    expect(row[4]).toBe("125K/48K");
   });
 
   it("falls back to initial_prompt when summary is null", () => {
@@ -551,7 +552,8 @@ describe("formatWorkspaceRow", () => {
       session_count: 10,
       active_session_count: 2,
       device_count: 3,
-      total_cost_usd: 5.5,
+      total_tokens_in: 500000,
+      total_tokens_out: 200000,
       last_session_at: "2020-01-01T00:00:00Z",
     });
 
@@ -567,7 +569,8 @@ describe("formatWorkspaceRow", () => {
       session_count: 5,
       active_session_count: 2,
       device_count: 1,
-      total_cost_usd: 0,
+      total_tokens_in: 0,
+      total_tokens_out: 0,
       last_session_at: null,
     });
 
@@ -581,7 +584,8 @@ describe("formatWorkspaceRow", () => {
       session_count: 5,
       active_session_count: 0,
       device_count: 1,
-      total_cost_usd: 0,
+      total_tokens_in: 0,
+      total_tokens_out: 0,
       last_session_at: null,
     });
 
@@ -594,7 +598,8 @@ describe("formatWorkspaceRow", () => {
       session_count: 0,
       active_session_count: 0,
       device_count: 1,
-      total_cost_usd: 0,
+      total_tokens_in: 0,
+      total_tokens_out: 0,
       last_session_at: null,
     });
 

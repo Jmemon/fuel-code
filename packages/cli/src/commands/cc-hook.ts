@@ -21,10 +21,10 @@
  */
 
 import { Command } from "commander";
-import * as path from "node:path";
 import { execSync } from "node:child_process";
 import { deriveWorkspaceCanonicalId } from "@fuel-code/shared";
 import { runEmit } from "./emit.js";
+import { runTranscriptUpload } from "./transcript.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -113,10 +113,12 @@ function createSessionStartHandler(): Command {
           transcript_path: transcriptPath,
         };
 
+        // session_id is null for session.start events because the session row
+        // doesn't exist yet — the event handler creates it. The cc_session_id
+        // is carried in the payload data for the handler to use.
         await runEmit("session.start", {
           data: JSON.stringify(payload),
           workspaceId: workspace.workspaceId,
-          sessionId,
         });
       } catch {
         // Swallow all errors — hooks must never fail
@@ -174,21 +176,9 @@ function createSessionEndHandler(): Command {
           sessionId,
         });
 
-        // Spawn background transcript upload (detached, fire-and-forget)
+        // Upload transcript directly (runTranscriptUpload never throws, has 120s timeout)
         if (transcriptPath) {
-          const cliArgs = resolveCliArgs();
-          Bun.spawn(
-            [
-              ...cliArgs,
-              "transcript",
-              "upload",
-              "--session-id",
-              sessionId,
-              "--file",
-              transcriptPath,
-            ],
-            { stdout: "ignore", stderr: "ignore" },
-          );
+          await runTranscriptUpload(sessionId, transcriptPath);
         }
       } catch {
         // Swallow all errors — hooks must never fail
@@ -302,16 +292,3 @@ async function readStdin(): Promise<string> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// CLI path resolution (for spawning transcript upload as a child process)
-// ---------------------------------------------------------------------------
-
-/**
- * Resolve the fuel-code CLI as an args array for Bun.spawn.
- * Prefers the global `fuel-code` binary; falls back to `bun run <this-script>`.
- */
-function resolveCliArgs(): string[] {
-  const which = Bun.which("fuel-code");
-  if (which) return ["fuel-code"];
-  return ["bun", "run", path.resolve(process.argv[1])];
-}

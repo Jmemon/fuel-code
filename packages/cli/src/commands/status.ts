@@ -33,7 +33,7 @@ import {
 } from "../lib/api-client.js";
 import {
   formatDuration,
-  formatCost,
+  formatTokensCompact,
   formatRelativeTime,
   formatError,
   outputResult,
@@ -59,7 +59,8 @@ export interface StatusData {
   today?: {
     sessionCount: number;
     totalDurationMs: number;
-    totalCostUsd: number;
+    totalTokensIn: number;
+    totalTokensOut: number;
   };
 }
 
@@ -240,14 +241,19 @@ export async function fetchStatus(
       (sum, s) => sum + (s.duration_ms ?? 0),
       0,
     );
-    const totalCostUsd = todaySessions.reduce(
-      (sum, s) => sum + ((s as any).cost_estimate_usd ?? 0),
+    const totalTokensIn = todaySessions.reduce(
+      (sum, s) => sum + (Number((s as any).tokens_in) || 0),
+      0,
+    );
+    const totalTokensOut = todaySessions.reduce(
+      (sum, s) => sum + (Number((s as any).tokens_out) || 0),
       0,
     );
     today = {
       sessionCount: todaySessions.length,
       totalDurationMs,
-      totalCostUsd,
+      totalTokensIn,
+      totalTokensOut,
     };
   }
 
@@ -309,8 +315,8 @@ export function formatStatus(data: StatusData): string {
         const ws = (session as any).workspace_name ?? session.workspace_id;
         const dev = (session as any).device_name ?? session.device_id;
         const dur = formatDuration(session.duration_ms);
-        const cost = formatCost((session as any).cost_estimate_usd ?? null);
-        lines.push(`    ${pc.green("\u25CF")} ${ws} \u00B7 ${dev} \u00B7 ${dur} \u00B7 ${cost}`);
+        const tokens = formatTokensCompact((session as any).tokens_in ?? null, (session as any).tokens_out ?? null);
+        lines.push(`    ${pc.green("\u25CF")} ${ws} \u00B7 ${dev} \u00B7 ${dur} \u00B7 ${tokens}`);
         const summary = (session as any).summary ?? (session as any).initial_prompt;
         if (summary) {
           lines.push(`      ${pc.dim(summary)}`);
@@ -331,9 +337,9 @@ export function formatStatus(data: StatusData): string {
         const ws = (session as any).workspace_name ?? session.workspace_id;
         const dev = (session as any).device_name ?? session.device_id;
         const dur = formatDuration(session.duration_ms);
-        const cost = formatCost((session as any).cost_estimate_usd ?? null);
+        const tokens = formatTokensCompact((session as any).tokens_in ?? null, (session as any).tokens_out ?? null);
         const ago = formatRelativeTime(session.started_at);
-        lines.push(`    \u2713 ${ws} \u00B7 ${dev} \u00B7 ${dur} \u00B7 ${cost} \u00B7 ${ago}`);
+        lines.push(`    \u2713 ${ws} \u00B7 ${dev} \u00B7 ${dur} \u00B7 ${tokens} \u00B7 ${ago}`);
       }
     }
   } else {
@@ -357,7 +363,7 @@ export function formatStatus(data: StatusData): string {
   if (data.today) {
     lines.push("");
     lines.push(
-      `  Today: ${data.today.sessionCount} sessions \u00B7 ${formatDuration(data.today.totalDurationMs)} \u00B7 ${formatCost(data.today.totalCostUsd)}`,
+      `  Today: ${data.today.sessionCount} sessions \u00B7 ${formatDuration(data.today.totalDurationMs)} \u00B7 ${formatTokensCompact(data.today.totalTokensIn, data.today.totalTokensOut)}`,
     );
   }
 

@@ -33,6 +33,8 @@ function makeWorkspace(overrides: Partial<WorkspaceSummary> = {}): WorkspaceSumm
     last_session_at: "2025-01-15T12:00:00Z",
     device_count: 1,
     total_cost_usd: 1.5,
+    total_tokens_in: 100000,
+    total_tokens_out: 40000,
     total_duration_ms: 3600000,
     ...overrides,
   };
@@ -399,14 +401,15 @@ describe("Dashboard", () => {
   it("StatusBar displays aggregate statistics", async () => {
     const ws = makeWorkspace({
       session_count: 12,
-      total_cost_usd: 3.50,
+      total_tokens_in: 500000,
+      total_tokens_out: 200000,
       total_duration_ms: 7200000,
     });
     const instance = renderDashboard({ workspaces: [ws] });
     await wait(100);
     const output = strip(instance.lastFrame());
     expect(output).toContain("12 sessions");
-    expect(output).toContain("$3.50");
+    expect(output).toContain("500K/200K");
   });
 
   // 13. StatusBar shows WS connected/polling status

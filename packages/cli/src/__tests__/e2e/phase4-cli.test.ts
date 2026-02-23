@@ -153,11 +153,9 @@ describe("Session detail command", () => {
     expect(output).toContain("DONE");
     expect(output).toContain("Fixed authentication flow");
 
-    // Check Duration and Cost fields are present with values
+    // Check Duration field is present with value (Cost removed — tokens shown in Stats section)
     expect(output).toContain("Duration:");
     expect(output).toContain("45m");
-    expect(output).toContain("Cost:");
-    expect(output).toContain("$0.42");
   }, 15_000);
 
   test("Test 6: session <id> --transcript shows conversation turns with tool trees", async () => {

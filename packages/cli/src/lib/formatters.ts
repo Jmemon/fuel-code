@@ -215,6 +215,22 @@ export function formatTokens(
   return parts.join(" / ");
 }
 
+/**
+ * Format token counts compactly for table columns.
+ *
+ * Returns "125K/48K" (in/out) or "\u2014" when no data.
+ * Designed to fit in narrow table columns where formatTokens() is too wide.
+ */
+export function formatTokensCompact(
+  tokensIn: number | string | null | undefined,
+  tokensOut: number | string | null | undefined,
+): string {
+  const inN = typeof tokensIn === "string" ? parseInt(tokensIn, 10) : tokensIn;
+  const outN = typeof tokensOut === "string" ? parseInt(tokensOut, 10) : tokensOut;
+  if ((inN == null || inN === 0) && (outN == null || outN === 0)) return "\u2014";
+  return `${formatNumber(inN ?? 0)}/${formatNumber(outN ?? 0)}`;
+}
+
 // ---------------------------------------------------------------------------
 // Text Truncation
 // ---------------------------------------------------------------------------
@@ -325,7 +341,8 @@ interface SessionRowData {
   device_name?: string;
   device_id?: string;
   duration_ms: number | null;
-  cost_estimate_usd?: number | null;
+  tokens_in?: number | string | null;
+  tokens_out?: number | string | null;
   started_at: string;
   summary?: string | null;
   initial_prompt?: string | null;
@@ -333,8 +350,8 @@ interface SessionRowData {
 
 /**
  * Format a session into a table row array.
- * Returns: [status, workspace, device, duration, cost, started, summary]
- * Uses cost_estimate_usd field and falls back through summary -> initial_prompt -> (no summary)
+ * Returns: [status, workspace, device, duration, tokens, started, summary]
+ * Uses tokens_in/tokens_out fields and falls back through summary -> initial_prompt -> (no summary)
  */
 export function formatSessionRow(session: SessionRowData): string[] {
   return [
@@ -342,7 +359,7 @@ export function formatSessionRow(session: SessionRowData): string[] {
     session.workspace_name ?? session.workspace_id ?? "-",
     session.device_name ?? session.device_id ?? "-",
     formatDuration(session.duration_ms),
-    formatCost(session.cost_estimate_usd ?? null),
+    formatTokensCompact(session.tokens_in ?? null, session.tokens_out ?? null),
     formatRelativeTime(session.started_at),
     session.summary ?? session.initial_prompt ?? pc.dim("(no summary)"),
   ];
@@ -354,13 +371,14 @@ interface WorkspaceRowData {
   session_count: number;
   active_session_count: number;
   device_count: number;
-  total_cost_usd: number;
+  total_tokens_in?: number | string | null;
+  total_tokens_out?: number | string | null;
   last_session_at: string | null;
 }
 
 /**
  * Format a workspace into a table row array.
- * Returns: [name, sessions, active, devices, cost, last_activity]
+ * Returns: [name, sessions, active, devices, tokens, last_activity]
  * Uses last_session_at field. Null last_session_at renders as dimmed "never".
  */
 export function formatWorkspaceRow(workspace: WorkspaceRowData): string[] {
@@ -371,7 +389,7 @@ export function formatWorkspaceRow(workspace: WorkspaceRowData): string[] {
       ? pc.green(String(workspace.active_session_count))
       : "0",
     String(workspace.device_count),
-    formatCost(workspace.total_cost_usd),
+    formatTokensCompact(workspace.total_tokens_in ?? null, workspace.total_tokens_out ?? null),
     workspace.last_session_at
       ? formatRelativeTime(workspace.last_session_at)
       : pc.dim("never"),

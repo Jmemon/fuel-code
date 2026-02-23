@@ -189,7 +189,7 @@ describe("StatusBar", () => {
   test("8. shows key hints", () => {
     const { lastFrame } = render(
       <StatusBar
-        stats={{ sessions: 4, durationMs: 10200000, costUsd: 2.78, commits: 0 }}
+        stats={{ sessions: 4, durationMs: 10200000, tokensIn: 300000, tokensOut: 120000, commits: 0 }}
         wsState="connected"
       />,
     );

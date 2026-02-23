@@ -22,7 +22,7 @@ import { configExists, loadConfig } from "../lib/config.js";
 import {
   renderTable,
   formatDuration,
-  formatCost,
+  formatTokensCompact,
   formatRelativeTime,
   formatEmpty,
   formatError,
@@ -88,7 +88,7 @@ export function formatWorkspacesTable(workspaces: WorkspaceSummary[]): string {
     { header: "ACTIVE", align: "right" as const },
     { header: "DEVICES", align: "right" as const },
     { header: "LAST ACTIVITY" },
-    { header: "TOTAL COST", align: "right" as const },
+    { header: "TOTAL TOKENS", align: "right" as const },
     { header: "TOTAL TIME", align: "right" as const },
   ];
 
@@ -109,7 +109,7 @@ export function formatWorkspacesTable(workspaces: WorkspaceSummary[]): string {
       ws.last_session_at
         ? formatRelativeTime(ws.last_session_at)
         : pc.dim("never"),
-      formatCost(ws.total_cost_usd),
+      formatTokensCompact((ws as any).total_tokens_in ?? null, (ws as any).total_tokens_out ?? null),
       formatDuration(ws.total_duration_ms),
     ];
   });
@@ -137,7 +137,7 @@ export function formatWorkspaceDetail(detail: WorkspaceDetailResponse): string {
   }
   lines.push(`  First seen:    ${formatRelativeTime(workspace.first_seen_at)}`);
   lines.push(
-    `  Sessions:      ${stats.total_sessions}  |  Cost: ${formatCost(stats.total_cost_usd)}  |  Time: ${formatDuration(stats.total_duration_ms)}`,
+    `  Sessions:      ${stats.total_sessions}  |  Tokens: ${formatTokensCompact((stats as any).total_tokens_in ?? null, (stats as any).total_tokens_out ?? null)}  |  Time: ${formatDuration(stats.total_duration_ms)}`,
   );
 
   // -- Devices section --
@@ -170,7 +170,7 @@ export function formatWorkspaceDetail(detail: WorkspaceDetailResponse): string {
       { header: "STATUS" },
       { header: "DEVICE" },
       { header: "DURATION" },
-      { header: "COST", align: "right" as const },
+      { header: "TOKENS", align: "right" as const },
       { header: "STARTED" },
       { header: "SUMMARY" },
     ];
@@ -178,7 +178,7 @@ export function formatWorkspaceDetail(detail: WorkspaceDetailResponse): string {
       (s as any).lifecycle ?? "unknown",
       (s as any).device_name ?? s.device_id,
       formatDuration(s.duration_ms),
-      formatCost((s as any).cost_estimate_usd ?? null),
+      formatTokensCompact((s as any).tokens_in ?? null, (s as any).tokens_out ?? null),
       formatRelativeTime(s.started_at),
       (s as any).summary ?? (s as any).initial_prompt ?? pc.dim("(no summary)"),
     ]);

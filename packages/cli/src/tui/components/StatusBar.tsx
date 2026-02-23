@@ -7,7 +7,7 @@
 
 import React from "react";
 import { Text, Box } from "ink";
-import { formatDuration, formatCost } from "../../lib/formatters.js";
+import { formatDuration, formatTokensCompact } from "../../lib/formatters.js";
 import type { TodayStats } from "../hooks/useTodayStats.js";
 import type { WsConnectionState } from "../../lib/ws-client.js";
 
@@ -42,7 +42,7 @@ export function StatusBar({
         <Text>
           All: {stats.sessions} sessions {"\u00B7"}{" "}
           {formatDuration(stats.durationMs)} {"\u00B7"}{" "}
-          {formatCost(stats.costUsd)}
+          {formatTokensCompact(stats.tokensIn, stats.tokensOut)}
           {stats.commits > 0 ? ` \u00B7 ${stats.commits} commits` : ""}
         </Text>
       </Box>

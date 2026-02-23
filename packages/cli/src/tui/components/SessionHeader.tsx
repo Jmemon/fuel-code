@@ -16,7 +16,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Box, Text } from "ink";
 import type { SessionDetail } from "../../commands/session-detail.js";
-import { formatDuration, formatCost, formatRelativeTime, formatNumber } from "../../lib/formatters.js";
+import { formatDuration, formatRelativeTime, formatNumber } from "../../lib/formatters.js";
 
 export interface SessionHeaderProps {
   session: SessionDetail;
@@ -49,7 +49,6 @@ export function SessionHeader({ session }: SessionHeaderProps): React.ReactEleme
   const workspaceName = session.workspace_name ?? session.workspace_id;
   const deviceName = session.device_name ?? session.device_id;
   const duration = isLive ? formatDuration(elapsedMs) : formatDuration(session.duration_ms);
-  const cost = formatCost(session.cost_estimate_usd ?? null);
 
   // Token counts
   const stats = session.stats;
@@ -80,16 +79,13 @@ export function SessionHeader({ session }: SessionHeaderProps): React.ReactEleme
         )}
       </Box>
 
-      {/* Line 2: Started + Duration + Cost */}
+      {/* Line 2: Started + Duration */}
       <Box>
         <Text bold>Started: </Text>
         <Text>{formatRelativeTime(session.started_at)}</Text>
         <Text>  </Text>
         <Text bold>Duration: </Text>
         <Text>{duration}</Text>
-        <Text>  </Text>
-        <Text bold>Cost: </Text>
-        <Text>{cost}</Text>
       </Box>
 
       {/* Line 3: Tokens */}

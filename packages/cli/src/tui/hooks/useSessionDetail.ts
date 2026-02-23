@@ -100,7 +100,6 @@ export function useSessionDetail(
           lifecycle: update.lifecycle as SessionDetail["lifecycle"],
           ...(update.summary !== undefined && { summary: update.summary }),
           ...(update.stats && {
-            cost_estimate_usd: update.stats.total_cost_usd ?? prev.cost_estimate_usd,
             duration_ms: update.stats.duration_ms ?? prev.duration_ms,
             stats: {
               ...prev.stats,

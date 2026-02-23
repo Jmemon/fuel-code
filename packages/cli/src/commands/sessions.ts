@@ -20,7 +20,7 @@ import {
 import {
   renderTable,
   formatDuration,
-  formatCost,
+  formatTokensCompact,
   formatRelativeTime,
   formatLifecycle,
   formatEmpty,
@@ -110,7 +110,7 @@ export function formatSessionsTable(sessions: Session[], hasFilters?: boolean): 
       ext.workspace_name ?? s.workspace_id,
       ext.device_name ?? s.device_id,
       formatDuration(s.duration_ms),
-      formatCost(ext.cost_estimate_usd ?? null),
+      formatTokensCompact(ext.tokens_in ?? null, ext.tokens_out ?? null),
       formatRelativeTime(s.started_at),
       ext.summary ?? ext.initial_prompt ?? pc.dim("(no summary)"),
     ];
@@ -123,7 +123,7 @@ export function formatSessionsTable(sessions: Session[], hasFilters?: boolean): 
       { header: "WORKSPACE" },
       { header: "DEVICE" },
       { header: "DURATION", align: "right" },
-      { header: "COST", align: "right" },
+      { header: "TOKENS", align: "right" },
       { header: "STARTED" },
       { header: "SUMMARY" },
     ],

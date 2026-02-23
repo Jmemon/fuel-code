@@ -200,7 +200,6 @@ describe("session detail — default view", () => {
     expect(plain).toContain("my-project");
     expect(plain).toContain("macbook");
     expect(plain).toContain("DONE"); // summarized lifecycle
-    expect(plain).toContain("$1.23");
     expect(plain).toContain("claude-3-opus");
     expect(plain).toContain("main");
     expect(plain).toContain("Implemented session detail");

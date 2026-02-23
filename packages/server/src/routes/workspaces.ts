@@ -149,7 +149,9 @@ export function createWorkspacesRouter(deps: WorkspacesRouterDeps): Router {
               MAX(s.started_at) AS last_session_at,
               COUNT(DISTINCT s.device_id) AS device_count,
               COALESCE(SUM(s.cost_estimate_usd), 0) AS total_cost_usd,
-              COALESCE(SUM(s.duration_ms), 0) AS total_duration_ms
+              COALESCE(SUM(s.duration_ms), 0) AS total_duration_ms,
+              COALESCE(SUM(s.tokens_in), 0) AS total_tokens_in,
+              COALESCE(SUM(s.tokens_out), 0) AS total_tokens_out
             FROM workspaces w
             LEFT JOIN sessions s ON s.workspace_id = w.id
             GROUP BY w.id

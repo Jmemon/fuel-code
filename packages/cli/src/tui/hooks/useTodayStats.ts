@@ -12,7 +12,8 @@ import type { WorkspaceSummary } from "../../lib/api-client.js";
 export interface TodayStats {
   sessions: number;
   durationMs: number;
-  costUsd: number;
+  tokensIn: number;
+  tokensOut: number;
   commits: number;
 }
 
@@ -25,18 +26,21 @@ export function useTodayStats(workspaces: WorkspaceSummary[]): TodayStats {
   return useMemo(() => {
     let sessions = 0;
     let durationMs = 0;
-    let costUsd = 0;
+    let tokensIn = 0;
+    let tokensOut = 0;
 
     for (const ws of workspaces) {
       sessions += ws.session_count;
       durationMs += ws.total_duration_ms ?? 0;
-      costUsd += ws.total_cost_usd ?? 0;
+      tokensIn += Number((ws as any).total_tokens_in) || 0;
+      tokensOut += Number((ws as any).total_tokens_out) || 0;
     }
 
     return {
       sessions,
       durationMs,
-      costUsd,
+      tokensIn,
+      tokensOut,
       commits: 0, // Commits require a separate API call; omitted for now
     };
   }, [workspaces]);

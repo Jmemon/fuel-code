@@ -175,6 +175,8 @@ export interface TimelineSessionItem {
     duration_ms: number | null;
     summary: string | null;
     cost_estimate_usd: number | null;
+    tokens_in: number | null;
+    tokens_out: number | null;
     total_messages: number | null;
     tags: string[];
   };

@@ -459,7 +459,7 @@ describe("formatStatus", () => {
       queue: { pending: 0, deadLetter: 0 },
       recentSessions: [],
       hooks: { ccHooksInstalled: true, gitHooksInstalled: true },
-      today: { sessionCount: 5, totalDurationMs: 7200000, totalCostUsd: 3.5 },
+      today: { sessionCount: 5, totalDurationMs: 7200000, totalTokensIn: 500000, totalTokensOut: 200000 },
     };
 
     const output = formatStatus(data);
@@ -471,7 +471,7 @@ describe("formatStatus", () => {
     expect(plain).toContain("0 pending");
     expect(plain).toContain("Installed");
     expect(plain).toContain("5 sessions");
-    expect(plain).toContain("$3.50");
+    expect(plain).toContain("500K/200K");
   });
 
   it("formats unreachable backend", () => {
@@ -536,13 +536,13 @@ describe("formatStatus", () => {
       queue: { pending: 0, deadLetter: 0 },
       recentSessions: [],
       hooks: { ccHooksInstalled: true, gitHooksInstalled: true },
-      today: { sessionCount: 3, totalDurationMs: 5400000, totalCostUsd: 2.0 },
+      today: { sessionCount: 3, totalDurationMs: 5400000, totalTokensIn: 300000, totalTokensOut: 100000 },
     };
 
     const output = formatStatus(data);
     const plain = stripAnsi(output);
     expect(plain).toContain("3 sessions");
-    expect(plain).toContain("$2.00");
+    expect(plain).toContain("300K/100K");
   });
 
   it("supports --json output via data serialization", () => {

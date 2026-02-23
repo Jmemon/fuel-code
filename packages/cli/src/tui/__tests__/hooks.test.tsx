@@ -45,6 +45,8 @@ function makeWorkspace(overrides: Partial<WorkspaceSummary> = {}): WorkspaceSumm
     last_session_at: "2025-01-15T12:00:00Z",
     device_count: 1,
     total_cost_usd: 2.0,
+    total_tokens_in: 100000,
+    total_tokens_out: 40000,
     total_duration_ms: 3600000,
     ...overrides,
   };
@@ -305,20 +307,21 @@ describe("useTodayStats", () => {
   // 10. Computes aggregate stats from workspaces
   it("aggregates stats from workspace list", async () => {
     const workspaces: WorkspaceSummary[] = [
-      makeWorkspace({ session_count: 3, total_cost_usd: 1.0, total_duration_ms: 1000 }),
-      makeWorkspace({ session_count: 7, total_cost_usd: 2.5, total_duration_ms: 2000 }),
+      makeWorkspace({ session_count: 3, total_tokens_in: 100000, total_tokens_out: 50000, total_duration_ms: 1000 }),
+      makeWorkspace({ session_count: 7, total_tokens_in: 200000, total_tokens_out: 80000, total_duration_ms: 2000 }),
     ];
 
     function TestComponent() {
       const stats = useTodayStats(workspaces);
-      return <Text>{`s:${stats.sessions} c:${stats.costUsd.toFixed(2)} d:${stats.durationMs}`}</Text>;
+      return <Text>{`s:${stats.sessions} ti:${stats.tokensIn} to:${stats.tokensOut} d:${stats.durationMs}`}</Text>;
     }
 
     const instance = render(<TestComponent />);
     await wait(50);
     const output = strip(instance.lastFrame());
     expect(output).toContain("s:10");
-    expect(output).toContain("c:3.50");
+    expect(output).toContain("ti:300000");
+    expect(output).toContain("to:130000");
     expect(output).toContain("d:3000");
   });
 });

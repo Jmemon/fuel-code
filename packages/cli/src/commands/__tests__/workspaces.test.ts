@@ -239,7 +239,7 @@ describe("formatWorkspacesTable", () => {
     expect(plain).toContain("ACTIVE");
     expect(plain).toContain("DEVICES");
     expect(plain).toContain("LAST ACTIVITY");
-    expect(plain).toContain("TOTAL COST");
+    expect(plain).toContain("TOTAL TOKENS");
     expect(plain).toContain("TOTAL TIME");
   });
 
@@ -268,14 +268,15 @@ describe("formatWorkspacesTable", () => {
     expect(plain).toContain("fuel-code init");
   });
 
-  it("formats cost and duration correctly", () => {
+  it("formats tokens and duration correctly", () => {
     const ws = makeWorkspaceSummary({
-      total_cost_usd: 12.34,
+      total_tokens_in: 500000,
+      total_tokens_out: 200000,
       total_duration_ms: 7200000,
     });
     const output = formatWorkspacesTable([ws] as any);
     const plain = stripAnsi(output);
-    expect(plain).toContain("$12.34");
+    expect(plain).toContain("500K/200K");
     expect(plain).toContain("2h");
   });
 

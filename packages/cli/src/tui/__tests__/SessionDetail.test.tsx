@@ -263,7 +263,7 @@ async function waitForNoText(lastFrame: () => string, text: string, timeoutMs = 
 // ---------------------------------------------------------------------------
 
 describe("SessionDetail — Header", () => {
-  it("1. renders workspace, device, duration, cost, summary", async () => {
+  it("1. renders workspace, device, duration, summary", async () => {
     const api = makeMockApiClient();
     const ws = makeMockWsClient();
     const { lastFrame } = render(
@@ -274,7 +274,6 @@ describe("SessionDetail — Header", () => {
     const frame = lastFrame();
     expect(frame).toContain("my-project");
     expect(frame).toContain("macbook");
-    expect(frame).toContain("$1.23");
     expect(frame).toContain("JWT authentication");
   });
 

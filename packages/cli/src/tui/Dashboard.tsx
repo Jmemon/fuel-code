@@ -123,7 +123,6 @@ export function Dashboard({
       const patch: Record<string, unknown> = { lifecycle: update.lifecycle };
       if (update.summary) patch.summary = update.summary;
       if (update.stats?.total_messages != null) patch.total_messages = update.stats.total_messages;
-      if (update.stats?.total_cost_usd != null) patch.cost_estimate_usd = update.stats.total_cost_usd;
       if (update.stats?.duration_ms != null) patch.duration_ms = update.stats.duration_ms;
       wsBufferRef.current.push({ type: "update", sessionId: update.session_id, patch });
     };

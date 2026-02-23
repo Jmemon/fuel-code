@@ -19,7 +19,6 @@ import type { Session, Event, GitActivity, TranscriptMessage } from "@fuel-code/
 import { FuelApiClient, ApiError } from "../lib/api-client.js";
 import {
   formatDuration,
-  formatCost,
   formatRelativeTime,
   formatLifecycle,
   formatTokens,
@@ -131,9 +130,6 @@ export function formatSessionSummary(session: SessionDetail): string {
 
   // Duration
   lines.push(`  ${pc.bold("Duration:")}    ${formatDuration(session.duration_ms)}`);
-
-  // Cost
-  lines.push(`  ${pc.bold("Cost:")}        ${formatCost(session.cost_estimate_usd ?? null)}`);
 
   // Model
   if (session.model) {
@@ -295,7 +291,6 @@ export function generateMarkdownExport(data: SessionExportData): string {
   lines.push(`- **Status:** ${session.lifecycle}`);
   lines.push(`- **Started:** ${session.started_at}`);
   lines.push(`- **Duration:** ${formatDuration(session.duration_ms)}`);
-  lines.push(`- **Cost:** ${formatCost(session.cost_estimate_usd ?? null)}`);
   if (session.model) lines.push(`- **Model:** ${session.model}`);
   const branch = session.branch ?? session.git_branch;
   if (branch) lines.push(`- **Branch:** ${branch}`);

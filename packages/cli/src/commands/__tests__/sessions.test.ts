@@ -243,13 +243,13 @@ describe("formatSessionsTable", () => {
     expect(plain).toContain("DEVICE");
   });
 
-  it("renders DURATION, COST, STARTED, SUMMARY columns", () => {
+  it("renders DURATION, TOKENS, STARTED, SUMMARY columns", () => {
     const sessions = [makeSession()] as any;
     const output = formatSessionsTable(sessions);
     const plain = stripAnsi(output);
 
     expect(plain).toContain("DURATION");
-    expect(plain).toContain("COST");
+    expect(plain).toContain("TOKENS");
     expect(plain).toContain("STARTED");
     expect(plain).toContain("SUMMARY");
   });
@@ -291,11 +291,11 @@ describe("formatSessionsTable", () => {
     expect(plain).toContain("1h30m");
   });
 
-  it("shows formatted cost", () => {
-    const sessions = [makeSession({ cost_estimate_usd: 2.50 })] as any;
+  it("shows formatted tokens", () => {
+    const sessions = [makeSession({ tokens_in: 125000, tokens_out: 48000 })] as any;
     const output = formatSessionsTable(sessions);
     const plain = stripAnsi(output);
-    expect(plain).toContain("$2.50");
+    expect(plain).toContain("125K/48K");
   });
 
   it("shows summary text", () => {

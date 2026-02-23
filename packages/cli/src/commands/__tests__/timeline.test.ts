@@ -85,6 +85,8 @@ function makeSessionItem(overrides?: Partial<TimelineSessionItem>): TimelineSess
       duration_ms: 5400000,
       summary: "Built user auth flow",
       cost_estimate_usd: 1.50,
+      tokens_in: 125000,
+      tokens_out: 48000,
       total_messages: 25,
       tags: ["feature"],
     },
@@ -245,7 +247,7 @@ describe("formatTimeline", () => {
 
     expect(plain).toContain("fuel-code \u00b7 macbook");
     expect(plain).toContain("1h30m");
-    expect(plain).toContain("$1.50");
+    expect(plain).toContain("125K/48K");
   });
 
   it("renders session summary", () => {
@@ -337,7 +339,7 @@ describe("formatTimeline", () => {
 
     expect(plain).toContain("1 session");
     expect(plain).toContain("1h30m");
-    expect(plain).toContain("$1.50");
+    expect(plain).toContain("125K/48K");
     expect(plain).toContain("1 commit");
     // Footer uses middle-dot separator, not pipe
     expect(plain).toContain("\u00b7");
@@ -351,7 +353,8 @@ describe("formatTimeline", () => {
     s2.session.id = "sess-002";
     s2.session.started_at = "2025-06-15T14:00:00Z";
     s2.session.duration_ms = 3600000;
-    s2.session.cost_estimate_usd = 0.75;
+    s2.session.tokens_in = 80000;
+    s2.session.tokens_out = 30000;
     s2.git_activity = [
       {
         id: "g-1",

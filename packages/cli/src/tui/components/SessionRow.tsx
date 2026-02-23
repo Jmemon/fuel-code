@@ -8,7 +8,7 @@
 import React from "react";
 import { Text, Box } from "ink";
 import type { Session } from "@fuel-code/shared";
-import { formatDuration, formatCost } from "../../lib/formatters.js";
+import { formatDuration, formatTokensCompact } from "../../lib/formatters.js";
 
 // Lifecycle display: icon + color mapping
 const LIFECYCLE_DISPLAY: Record<
@@ -65,7 +65,7 @@ export function SessionRow({
 
   const deviceName = session.device_name ?? session.device_id;
   const duration = formatDuration(session.duration_ms);
-  const cost = formatCost(session.cost_estimate_usd ?? null);
+  const tokens = formatTokensCompact((session as any).tokens_in ?? null, (session as any).tokens_out ?? null);
   const summary = session.summary ?? "(no summary)";
   const commitMessages: string[] = session.commit_messages ?? [];
   const overflowCount = Math.max(0, commitMessages.length - 2);
@@ -85,7 +85,7 @@ export function SessionRow({
         <Text>{"  "}</Text>
         <Text>{duration}</Text>
         <Text>{"  "}</Text>
-        <Text>{cost}</Text>
+        <Text>{tokens}</Text>
       </Box>
       <Box paddingLeft={4}>
         <Text dimColor wrap="truncate">

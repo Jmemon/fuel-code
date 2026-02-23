@@ -23,7 +23,7 @@ import {
 } from "../lib/api-client.js";
 import {
   formatDuration,
-  formatCost,
+  formatTokensCompact,
   formatLifecycle,
   formatError,
   outputResult,
@@ -178,9 +178,9 @@ function renderSessionItem(item: TimelineSessionItem): string {
   const lifecycle = formatLifecycle(s.lifecycle);
   const location = `${s.workspace_name} \u00b7 ${s.device_name}`;
   const duration = formatDuration(s.duration_ms);
-  const cost = formatCost(s.cost_estimate_usd);
+  const tokens = formatTokensCompact(s.tokens_in, s.tokens_out);
 
-  lines.push(`  ${pc.dim(time)}  ${lifecycle}  ${location}  ${pc.dim(duration)}  ${pc.dim(cost)}`);
+  lines.push(`  ${pc.dim(time)}  ${lifecycle}  ${location}  ${pc.dim(duration)}  ${pc.dim(tokens)}`);
 
   // Summary line (indented under the session header)
   if (s.summary) {
@@ -240,19 +240,22 @@ function renderOrphanItem(item: TimelineOrphanItem): string {
 function computeStats(items: TimelineItem[]): {
   sessions: number;
   totalDurationMs: number;
-  totalCostUsd: number;
+  totalTokensIn: number;
+  totalTokensOut: number;
   commits: number;
 } {
   let sessions = 0;
   let totalDurationMs = 0;
-  let totalCostUsd = 0;
+  let totalTokensIn = 0;
+  let totalTokensOut = 0;
   let commits = 0;
 
   for (const item of items) {
     if (item.type === "session") {
       sessions++;
       totalDurationMs += item.session.duration_ms ?? 0;
-      totalCostUsd += item.session.cost_estimate_usd ?? 0;
+      totalTokensIn += Number(item.session.tokens_in) || 0;
+      totalTokensOut += Number(item.session.tokens_out) || 0;
     }
     const gitActivity = item.git_activity;
     for (const git of gitActivity) {
@@ -260,7 +263,7 @@ function computeStats(items: TimelineItem[]): {
     }
   }
 
-  return { sessions, totalDurationMs, totalCostUsd, commits };
+  return { sessions, totalDurationMs, totalTokensIn, totalTokensOut, commits };
 }
 
 /**
@@ -306,7 +309,7 @@ export function formatTimeline(data: TimelineResponse): string {
       `${datePrefix}` +
         `${stats.sessions} session${stats.sessions !== 1 ? "s" : ""}` +
         ` \u00b7 ${formatDuration(stats.totalDurationMs)}` +
-        ` \u00b7 ${formatCost(stats.totalCostUsd)}` +
+        ` \u00b7 ${formatTokensCompact(stats.totalTokensIn, stats.totalTokensOut)}` +
         ` \u00b7 ${stats.commits} commit${stats.commits !== 1 ? "s" : ""}`,
     ),
   );
