@@ -358,6 +358,198 @@ describe("scanForSessions", () => {
     expect(result.discovered.length).toBe(1);
     expect(result.discovered[0].sessionId).toBe(validId);
   });
+
+  // -------------------------------------------------------------------------
+  // Bug 0: versioned sessions-index.json format
+  // -------------------------------------------------------------------------
+
+  it("parses versioned sessions-index.json with {version, entries} format", async () => {
+    const sessionId = "f1f2f3f4-a1a2-b1b2-c1c2-d1d2d3d4d5d6";
+    const projectDir = createProjectDir("-Users-test-Desktop-versioned", [
+      { id: sessionId, content: '{"type":"user"}\n', mtimeMs: Date.now() - 600_000 },
+    ]);
+
+    // Write versioned sessions-index.json (real CC format)
+    const index = {
+      version: 1,
+      entries: [
+        {
+          sessionId,
+          projectPath: "/Users/test/Desktop/versioned",
+          created: "2025-07-01T08:00:00.000Z",
+          modified: "2025-07-01T09:00:00.000Z",
+          gitBranch: "develop",
+          firstPrompt: "Implement versioned index",
+          messageCount: 10,
+        },
+      ],
+    };
+    fs.writeFileSync(
+      path.join(projectDir, "sessions-index.json"),
+      JSON.stringify(index),
+    );
+
+    const result = await scanForSessions(tmpDir, {
+      skipActiveThresholdMs: 300_000,
+    });
+
+    expect(result.discovered.length).toBe(1);
+    const session = result.discovered[0];
+    expect(session.gitBranch).toBe("develop");
+    expect(session.firstPrompt).toBe("Implement versioned index");
+    expect(session.firstTimestamp).toBe("2025-07-01T08:00:00.000Z");
+    expect(session.lastTimestamp).toBe("2025-07-01T09:00:00.000Z");
+    expect(session.messageCount).toBe(10);
+  });
+
+  // -------------------------------------------------------------------------
+  // Step 2: cwd extracted from JSONL header
+  // -------------------------------------------------------------------------
+
+  it("extracts cwd from JSONL header when no sessions-index.json", async () => {
+    const sessionId = "a0a0a0a0-b1b1-c2c2-d3d3-e4e4e4e4e4e4";
+    const cwdPath = "/Users/test/Desktop/jsonl-cwd-project";
+    const jsonlContent = JSON.stringify({
+      type: "user",
+      sessionId,
+      timestamp: "2025-08-01T10:00:00.000Z",
+      cwd: cwdPath,
+      message: { role: "user", content: "Hello" },
+    }) + "\n";
+
+    createProjectDir("-Users-test-Desktop-jsonl-cwd-project", [
+      { id: sessionId, content: jsonlContent, mtimeMs: Date.now() - 600_000 },
+    ]);
+
+    const result = await scanForSessions(tmpDir, {
+      skipActiveThresholdMs: 300_000,
+    });
+
+    expect(result.discovered.length).toBe(1);
+    // CWD from JSONL should be used (projectDirToPath would produce something different)
+    expect(result.discovered[0].resolvedCwd).toBe(cwdPath);
+  });
+
+  // -------------------------------------------------------------------------
+  // Step 5: CWD priority — sessions-index.json projectPath wins over JSONL cwd
+  // -------------------------------------------------------------------------
+
+  it("prefers sessions-index.json projectPath over JSONL cwd", async () => {
+    const sessionId = "b0b0b0b0-c1c1-d2d2-e3e3-f4f4f4f4f4f4";
+    const indexPath = "/Users/test/Desktop/index-wins";
+    const jsonlCwd = "/Users/test/Desktop/jsonl-loses";
+
+    const jsonlContent = JSON.stringify({
+      type: "user",
+      sessionId,
+      timestamp: "2025-09-01T10:00:00.000Z",
+      cwd: jsonlCwd,
+      message: { role: "user", content: "Hello" },
+    }) + "\n";
+
+    const projectDir = createProjectDir("-Users-test-Desktop-priority", [
+      { id: sessionId, content: jsonlContent, mtimeMs: Date.now() - 600_000 },
+    ]);
+
+    // Write sessions-index.json with different projectPath
+    const index = [
+      {
+        sessionId,
+        projectPath: indexPath,
+        created: "2025-09-01T10:00:00.000Z",
+      },
+    ];
+    fs.writeFileSync(
+      path.join(projectDir, "sessions-index.json"),
+      JSON.stringify(index),
+    );
+
+    const result = await scanForSessions(tmpDir, {
+      skipActiveThresholdMs: 300_000,
+    });
+
+    expect(result.discovered.length).toBe(1);
+    expect(result.discovered[0].resolvedCwd).toBe(indexPath);
+  });
+
+  // -------------------------------------------------------------------------
+  // Bug 2: parent directory walk resolves workspace from subdirectory
+  // -------------------------------------------------------------------------
+
+  it("resolves workspace by walking up to parent .git directory", async () => {
+    // Create a real directory structure with .git/config in parent
+    const repoDir = path.join(tmpDir, "parent-repo");
+    const subDir = path.join(repoDir, "packages", "sub");
+    fs.mkdirSync(subDir, { recursive: true });
+
+    // Create .git/config with a remote origin
+    const gitDir = path.join(repoDir, ".git");
+    fs.mkdirSync(gitDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(gitDir, "config"),
+      '[remote "origin"]\n\turl = git@github.com:testuser/parent-repo.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n',
+    );
+
+    // Create a session whose CWD points to the subdirectory
+    const sessionId = "d0d0d0d0-e1e1-f2f2-a3a3-b4b4b4b4b4b4";
+    const jsonlContent = JSON.stringify({
+      type: "user",
+      sessionId,
+      timestamp: "2025-10-01T10:00:00.000Z",
+      cwd: subDir,
+      message: { role: "user", content: "Hello from subdir" },
+    }) + "\n";
+
+    createProjectDir("-parent-repo-packages-sub", [
+      { id: sessionId, content: jsonlContent, mtimeMs: Date.now() - 600_000 },
+    ]);
+
+    const result = await scanForSessions(tmpDir, {
+      skipActiveThresholdMs: 300_000,
+    });
+
+    expect(result.discovered.length).toBe(1);
+    // Should resolve via git commands or parent walk, not _unassociated
+    expect(result.discovered[0].workspaceCanonicalId).toContain("github.com/testuser/parent-repo");
+  });
+
+  // -------------------------------------------------------------------------
+  // Bug 3: local repo (no remote) gets local:<sha256> ID
+  // -------------------------------------------------------------------------
+
+  it("resolves local repo (no remote) to local:<sha256> ID", async () => {
+    const { execSync: exec } = await import("node:child_process");
+
+    // Create a real git repo with no remote
+    const localRepo = path.join(tmpDir, "local-only-repo");
+    fs.mkdirSync(localRepo, { recursive: true });
+    exec("git init", { cwd: localRepo, stdio: "pipe" });
+    exec("git config user.email test@test.com", { cwd: localRepo, stdio: "pipe" });
+    exec("git config user.name Test", { cwd: localRepo, stdio: "pipe" });
+    fs.writeFileSync(path.join(localRepo, "README.md"), "# Local repo");
+    exec("git add README.md && git commit -m 'init'", { cwd: localRepo, stdio: "pipe" });
+
+    const sessionId = "e0e0e0e0-f1f1-a2a2-b3b3-c4c4c4c4c4c4";
+    const jsonlContent = JSON.stringify({
+      type: "user",
+      sessionId,
+      timestamp: "2025-11-01T10:00:00.000Z",
+      cwd: localRepo,
+      message: { role: "user", content: "Hello local" },
+    }) + "\n";
+
+    createProjectDir("-local-only-repo", [
+      { id: sessionId, content: jsonlContent, mtimeMs: Date.now() - 600_000 },
+    ]);
+
+    const result = await scanForSessions(tmpDir, {
+      skipActiveThresholdMs: 300_000,
+    });
+
+    expect(result.discovered.length).toBe(1);
+    // Should be local:<sha256>, not _unassociated
+    expect(result.discovered[0].workspaceCanonicalId).toMatch(/^local:[a-f0-9]{64}$/);
+  });
 });
 
 // ---------------------------------------------------------------------------

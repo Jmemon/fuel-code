@@ -15,11 +15,13 @@
  *   2. Ingestion: upload transcripts and emit synthetic session events
  */
 
+import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import {
+  deriveWorkspaceCanonicalId,
   generateId,
   normalizeGitRemote,
   type Event,
@@ -294,6 +296,10 @@ export async function scanForSessions(
     return result;
   }
 
+  // Cache workspace resolution per CWD to avoid repeated git invocations
+  // (most sessions in the same project dir share one CWD)
+  const workspaceCache = new Map<string, string>();
+
   for (const projectDir of projectDirs) {
     const projectDirPath = path.join(projectsDir, projectDir);
 
@@ -387,38 +393,42 @@ export async function scanForSessions(
       // Try to enrich from sessions-index.json
       const indexEntry = sessionsIndex?.get(sessionId);
       if (indexEntry) {
-        discovered.gitBranch = indexEntry.gitBranch ?? null;
+        discovered.gitBranch = indexEntry.gitBranch || null;
         discovered.firstPrompt = indexEntry.firstPrompt ?? null;
         discovered.firstTimestamp = indexEntry.created ?? null;
         discovered.lastTimestamp = indexEntry.modified ?? null;
         discovered.messageCount = indexEntry.messageCount ?? null;
       }
 
-      // If sessions-index.json didn't provide timestamps, read from the JSONL file
-      if (!discovered.firstTimestamp || !discovered.lastTimestamp) {
-        try {
-          const metadata = await readJsonlMetadata(entryPath);
-          discovered.firstTimestamp =
-            discovered.firstTimestamp ?? metadata.firstTimestamp;
-          discovered.lastTimestamp =
-            discovered.lastTimestamp ?? metadata.lastTimestamp;
-          discovered.gitBranch =
-            discovered.gitBranch ?? metadata.gitBranch;
-        } catch (err) {
-          result.errors.push({
-            path: entryPath,
-            error: `Failed to read JSONL metadata: ${err instanceof Error ? err.message : String(err)}`,
-          });
-        }
+      // Always read JSONL metadata (need cwd + fallback timestamps/branch)
+      let jsonlMetadata: { firstTimestamp: string | null; lastTimestamp: string | null; gitBranch: string | null; cwd: string | null } | null = null;
+      try {
+        jsonlMetadata = await readJsonlMetadata(entryPath);
+        discovered.firstTimestamp =
+          discovered.firstTimestamp ?? jsonlMetadata.firstTimestamp;
+        discovered.lastTimestamp =
+          discovered.lastTimestamp ?? jsonlMetadata.lastTimestamp;
+        discovered.gitBranch =
+          discovered.gitBranch ?? jsonlMetadata.gitBranch;
+      } catch (err) {
+        result.errors.push({
+          path: entryPath,
+          error: `Failed to read JSONL metadata: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
 
-      // Resolve workspace: convert dir name to path, check for git repo
-      const resolvedPath = projectDirToPath(projectDir);
-      discovered.resolvedCwd = resolvedPath;
+      // CWD waterfall: authoritative sources first, projectDirToPath fallback last
+      const resolvedCwd =
+        indexEntry?.projectPath ||
+        jsonlMetadata?.cwd ||
+        projectDirToPath(projectDir);
+      discovered.resolvedCwd = resolvedCwd;
 
-      // Check if the resolved path exists and has a .git directory
-      const workspaceId = resolveWorkspaceFromPath(resolvedPath);
-      discovered.workspaceCanonicalId = workspaceId;
+      // Resolve workspace (cached per CWD)
+      if (!workspaceCache.has(resolvedCwd)) {
+        workspaceCache.set(resolvedCwd, resolveWorkspaceFromPath(resolvedCwd));
+      }
+      discovered.workspaceCanonicalId = workspaceCache.get(resolvedCwd)!;
 
       result.discovered.push(discovered);
     }
@@ -747,15 +757,21 @@ function loadSessionsIndex(
     const raw = fs.readFileSync(indexPath, "utf-8");
     const parsed = JSON.parse(raw);
 
-    // sessions-index.json is an array of session entries
-    if (!Array.isArray(parsed)) {
+    // sessions-index.json may be a plain array OR a versioned object {version, entries: [...]}
+    let entries: unknown[];
+    if (Array.isArray(parsed)) {
+      entries = parsed;
+    } else if (parsed && typeof parsed === "object" && Array.isArray((parsed as Record<string, unknown>).entries)) {
+      entries = (parsed as Record<string, unknown>).entries as unknown[];
+    } else {
       return null;
     }
 
     const map = new Map<string, SessionsIndexEntry>();
-    for (const entry of parsed) {
-      if (entry && typeof entry === "object" && entry.sessionId) {
-        map.set(entry.sessionId, entry as SessionsIndexEntry);
+    for (const entry of entries) {
+      const e = entry as Record<string, unknown>;
+      if (e && typeof e === "object" && e.sessionId) {
+        map.set(e.sessionId as string, e as unknown as SessionsIndexEntry);
       }
     }
     return map;
@@ -774,11 +790,13 @@ async function readJsonlMetadata(filePath: string): Promise<{
   firstTimestamp: string | null;
   lastTimestamp: string | null;
   gitBranch: string | null;
+  cwd: string | null;
 }> {
   const result = {
     firstTimestamp: null as string | null,
     lastTimestamp: null as string | null,
     gitBranch: null as string | null,
+    cwd: null as string | null,
   };
 
   // Check for empty file
@@ -807,6 +825,9 @@ async function readJsonlMetadata(filePath: string): Promise<{
         }
         if (parsed.gitBranch && !result.gitBranch) {
           result.gitBranch = parsed.gitBranch;
+        }
+        if (parsed.cwd && !result.cwd) {
+          result.cwd = parsed.cwd;
         }
       } catch {
         // Skip malformed lines
@@ -849,41 +870,117 @@ async function readJsonlMetadata(filePath: string): Promise<{
 }
 
 /**
+ * Run a shell command silently, returning trimmed stdout or null on failure.
+ * Mirrors the pattern from cc-hook.ts for git command execution.
+ */
+function execSilent(cmd: string, cwd: string): string | null {
+  try {
+    const result = execSync(cmd, { cwd, stdio: "pipe", timeout: 5000 });
+    const output = result.toString().trim();
+    return output || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve workspace using git commands — mirrors the live resolveWorkspace()
+ * from cc-hook.ts. Handles subdirectories (git rev-parse walks up), remotes,
+ * and local repos (no remote → local:<sha256>).
+ *
+ * Returns null if the path is not inside a git repo.
+ */
+function resolveWorkspaceWithGit(cwd: string): string | null {
+  const isGitRepo = execSilent("git rev-parse --is-inside-work-tree", cwd);
+  if (isGitRepo !== "true") {
+    return null;
+  }
+
+  // Check for remotes (prefer origin, fall back to first alphabetically)
+  let gitRemote: string | null = null;
+  const remoteList = execSilent("git remote", cwd);
+  if (remoteList) {
+    const remotes = remoteList.split("\n").map((r) => r.trim()).filter(Boolean);
+    const targetRemote = remotes.includes("origin") ? "origin" : remotes.sort()[0];
+    if (targetRemote) {
+      gitRemote = execSilent(`git remote get-url ${targetRemote}`, cwd);
+    }
+  }
+
+  // For local repos with no remote, get the first commit hash
+  let firstCommitHash: string | null = null;
+  if (!gitRemote) {
+    firstCommitHash = execSilent("git rev-list --max-parents=0 HEAD", cwd);
+    if (firstCommitHash) {
+      firstCommitHash = firstCommitHash.split("\n")[0].trim();
+    }
+  }
+
+  return deriveWorkspaceCanonicalId(gitRemote, firstCommitHash);
+}
+
+/**
+ * Parse a git remote URL from a .git/config file on disk.
+ * Used as a filesystem fallback when git commands can't run (e.g., CWD deleted
+ * but parent .git still exists).
+ */
+function parseGitConfigRemote(gitDir: string): string | null {
+  const gitConfigPath = path.join(gitDir, "config");
+  if (!fs.existsSync(gitConfigPath)) return null;
+
+  try {
+    const configContent = fs.readFileSync(gitConfigPath, "utf-8");
+    const remoteMatch = configContent.match(
+      /\[remote "origin"\][^[]*url\s*=\s*(.+)/,
+    );
+    if (remoteMatch) {
+      return remoteMatch[1].trim();
+    }
+  } catch {
+    // Best effort
+  }
+  return null;
+}
+
+/**
  * Resolve a workspace canonical ID from a filesystem path.
  *
- * Checks if the path exists on disk and contains a .git directory.
- * If so, tries to read the git remote URL. Falls back to "_unassociated".
+ * Multi-strategy resolver:
+ *   1. If path exists on disk → use git commands (handles subdirectories)
+ *   2. Walk up parent directories looking for .git → parse config + deriveWorkspaceCanonicalId
+ *   3. Nothing found → "_unassociated"
  */
 function resolveWorkspaceFromPath(resolvedPath: string): string {
   try {
-    if (!fs.existsSync(resolvedPath)) {
-      return "_unassociated";
+    // Strategy 1: Path exists on disk → use git commands (handles subdirs automatically)
+    if (fs.existsSync(resolvedPath)) {
+      const gitResult = resolveWorkspaceWithGit(resolvedPath);
+      if (gitResult) return gitResult;
     }
 
-    const gitDir = path.join(resolvedPath, ".git");
-    if (!fs.existsSync(gitDir)) {
-      return "_unassociated";
+    // Strategy 2: Walk up parent directories looking for .git/
+    let current = resolvedPath;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const parent = path.dirname(current);
+      if (parent === current) break; // reached filesystem root
+      current = parent;
+
+      if (!fs.existsSync(current)) continue;
+
+      const gitDir = path.join(current, ".git");
+      if (!fs.existsSync(gitDir)) continue;
+
+      // Found a .git — try git commands first (handles local repos too)
+      const gitResult = resolveWorkspaceWithGit(current);
+      if (gitResult) return gitResult;
+
+      // Fallback: parse .git/config directly + use deriveWorkspaceCanonicalId
+      const remoteUrl = parseGitConfigRemote(gitDir);
+      return deriveWorkspaceCanonicalId(remoteUrl, null);
     }
 
-    // Try to read git remote URL from .git/config
-    const gitConfigPath = path.join(gitDir, "config");
-    if (fs.existsSync(gitConfigPath)) {
-      const configContent = fs.readFileSync(gitConfigPath, "utf-8");
-      // Parse the [remote "origin"] section for the url
-      const remoteMatch = configContent.match(
-        /\[remote "origin"\][^[]*url\s*=\s*(.+)/,
-      );
-      if (remoteMatch) {
-        const remoteUrl = remoteMatch[1].trim();
-        // Use a simple normalization: strip protocol, auth, .git suffix
-        const normalized = normalizeGitRemote(remoteUrl);
-        if (normalized) {
-          return normalized;
-        }
-      }
-    }
-
-    // Has .git but no remote — it's a local repo
+    // Strategy 3: Nothing found
     return "_unassociated";
   } catch {
     return "_unassociated";
