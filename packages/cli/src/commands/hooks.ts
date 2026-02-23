@@ -185,10 +185,15 @@ export async function runCCInstall(): Promise<void> {
   // Prefers the global `fuel-code` binary; falls back to `bun run <abs-path>`.
   const cliCommand = resolveCliCommand();
 
-  // Construct hook commands. Uses bash -c '... &' to fork to background
-  // so the hook exits immediately and doesn't block Claude Code.
-  const sessionStartCmd = `bash -c '${cliCommand} cc-hook session-start &'`;
-  const sessionEndCmd = `bash -c '${cliCommand} cc-hook session-end &'`;
+  // Construct hook commands. Captures stdin synchronously (CC pipes context
+  // JSON to stdin), then backgrounds the actual processing so the hook
+  // returns immediately and doesn't block Claude Code.
+  //
+  // IMPORTANT: `bash -c 'cmd &'` redirects stdin from /dev/null for the
+  // backgrounded process (POSIX non-interactive shell behavior). We MUST
+  // read stdin BEFORE backgrounding, then pipe the captured data in.
+  const sessionStartCmd = `bash -c 'data=$(cat); printf "%s" "$data" | ${cliCommand} cc-hook session-start &'`;
+  const sessionEndCmd = `bash -c 'data=$(cat); printf "%s" "$data" | ${cliCommand} cc-hook session-end &'`;
 
   // Ensure ~/.claude/ directory exists
   if (!fs.existsSync(settingsDir)) {
@@ -221,6 +226,10 @@ export async function runCCInstall(): Promise<void> {
 
   // Upsert SessionEnd hook (fires once when the session actually terminates)
   upsertHook(settings.hooks, "SessionEnd", sessionEndCmd);
+
+  // Clean up stale Stop hook from pre-migration installs (was previously
+  // used for session-end before we migrated to SessionEnd)
+  removeHook(settings.hooks, "Stop");
 
   // Write settings atomically: write to a tmp file then rename
   const tmpPath = settingsPath + `.tmp-${crypto.randomUUID()}`;
@@ -466,8 +475,6 @@ export async function runTest(): Promise<void> {
         dataJson,
         "--workspace-id",
         "_unassociated",
-        "--session-id",
-        testPayload.cc_session_id,
       ],
       {
         stdout: "pipe",
