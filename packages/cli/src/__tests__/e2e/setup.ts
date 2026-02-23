@@ -31,7 +31,7 @@ import { createEventHandler } from "../../../../server/src/pipeline/wire.js";
 import { createWsServer, type WsServerHandle } from "../../../../server/src/ws/index.js";
 import { logger } from "../../../../server/src/logger.js";
 
-import { seedFixtures, IDS } from "./fixtures.js";
+import { seedFixtures, cleanFixtures, IDS } from "./fixtures.js";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -111,14 +111,29 @@ async function _doSetup(): Promise<TestServerContext> {
   //    test files from racing on TRUNCATE + INSERT. The first file to acquire
   //    the lock does the full seed; subsequent files check for our specific
   //    fixture data and skip if it's already present.
+  //    A reference count table (_e2e_refs) tracks how many test files are
+  //    active so the last one to finish can clean up all fixture data.
   //    Advisory lock key 99999 is arbitrary but must be consistent.
   await sql.begin(async (tx) => {
     await tx`SELECT pg_advisory_xact_lock(99999)`;
 
+    // Ensure the ref count table exists (idempotent)
+    await tx`
+      CREATE TABLE IF NOT EXISTS _e2e_refs (
+        id integer PRIMARY KEY DEFAULT 1,
+        count integer NOT NULL DEFAULT 0
+      )
+    `;
+    await tx`INSERT INTO _e2e_refs (id, count) VALUES (1, 0) ON CONFLICT (id) DO NOTHING`;
+
+    // Increment ref count for this test file
+    await tx`UPDATE _e2e_refs SET count = count + 1 WHERE id = 1`;
+
     // Check if OUR specific fixture data exists (keyed on a known workspace ID)
     const [{ count }] = await tx`SELECT count(*) as count FROM workspaces WHERE id = ${IDS.ws_fuel_code}`;
     if (Number(count) === 0) {
-      // First file (or stale data from a previous run): flush Redis + truncate + seed
+      // First file (or stale data from a previous run): flush Redis + truncate + seed.
+      // TRUNCATE is used here (not targeted deletes) to ensure a clean test state.
       await redis.flushall();
       await ensureConsumerGroup(redis);
       await tx`TRUNCATE events, git_activity, content_blocks, transcript_messages, sessions, workspace_devices, workspaces, devices CASCADE`;
@@ -158,7 +173,9 @@ async function _doSetup(): Promise<TestServerContext> {
     broadcaster: wsHandle.broadcaster,
   });
 
-  // 10. Build cleanup function (tears down in reverse order)
+  // 10. Build cleanup function (tears down in reverse order).
+  //     Decrements the ref count; the last test file to finish deletes
+  //     fixture data by known IDs so nothing leaks into the database.
   const cleanup = async () => {
     // Stop consumer
     if (consumer) await consumer.stop();
@@ -172,6 +189,26 @@ async function _doSetup(): Promise<TestServerContext> {
         server.close((err) => (err ? reject(err) : resolve()));
       });
     }
+
+    // Flush Redis so no stale stream data remains
+    try {
+      if (redis) await redis.flushall();
+    } catch {}
+
+    // Decrement ref count; if last file, truncate all fixture data
+    try {
+      if (sql) {
+        await sql.begin(async (tx) => {
+          await tx`SELECT pg_advisory_xact_lock(99999)`;
+          await tx`UPDATE _e2e_refs SET count = count - 1 WHERE id = 1`;
+          const [{ count }] = await tx`SELECT count FROM _e2e_refs WHERE id = 1`;
+          if (Number(count) <= 0) {
+            await cleanFixtures(tx as any);
+            await tx`DROP TABLE IF EXISTS _e2e_refs`;
+          }
+        });
+      }
+    } catch {}
 
     // Disconnect Redis clients
     if (redisConsumer) await redisConsumer.quit();

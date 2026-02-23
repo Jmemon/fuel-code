@@ -282,6 +282,64 @@ export async function seedFixtures(sql: postgres.Sql): Promise<void> {
 }
 
 /**
+ * Remove only fixture data from the test database by known IDs.
+ * Deletes child rows first (FK order) then parent rows.
+ * Uses workspace_id/device_id to also catch any rows created during
+ * tests that reference fixture parents (e.g. sessions created via POST).
+ * Preserves any real data that shares the same database.
+ */
+export async function cleanFixtures(sql: postgres.Sql): Promise<void> {
+  const wsIds = [IDS.ws_fuel_code, IDS.ws_api_service, IDS.ws_unassociated];
+  const devIds = [IDS.dev_macbook, IDS.dev_remote];
+
+  // The fixture canonical_ids — used to also find non-fixture workspaces that
+  // would conflict with seeding (e.g. a real _unassociated workspace)
+  const canonicalIds = [
+    "github.com/user/fuel-code",
+    "github.com/user/api-service",
+    "_unassociated",
+  ];
+
+  // Find all workspace IDs that match fixture IDs OR fixture canonical_ids
+  // (catches both fixture rows and any real rows that share canonical_ids)
+  const conflictingWorkspaces = await sql`
+    SELECT id FROM workspaces WHERE id = ANY(${wsIds}) OR canonical_id = ANY(${canonicalIds})
+  `;
+  const allWsIds = [...new Set([
+    ...wsIds,
+    ...conflictingWorkspaces.map((r: any) => r.id),
+  ])];
+
+  // Identify ALL sessions that reference these workspaces OR fixture devices
+  const affectedSessions = await sql`
+    SELECT id FROM sessions WHERE workspace_id = ANY(${allWsIds}) OR device_id = ANY(${devIds})
+  `;
+  const sessIds = affectedSessions.map((r: any) => r.id);
+
+  // Also collect any workspace IDs from sessions that use fixture devices
+  const deviceWorkspaces = await sql`
+    SELECT DISTINCT workspace_id FROM sessions WHERE device_id = ANY(${devIds})
+  `;
+  for (const r of deviceWorkspaces) {
+    if (!allWsIds.includes(r.workspace_id)) allWsIds.push(r.workspace_id);
+  }
+
+  // Delete children first, then parents (FK ordering)
+  if (sessIds.length > 0) {
+    await sql`DELETE FROM content_blocks WHERE session_id = ANY(${sessIds})`;
+    await sql`DELETE FROM transcript_messages WHERE session_id = ANY(${sessIds})`;
+  }
+  await sql`DELETE FROM git_activity WHERE workspace_id = ANY(${allWsIds})`;
+  await sql`DELETE FROM events WHERE workspace_id = ANY(${allWsIds}) OR device_id = ANY(${devIds})`;
+  if (sessIds.length > 0) {
+    await sql`DELETE FROM sessions WHERE id = ANY(${sessIds})`;
+  }
+  await sql`DELETE FROM workspace_devices WHERE workspace_id = ANY(${allWsIds}) OR device_id = ANY(${devIds})`;
+  await sql`DELETE FROM workspaces WHERE id = ANY(${allWsIds})`;
+  await sql`DELETE FROM devices WHERE id = ANY(${devIds})`;
+}
+
+/**
  * Seed transcript_messages and content_blocks for a session.
  * Creates realistic conversation turns with Human/Assistant messages,
  * tool_use blocks, and thinking blocks.
