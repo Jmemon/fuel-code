@@ -515,6 +515,91 @@ describe("consumer — multiple entries in a single read", () => {
   });
 });
 
+describe("consumer — NOGROUP recovery", () => {
+  test("re-creates consumer group when readFromStream throws a NOGROUP error", async () => {
+    const overrides = createOverrides();
+    let callCount = 0;
+
+    overrides._readFromStream.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        // Simulate Redis restart — the consumer group no longer exists
+        return Promise.reject(
+          new Error("NOGROUP No such key 'fuel:events' or consumer group 'fuel-consumer-group'"),
+        );
+      }
+      // After recovery, return empty (no new entries)
+      return delayedResolve([] as StreamEntry[]);
+    });
+
+    const logger = createMockLogger();
+    const deps = createDeps(logger);
+    const consumer = startConsumer(deps, { ...overrides, reconnectDelayMs: 10 });
+
+    await sleep(300);
+    await consumer.stop();
+
+    // ensureConsumerGroup should be called at least twice:
+    // once on startup, once on NOGROUP recovery
+    expect(overrides._ensureConsumerGroup.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    // readFromStream should be called at least twice:
+    // first fails with NOGROUP, second succeeds
+    expect(overrides._readFromStream.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    // Should have logged a warning about the lost consumer group
+    const warnCalls = logger.warn.mock.calls;
+    const noGroupLog = warnCalls.find(
+      (call: any[]) =>
+        typeof call[0] === "string" && call[0].includes("Consumer group lost"),
+    );
+    expect(noGroupLog).toBeDefined();
+  });
+
+  test("falls back to normal retry delay if ensureConsumerGroup fails during NOGROUP recovery", async () => {
+    const overrides = createOverrides();
+    let readCount = 0;
+    let groupCallCount = 0;
+
+    overrides._readFromStream.mockImplementation(() => {
+      readCount++;
+      if (readCount === 1) {
+        return Promise.reject(
+          new Error("NOGROUP No such key 'fuel:events'"),
+        );
+      }
+      return delayedResolve([] as StreamEntry[]);
+    });
+
+    // First call (startup) succeeds, second call (recovery) fails
+    overrides._ensureConsumerGroup.mockImplementation(() => {
+      groupCallCount++;
+      if (groupCallCount === 2) {
+        return Promise.reject(new Error("Redis still down"));
+      }
+      return Promise.resolve();
+    });
+
+    const logger = createMockLogger();
+    const deps = createDeps(logger);
+    const consumer = startConsumer(deps, { ...overrides, reconnectDelayMs: 10 });
+
+    await sleep(300);
+    await consumer.stop();
+
+    // Should have logged the recovery failure
+    const errorCalls = logger.error.mock.calls;
+    const recoveryFailLog = errorCalls.find(
+      (call: any[]) =>
+        typeof call[1] === "string" && call[1].includes("Failed to re-create consumer group"),
+    );
+    expect(recoveryFailLog).toBeDefined();
+
+    // Should still have retried readFromStream after the delay
+    expect(overrides._readFromStream.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
 describe("consumer — claimPendingEntries failure", () => {
   test("continues to main loop even if claimPendingEntries throws", async () => {
     const overrides = createOverrides();

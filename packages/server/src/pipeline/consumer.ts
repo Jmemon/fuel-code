@@ -176,7 +176,7 @@ export function startConsumer(
           const { session_id, workspace_id, type: eventType } = entry.event;
           if (session_id && workspace_id) {
             if (eventType === "session.start") {
-              broadcaster.broadcastSessionUpdate(session_id, workspace_id, "capturing");
+              broadcaster.broadcastSessionUpdate(session_id, workspace_id, "detected");
             } else if (eventType === "session.end") {
               broadcaster.broadcastSessionUpdate(session_id, workspace_id, "ended");
             }
@@ -289,6 +289,23 @@ export function startConsumer(
 
         maybeLogStats();
       } catch (err) {
+        // Detect NOGROUP errors (Redis restarted, stream/group lost) and
+        // re-create the consumer group before retrying. Without this, the
+        // consumer spins forever on NOGROUP after a Redis restart.
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const isNoGroup = errMsg.includes("NOGROUP");
+
+        if (isNoGroup) {
+          logger.warn("Consumer group lost (Redis restart?) — re-creating");
+          try {
+            await ensureGroup(redis);
+            logger.info("Consumer group re-created successfully");
+            continue; // Skip the delay — group is back, retry immediately
+          } catch (groupErr) {
+            logger.error({ err: groupErr }, "Failed to re-create consumer group");
+          }
+        }
+
         // Redis connection lost or other transient error — wait and retry
         logger.error(
           { err },
