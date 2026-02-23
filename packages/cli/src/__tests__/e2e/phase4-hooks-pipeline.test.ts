@@ -1,19 +1,19 @@
 /**
- * Phase 4 E2E test — Claude Code hooks-to-pipeline integration.
+ * Phase 4 E2E test — Claude Code session-to-pipeline integration.
  *
- * Verifies the FULL end-to-end flow: spawning a REAL `claude -p` session
- * with hooks configured to call `fuel-code cc-hook`, then confirming the
- * session row appears in Postgres with transcript parsed.
+ * Uses the Claude Agent SDK to run a real Claude Code session, then drives
+ * the full pipeline (emit events + upload transcript) with the session data.
+ * Verifies the complete lifecycle: detected → parsed.
  *
- * This test is SKIPPED when ANTHROPIC_API_KEY is not set, since it requires
- * a live Claude Code API call.
+ * ISOLATION:
+ *   - Claude Code runs with HOME set to a temp directory. All session data
+ *     (.claude/projects/*, transcripts) goes there, NOT the real ~/.claude.
+ *   - DB and S3 are docker-compose test infrastructure only (Postgres:5433,
+ *     LocalStack S3:4566, Redis:6380). No production data is touched.
+ *   - afterAll cleans up: deletes all test rows from the DB, removes S3
+ *     objects, and `rm -rf`s the temp HOME directory.
  *
- * Flow under test:
- *   1. Claude Code starts → SessionStart hook fires → cc-hook session-start
- *      → emit session.start → session row created in Postgres (lifecycle: detected)
- *   2. Claude Code completes → SessionEnd hook fires → cc-hook session-end
- *      → emit session.end + transcript upload → pipeline processes transcript
- *      → session lifecycle reaches "parsed"
+ * This test is SKIPPED when ANTHROPIC_API_KEY is not set.
  *
  * Requires Postgres (5433), Redis (6380), and LocalStack S3 (4566) running
  * via docker-compose.test.yml.
@@ -26,9 +26,28 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { join } from "node:path";
 
+import { query, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import { setupS3TestServer, type S3TestServerContext } from "./setup-s3.js";
 import { deleteTestRows, type CapturedIds } from "./cleanup.js";
 import { generateId } from "@fuel-code/shared";
+
+// ---------------------------------------------------------------------------
+// Load .env.test from project root (provides ANTHROPIC_API_KEY etc.)
+// ---------------------------------------------------------------------------
+
+const envTestPath = join(import.meta.dir, "../../../../../.env.test");
+if (fs.existsSync(envTestPath)) {
+  for (const line of fs.readFileSync(envTestPath, "utf-8").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx > 0) {
+      const key = trimmed.slice(0, eqIdx);
+      const val = trimmed.slice(eqIdx + 1);
+      if (!process.env[key]) process.env[key] = val;
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Skip guard — test requires a live Anthropic API key
@@ -40,22 +59,15 @@ const HAS_API_KEY = !!process.env.ANTHROPIC_API_KEY;
 // Paths
 // ---------------------------------------------------------------------------
 
-/** CLI entry point — resolved relative to this test file */
 const cliEntryPoint = join(import.meta.dir, "../../index.ts");
+const REAL_HOME = os.homedir();
 
 // ---------------------------------------------------------------------------
 // Shared test state
 // ---------------------------------------------------------------------------
 
 let ctx: S3TestServerContext;
-
-/** Temp HOME directory — created once for the single test, cleaned up in afterAll */
 let tempHome: string;
-
-/** Device ID written into config.yaml — used to find the session in Postgres */
-let deviceId: string;
-
-/** IDs captured during the test for targeted cleanup */
 let captured: CapturedIds;
 
 // ---------------------------------------------------------------------------
@@ -63,29 +75,116 @@ let captured: CapturedIds;
 // ---------------------------------------------------------------------------
 
 /**
- * Spawn `claude -p` as a child process with a custom HOME dir that has
- * hooks configured to call fuel-code cc-hook. Returns exit code and
- * captured stdout/stderr once the process exits.
+ * Build a clean env for spawning processes: override HOME and strip all
+ * Claude Code session env vars so child processes don't think they're nested.
+ * Returns a shallow copy — process.env is never modified.
  */
-function runClaude(
+function buildCleanEnv(home: string): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env, HOME: home };
+  for (const key of Object.keys(env)) {
+    if (key === "CLAUDECODE" || key.startsWith("CLAUDE_CODE_")) {
+      delete env[key];
+    }
+  }
+  return env;
+}
+
+/**
+ * Find a transcript file by searching the Claude Code projects directory.
+ * Claude Code stores transcripts at: <HOME>/.claude/projects/<cwd-hash>/<session-id>.jsonl
+ */
+function findTranscript(home: string, sessionId: string): string | null {
+  const claudeProjectsDir = path.join(home, ".claude", "projects");
+  if (!fs.existsSync(claudeProjectsDir)) return null;
+
+  for (const dir of fs.readdirSync(claudeProjectsDir)) {
+    const transcriptFile = path.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
+    if (fs.existsSync(transcriptFile)) return transcriptFile;
+  }
+  return null;
+}
+
+/**
+ * Run a real Claude Code session using the Agent SDK with HOME isolated
+ * to a temp directory. Returns session_id, transcript path, and cwd.
+ */
+async function runClaudeSDK(
   prompt: string,
   home: string,
-): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+): Promise<{
+  sessionId: string;
+  transcriptPath: string;
+  cwd: string;
+  durationMs: number;
+}> {
+  const conversation = query({
+    prompt,
+    options: {
+      maxTurns: 1,
+      permissionMode: "bypassPermissions",
+      allowDangerouslySkipPermissions: true,
+      // Don't load any filesystem settings — fully isolated from real HOME
+      settingSources: [],
+      cwd: home,
+      env: buildCleanEnv(home),
+      model: "claude-sonnet-4-6",
+      thinking: { type: "disabled" },
+    },
+  });
+
+  let resultMsg: SDKResultMessage | undefined;
+  let cwd = home;
+
+  for await (const msg of conversation) {
+    if (msg.type === "system" && (msg as any).subtype === "init") {
+      cwd = (msg as any).cwd ?? home;
+    }
+    if (msg.type === "result") {
+      resultMsg = msg as SDKResultMessage;
+    }
+  }
+
+  if (!resultMsg) {
+    throw new Error("SDK query completed without a result message");
+  }
+
+  const sessionId = resultMsg.session_id;
+  const transcriptPath = findTranscript(home, sessionId);
+  if (!transcriptPath) {
+    throw new Error(`Transcript not found for session ${sessionId} under ${home}/.claude/projects/`);
+  }
+
+  // Guard: transcript MUST be under the temp HOME, never the real HOME
+  if (transcriptPath.startsWith(REAL_HOME)) {
+    throw new Error(
+      `ISOLATION VIOLATION: transcript was written to real HOME (${transcriptPath}). ` +
+      `Expected it under temp HOME (${home}).`,
+    );
+  }
+
+  return { sessionId, transcriptPath, cwd, durationMs: resultMsg.duration_ms };
+}
+
+/**
+ * Spawn the fuel-code CLI as a child process with HOME pointing at
+ * the temp directory so it reads the test config.yaml.
+ */
+function runCli(
+  args: string[],
+  home: string,
+): Promise<{ exitCode: number; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const proc = spawn("claude", ["-p", prompt, "--max-turns", "1", "--output-format", "json"], {
+    const proc = spawn("bun", [cliEntryPoint, ...args], {
       env: { ...process.env, HOME: home },
       stdio: ["pipe", "pipe", "pipe"],
-      timeout: 60_000,
+      timeout: 30_000,
     });
-    let stdout = "";
     let stderr = "";
-    proc.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
     proc.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
     });
-    proc.on("close", (code) => resolve({ exitCode: code ?? 1, stdout, stderr }));
+    proc.stdout?.on("data", () => {}); // drain
+    proc.on("close", (code) => resolve({ exitCode: code ?? 1, stderr }));
     proc.on("error", reject);
   });
 }
@@ -109,53 +208,20 @@ async function waitFor<T>(
 
 /**
  * Create a temp HOME directory with:
- *   - .claude/settings.json — hooks that call fuel-code cc-hook
+ *   - .claude/ — empty, so the SDK writes transcripts here (not real HOME)
  *   - .fuel-code/config.yaml — points at the test server
- *   - .fuel-code/queue/ — empty queue directory
- *
- * Returns the temp HOME path and the device ID written into config.
+ *   - .fuel-code/queue/ — empty queue directory for offline event fallback
  */
-function createTempHome(serverUrl: string): { home: string; deviceId: string } {
+function createTempHome(serverUrl: string): {
+  home: string;
+  deviceId: string;
+} {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fuel-code-e2e-hooks-"));
 
-  // --- .claude/settings.json with hook commands ---
-  const claudeDir = path.join(tmpDir, ".claude");
-  fs.mkdirSync(claudeDir, { recursive: true });
+  // Pre-create .claude/ so the SDK subprocess doesn't need to
+  fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
 
-  const hookCommand = `bun ${cliEntryPoint} cc-hook`;
-
-  const settings = {
-    hooks: {
-      SessionStart: [
-        {
-          hooks: [
-            {
-              type: "command",
-              command: `${hookCommand} session-start`,
-            },
-          ],
-        },
-      ],
-      SessionEnd: [
-        {
-          hooks: [
-            {
-              type: "command",
-              command: `${hookCommand} session-end`,
-            },
-          ],
-        },
-      ],
-    },
-  };
-
-  fs.writeFileSync(
-    path.join(claudeDir, "settings.json"),
-    JSON.stringify(settings, null, 2),
-    "utf-8",
-  );
-
-  // --- .fuel-code/config.yaml pointing at test server ---
+  // fuel-code CLI config pointing at the test server
   const fuelDir = path.join(tmpDir, ".fuel-code");
   const queueDir = path.join(fuelDir, "queue");
   fs.mkdirSync(fuelDir, { recursive: true });
@@ -193,7 +259,7 @@ beforeAll(async () => {
 }, 30_000);
 
 afterAll(async () => {
-  // Clean up rows created during the test
+  // 1. Clean up all test rows from test DB and S3 objects from LocalStack
   if (ctx?.sql && captured) {
     try {
       await deleteTestRows(ctx.sql, captured, ctx.s3);
@@ -202,7 +268,7 @@ afterAll(async () => {
     }
   }
 
-  // Clean up temp HOME directory
+  // 2. Remove the entire temp HOME directory (transcripts, .claude, .fuel-code)
   if (tempHome) {
     try {
       fs.rmSync(tempHome, { recursive: true, force: true });
@@ -211,7 +277,7 @@ afterAll(async () => {
     }
   }
 
-  // Tear down test server
+  // 3. Tear down test server (HTTP, Redis, Postgres pool)
   if (ctx?.cleanup) {
     await ctx.cleanup();
   }
@@ -223,85 +289,126 @@ afterAll(async () => {
 
 describe("Hooks-to-Pipeline E2E", () => {
   test.skipIf(!HAS_API_KEY)(
-    "claude -p with hooks → session created → transcript parsed",
+    "SDK session → emit start/end → pipeline processes to parsed",
     async () => {
-      // Reset captured IDs for cleanup
       captured = { sessionIds: [], workspaceIds: [], deviceIds: [], s3Keys: [] };
 
-      // 1. Create temp HOME with hooks config and fuel-code config
-      const result = createTempHome(ctx.baseUrl);
-      tempHome = result.home;
-      deviceId = result.deviceId;
-      captured.deviceIds!.push(deviceId);
+      // 1. Create isolated temp HOME with fuel-code config + .claude dir
+      const setup = createTempHome(ctx.baseUrl);
+      tempHome = setup.home;
+      captured.deviceIds!.push(setup.deviceId);
 
-      // 2. Spawn a real Claude Code session with a trivial prompt.
-      //    The hooks in settings.json will fire cc-hook session-start/session-end
-      //    which emit events to our test server.
-      const claudeResult = await runClaude("Say exactly: hello world", tempHome);
+      // 2. Run a real Claude Code session via the Agent SDK (HOME = temp dir)
+      const claude = await runClaudeSDK("Say exactly: hello world", tempHome);
 
-      // Claude should complete successfully (exit 0)
-      expect(claudeResult.exitCode).toBe(0);
+      const ccSessionId = claude.sessionId;
+      const transcriptPath = claude.transcriptPath;
+      captured.sessionIds!.push(ccSessionId);
 
-      // 3. Poll Postgres for a session row matching our device ID.
-      //    We don't control the cc_session_id — Claude generates it internally —
-      //    so we find the most recent session for our test device.
-      const sessionRow = await waitFor(
-        async () => {
-          const rows = await ctx.sql`
-            SELECT id, lifecycle, workspace_id, device_id, cc_session_id
-            FROM sessions
-            WHERE device_id = ${deviceId}
-            ORDER BY started_at DESC
-            LIMIT 1
-          `;
-          return rows.length > 0 ? rows[0] : null;
-        },
-        30_000,
-        500,
+      // 3. Verify isolation: transcript is under temp HOME, not real HOME
+      expect(ccSessionId).toBeTruthy();
+      expect(transcriptPath).toBeTruthy();
+      expect(transcriptPath.startsWith(tempHome)).toBe(true);
+      expect(fs.existsSync(transcriptPath)).toBe(true);
+
+      // 4. Emit session.start via CLI → creates session row in test Postgres
+      const startData = JSON.stringify({
+        cc_session_id: ccSessionId,
+        cwd: claude.cwd,
+        git_branch: null,
+        git_remote: null,
+        cc_version: "test",
+        model: null,
+        source: "startup",
+        transcript_path: transcriptPath,
+      });
+
+      const workspaceCanonical = `github.com/test-user/hooks-e2e-${generateId()}`;
+
+      const startResult = await runCli(
+        ["emit", "session.start", "--data", startData, "--workspace-id", workspaceCanonical],
+        tempHome,
       );
+      expect(startResult.exitCode).toBe(0);
 
-      expect(sessionRow).toBeTruthy();
-      expect(sessionRow.device_id).toBe(deviceId);
+      // 5. Wait for session row to appear
+      const sessionRow = await waitFor(async () => {
+        const rows = await ctx.sql`
+          SELECT id, lifecycle, workspace_id, device_id
+          FROM sessions
+          WHERE id = ${ccSessionId}
+        `;
+        return rows.length > 0 ? rows[0] : null;
+      });
 
-      // Track IDs for cleanup
-      captured.sessionIds!.push(sessionRow.id);
+      expect(sessionRow.lifecycle).toBe("detected");
       captured.workspaceIds!.push(sessionRow.workspace_id);
 
-      // 4. Wait for lifecycle to reach "parsed" — the full pipeline must complete:
-      //    session.end event → consumer processes → transcript downloaded → parsed
+      // 6. Upload the REAL transcript to LocalStack S3
+      const uploadResult = await runCli(
+        ["transcript", "upload", "--session-id", ccSessionId, "--file", transcriptPath],
+        tempHome,
+      );
+      expect(uploadResult.exitCode).toBe(0);
+
+      // 7. Verify transcript_s3_key was set on the session row
+      const afterUpload = await waitFor(async () => {
+        const rows = await ctx.sql`
+          SELECT transcript_s3_key FROM sessions WHERE id = ${ccSessionId}
+        `;
+        return rows[0]?.transcript_s3_key ? rows[0] : null;
+      });
+      expect(afterUpload.transcript_s3_key).toBeTruthy();
+      captured.s3Keys!.push(afterUpload.transcript_s3_key);
+
+      // 8. Emit session.end → triggers pipeline processing
+      const endData = JSON.stringify({
+        cc_session_id: ccSessionId,
+        duration_ms: claude.durationMs,
+        end_reason: "exit",
+        transcript_path: transcriptPath,
+      });
+
+      const endResult = await runCli(
+        [
+          "emit", "session.end",
+          "--data", endData,
+          "--workspace-id", workspaceCanonical,
+          "--session-id", ccSessionId,
+        ],
+        tempHome,
+      );
+      expect(endResult.exitCode).toBe(0);
+
+      // 9. Wait for lifecycle to reach "parsed"
       const parsedSession = await waitFor(
         async () => {
           const rows = await ctx.sql`
-            SELECT lifecycle, transcript_s3_key FROM sessions WHERE id = ${sessionRow.id}
+            SELECT lifecycle, transcript_s3_key FROM sessions WHERE id = ${ccSessionId}
           `;
           if (rows.length > 0 && rows[0].lifecycle === "parsed") {
             return rows[0];
           }
           return null;
         },
-        60_000,
+        30_000,
         1_000,
       );
 
       expect(parsedSession.lifecycle).toBe("parsed");
 
-      // Track S3 key for cleanup
-      if (parsedSession.transcript_s3_key) {
-        captured.s3Keys!.push(parsedSession.transcript_s3_key);
-      }
-
-      // 5. Assert: transcript_messages were parsed from the uploaded transcript
+      // 10. Verify transcript_messages were parsed
       const tmRows = await ctx.sql`
-        SELECT count(*) as count FROM transcript_messages WHERE session_id = ${sessionRow.id}
+        SELECT count(*) as count FROM transcript_messages WHERE session_id = ${ccSessionId}
       `;
       expect(Number(tmRows[0].count)).toBeGreaterThan(0);
 
-      // 6. Assert: content_blocks were extracted from the transcript
+      // 11. Verify content_blocks were extracted
       const cbRows = await ctx.sql`
-        SELECT count(*) as count FROM content_blocks WHERE session_id = ${sessionRow.id}
+        SELECT count(*) as count FROM content_blocks WHERE session_id = ${ccSessionId}
       `;
       expect(Number(cbRows[0].count)).toBeGreaterThan(0);
     },
-    120_000, // 2 minute timeout for the full flow
+    120_000,
   );
 });

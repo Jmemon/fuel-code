@@ -23,6 +23,7 @@
     "zod": "3"
   },
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.50",
     "@aws-sdk/client-s3": "^3.995.0",
     "@types/node": "^25.2.3",
     "@types/react": "^19.2.14",
