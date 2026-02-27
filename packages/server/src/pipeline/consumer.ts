@@ -305,8 +305,11 @@ export function startConsumer(
         // Detect NOGROUP errors (Redis restarted, stream/group lost) and
         // re-create the consumer group before retrying. Without this, the
         // consumer spins forever on NOGROUP after a Redis restart.
+        // Check for NOGROUP in both the top-level message and any nested
+        // context (StorageError wraps the original Redis error in context.error).
         const errMsg = err instanceof Error ? err.message : String(err);
-        const isNoGroup = errMsg.includes("NOGROUP");
+        const nestedMsg = (err as { context?: { error?: string } })?.context?.error ?? "";
+        const isNoGroup = errMsg.includes("NOGROUP") || nestedMsg.includes("NOGROUP");
 
         if (isNoGroup) {
           logger.warn("Consumer group lost (Redis restart?) — re-creating");

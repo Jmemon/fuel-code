@@ -21,7 +21,7 @@ import { createApp } from "../../app.js";
 import { createDb } from "../../db/postgres.js";
 import { runMigrations } from "../../db/migrator.js";
 import { createRedisClient } from "../../redis/client.js";
-import { ensureConsumerGroup } from "../../redis/stream.js";
+import { ensureConsumerGroup, EVENTS_STREAM } from "../../redis/stream.js";
 import { startConsumer, type ConsumerHandle } from "../../pipeline/consumer.js";
 import { createEventHandler } from "../../pipeline/wire.js";
 import { logger } from "../../logger.js";
@@ -113,8 +113,8 @@ beforeAll(async () => {
   redisConsumer = createRedisClient(REDIS_URL);
   await Promise.all([redis.connect(), redisConsumer.connect()]);
 
-  // 4. Flush Redis to ensure a clean stream state
-  await redis.flushall();
+  // 4. Delete the event stream to ensure clean state (targeted, not flushall)
+  await redis.del(EVENTS_STREAM);
 
   // 5. Set up the consumer group on the events stream
   await ensureConsumerGroup(redis);
@@ -161,22 +161,23 @@ afterAll(async () => {
 }, 15_000);
 
 afterEach(async () => {
-  // 1. Flush Redis FIRST — removes the stream so the consumer loop stops
-  //    picking up new work. This prevents the consumer from holding Postgres
-  //    transactions that would block the TRUNCATE below.
-  await redis.flushall();
+  // 1. Delete just the event stream (not flushall) so the consumer group
+  //    disappears with it — but we immediately recreate it below, so the
+  //    consumer loop never sees a missing group (no NOGROUP errors).
+  await redis.del(EVENTS_STREAM);
 
-  // 2. Brief pause to let any in-flight consumer processing finish its
+  // 2. Recreate consumer group on a fresh empty stream right away,
+  //    before the consumer's next XREADGROUP call can hit a gap.
+  await ensureConsumerGroup(redis);
+
+  // 3. Brief pause to let any in-flight consumer processing finish its
   //    Postgres transaction. Without this, TRUNCATE can deadlock against
   //    the consumer's open transaction (TRUNCATE needs ACCESS EXCLUSIVE lock).
   await new Promise((resolve) => setTimeout(resolve, 500));
 
-  // 3. Truncate all data tables between tests to isolate them.
+  // 4. Truncate all data tables between tests to isolate them.
   //    CASCADE handles FK constraints. Schema (tables, indexes) is preserved.
   await sql`TRUNCATE events, sessions, workspace_devices, workspaces, devices CASCADE`;
-
-  // 4. Recreate consumer group so the next test starts clean
-  await ensureConsumerGroup(redis);
 });
 
 // ---------------------------------------------------------------------------

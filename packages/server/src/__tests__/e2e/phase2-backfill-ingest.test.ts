@@ -25,7 +25,7 @@ import { createApp } from "../../app.js";
 import { createDb } from "../../db/postgres.js";
 import { runMigrations } from "../../db/migrator.js";
 import { createRedisClient } from "../../redis/client.js";
-import { ensureConsumerGroup } from "../../redis/stream.js";
+import { ensureConsumerGroup, EVENTS_STREAM } from "../../redis/stream.js";
 import { startConsumer, type ConsumerHandle } from "../../pipeline/consumer.js";
 import { createEventHandler } from "../../pipeline/wire.js";
 import { createS3Client } from "../../aws/s3.js";
@@ -135,8 +135,8 @@ beforeAll(async () => {
   redisConsumer = createRedisClient(REDIS_URL);
   await Promise.all([redis.connect(), redisConsumer.connect()]);
 
-  // 3. Flush Redis + set up consumer group
-  await redis.flushall();
+  // 3. Delete event stream + set up consumer group
+  await redis.del(EVENTS_STREAM);
   await ensureConsumerGroup(redis);
 
   // 4. Create S3 bucket in LocalStack
@@ -194,13 +194,12 @@ beforeAll(async () => {
 
 afterAll(async () => {
   // Stop the consumer and clean up all resources.
-  // consumer.stop() sets shouldStop=true synchronously; the flushall breaks
-  // the consumer's blocked XREADGROUP so it can exit promptly.
+  // consumer.stop() sets shouldStop=true synchronously; deleting the stream
+  // breaks the consumer's blocked XREADGROUP so it can exit promptly.
   if (consumer) {
     const stopPromise = consumer.stop();
-    // Flush Redis to break the consumer's blocked XREADGROUP
     if (redis) {
-      try { await redis.flushall(); } catch {}
+      try { await redis.del(EVENTS_STREAM); } catch {}
     }
     await stopPromise;
   }
