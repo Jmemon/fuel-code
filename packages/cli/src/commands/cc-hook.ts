@@ -171,10 +171,12 @@ function createSessionEndHandler(): Command {
           transcript_path: transcriptPath,
         };
 
+        // session_id is null for session.end events (same as session.start) to
+        // avoid FK violations when the session.start event hasn't been processed
+        // yet. The handler looks up the session via data.cc_session_id instead.
         await runEmit("session.end", {
           data: JSON.stringify(payload),
           workspaceId: workspace.workspaceId,
-          sessionId,
         });
 
         // Upload transcript directly (runTranscriptUpload never throws, has 120s timeout)

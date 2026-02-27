@@ -354,6 +354,7 @@ describe("processEvent", () => {
       [],                         // ensureWorkspaceDeviceLink
       [{ id: event.id }],         // INSERT event (new)
       transitionResult,           // transitionSession sql.unsafe UPDATE
+      [],                         // UPDATE events SET session_id (backfill)
     ]);
 
     const result = await processEvent(sql, event, registry, logger);
@@ -671,8 +672,10 @@ describe("handleSessionEnd", () => {
     const logger = createMockLogger();
 
     // transitionSession calls sql.unsafe(...) which must return a row to indicate success
+    // After success, handler runs UPDATE events to backfill session_id
     const transitionResult = [{ lifecycle: "ended" }];
-    const { sql, unsafeCalls } = createMockSql([transitionResult]);
+    const updateEventsResult: Record<string, unknown>[] = [];
+    const { sql, unsafeCalls } = createMockSql([transitionResult, updateEventsResult]);
 
     await handleSessionEnd({
       sql,
@@ -725,8 +728,10 @@ describe("handleSessionEnd", () => {
     const logger = createMockLogger();
 
     // Successful transition: sql.unsafe returns a row
+    // After success, handler runs UPDATE events to backfill session_id
     const transitionResult = [{ lifecycle: "ended" }];
-    const { sql } = createMockSql([transitionResult]);
+    const updateEventsResult: Record<string, unknown>[] = [];
+    const { sql } = createMockSql([transitionResult, updateEventsResult]);
 
     await handleSessionEnd({
       sql,
@@ -755,9 +760,11 @@ describe("handleSessionEnd", () => {
     // Mock result sets:
     //   1. SELECT started_at (the new lookup when duration_ms=0)
     //   2. transitionSession sql.unsafe UPDATE (returns row = success)
+    //   3. UPDATE events SET session_id (backfill after transition)
     const startedAtResult = [{ started_at: "2024-06-15T10:00:00.000Z" }];
     const transitionResult = [{ lifecycle: "ended" }];
-    const { sql, calls, unsafeCalls } = createMockSql([startedAtResult, transitionResult]);
+    const updateEventsResult: Record<string, unknown>[] = [];
+    const { sql, calls, unsafeCalls } = createMockSql([startedAtResult, transitionResult, updateEventsResult]);
 
     await handleSessionEnd({
       sql,
@@ -767,7 +774,8 @@ describe("handleSessionEnd", () => {
     });
 
     // First SQL call should be the SELECT started_at lookup
-    expect(calls).toHaveLength(1);
+    // Second SQL call is the UPDATE events backfill
+    expect(calls).toHaveLength(2);
     expect(calls[0].strings.join("$")).toContain("started_at");
     expect(calls[0].values[0]).toBe("cc-sess-001");
 
@@ -794,9 +802,11 @@ describe("handleSessionEnd", () => {
     // Mock result sets:
     //   1. SELECT started_at -> empty (session not found)
     //   2. transitionSession sql.unsafe UPDATE
+    //   3. UPDATE events SET session_id (backfill after transition)
     const emptyResult: Record<string, unknown>[] = [];
     const transitionResult = [{ lifecycle: "ended" }];
-    const { sql, unsafeCalls } = createMockSql([emptyResult, transitionResult]);
+    const updateEventsResult: Record<string, unknown>[] = [];
+    const { sql, unsafeCalls } = createMockSql([emptyResult, transitionResult, updateEventsResult]);
 
     await handleSessionEnd({
       sql,

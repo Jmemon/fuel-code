@@ -72,6 +72,12 @@ export async function handleSessionEnd(ctx: EventHandlerContext): Promise<void> 
     return;
   }
 
+  // Backfill events.session_id so this event appears in "events for session X"
+  // queries. The event was inserted with session_id=null to avoid FK races.
+  await sql`
+    UPDATE events SET session_id = ${ccSessionId} WHERE id = ${event.id}
+  `;
+
   // Phase 2: If pipeline deps are available, check if transcript_s3_key is
   // already set (backfill path — transcript was uploaded before session ended).
   // If so, trigger the pipeline via the bounded queue (or direct fallback).

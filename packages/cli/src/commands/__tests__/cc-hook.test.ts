@@ -391,7 +391,7 @@ describe("cc-hook session-end", () => {
     expect(opts.workspaceId).toBe(
       "canonical:git@github.com:user/repo.git",
     );
-    expect(opts.sessionId).toBe("sess-end-123");
+    expect(opts.sessionId).toBeUndefined();
 
     const data = JSON.parse(opts.data);
     expect(data.cc_session_id).toBe("sess-end-123");
