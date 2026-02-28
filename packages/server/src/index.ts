@@ -136,11 +136,11 @@ async function main(): Promise<void> {
   const summaryConfig = loadSummaryConfig();
   const pipelineDeps: PipelineDeps = { sql, s3, summaryConfig, logger };
 
-  // --- Step 7b: Create bounded pipeline queue (max 3 concurrent, 50 pending) ---
+  // --- Step 7b: Create bounded pipeline queue (max 6 concurrent, 50 pending) ---
   // The queue prevents unbounded concurrent pipeline runs during backfill or
   // high-throughput periods. Wire enqueueSession into pipelineDeps so all callers
   // (transcript upload, session.end handler, reparse, recovery) route through it.
-  const pipelineQueue = createPipelineQueue(3);
+  const pipelineQueue = createPipelineQueue(6);
   pipelineQueue.start(pipelineDeps);
   pipelineDeps.enqueueSession = (sessionId: string) => pipelineQueue.enqueue(sessionId);
 
