@@ -21,6 +21,8 @@ import type {
   RawTranscriptLine,
   ContentBlockType,
   RawContentBlock,
+  ParsedSubagent,
+  ParsedTeam,
 } from "@fuel-code/shared";
 import { generateId } from "@fuel-code/shared";
 
@@ -252,6 +254,119 @@ export async function parseTranscript(
 
   const stats = computeStats(messages, contentBlocks, firstTimestamp, lastTimestamp);
 
+  // ---------------------------------------------------------------------------
+  // Pass 4: Relationship extraction (sub-agents and teams)
+  //
+  // Iterates the content blocks from Pass 2 to find Task/Agent tool calls
+  // (sub-agent spawns) and TeamCreate/SendMessage tool calls (team ops).
+  // Correlates tool_use blocks with their tool_result blocks via shared IDs.
+  // ---------------------------------------------------------------------------
+
+  const subagents: ParsedSubagent[] = [];
+  const teams: ParsedTeam[] = [];
+
+  // Build lookup maps: tool_use_id -> block for correlation
+  const toolUseMap = new Map<string, ParsedContentBlock>();
+  const toolResultMap = new Map<string, ParsedContentBlock>();
+
+  for (const block of contentBlocks) {
+    if (block.block_type === "tool_use" && block.tool_use_id) {
+      toolUseMap.set(block.tool_use_id, block);
+    }
+    if (block.block_type === "tool_result" && block.tool_result_id) {
+      toolResultMap.set(block.tool_result_id, block);
+    }
+  }
+
+  // Track teams by name for merging message counts from SendMessage calls
+  const teamMap = new Map<string, ParsedTeam>();
+
+  for (const block of contentBlocks) {
+    // --- Sub-agent extraction: Task or Agent tool calls ---
+    if (
+      block.block_type === "tool_use" &&
+      (block.tool_name === "Task" || block.tool_name === "Agent")
+    ) {
+      const input = block.tool_input as Record<string, unknown> | null;
+      const resultBlock = block.tool_use_id
+        ? toolResultMap.get(block.tool_use_id)
+        : undefined;
+
+      const agentType =
+        (input?.subagent_type as string) ?? "unknown";
+      const agentName = input?.name as string | undefined;
+      const model = input?.model as string | undefined;
+      const teamName = input?.team_name as string | undefined;
+      const isolation = input?.isolation as string | undefined;
+      const runInBackground =
+        (input?.run_in_background as boolean) ?? false;
+
+      // Try to extract agent_id from the tool result
+      let agentId: string | undefined;
+      if (resultBlock) {
+        try {
+          const resultData = JSON.parse(resultBlock.result_text ?? "{}");
+          agentId = resultData.agent_id ?? resultData.teammate_id;
+        } catch {
+          agentId = (resultBlock.metadata as Record<string, unknown>)
+            ?.agent_id as string | undefined;
+        }
+      }
+
+      // Only record if we got an agent_id from the result
+      if (agentId) {
+        subagents.push({
+          agent_id: agentId,
+          agent_type: agentType,
+          agent_name: agentName,
+          model,
+          team_name: teamName,
+          isolation,
+          run_in_background: runInBackground,
+          spawning_tool_use_id: block.tool_use_id!,
+          started_at: block.metadata?.timestamp as string | undefined,
+        });
+      }
+    }
+
+    // --- Team extraction: TeamCreate tool calls ---
+    if (block.block_type === "tool_use" && block.tool_name === "TeamCreate") {
+      const input = block.tool_input as Record<string, unknown> | null;
+      const name = input?.team_name as string | undefined;
+      const description = input?.description as string | undefined;
+
+      if (name && !teamMap.has(name)) {
+        const team: ParsedTeam = {
+          team_name: name,
+          description,
+          message_count: 0,
+        };
+        teamMap.set(name, team);
+      }
+    }
+
+    // --- Team message counting: SendMessage tool calls ---
+    if (block.block_type === "tool_use" && block.tool_name === "SendMessage") {
+      const input = block.tool_input as Record<string, unknown> | null;
+      const targetTeam = input?.team_name as string | undefined;
+
+      if (targetTeam) {
+        const existing = teamMap.get(targetTeam);
+        if (existing) {
+          existing.message_count++;
+        } else {
+          // SendMessage to a team we haven't seen a TeamCreate for — record it anyway
+          teamMap.set(targetTeam, {
+            team_name: targetTeam,
+            message_count: 1,
+          });
+        }
+      }
+    }
+  }
+
+  teams.push(...teamMap.values());
+
   return {
     messages,
     contentBlocks,
@@ -265,11 +380,10 @@ export async function parseTranscript(
       firstTimestamp,
       lastTimestamp,
     },
-    // Phase 4-2: empty arrays for now — extraction logic comes in Tasks 7 and 9
-    subagents: [],
-    teams: [],
-    skills: [],
-    worktrees: [],
+    subagents,
+    teams,
+    skills: [],      // Task 9 fills this
+    worktrees: [],   // Task 9 fills this
   };
 }
 

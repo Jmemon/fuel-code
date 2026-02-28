@@ -41,6 +41,16 @@ if [ -z "$WORKSPACE_ID" ]; then
   exit 0
 fi
 
+# Worktree detection: compare git-dir to git-common-dir to determine if running inside a worktree
+GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
+GIT_COMMON=$(git rev-parse --git-common-dir 2>/dev/null)
+IS_WORKTREE=false
+WORKTREE_NAME=""
+if [ "$GIT_DIR" != "$GIT_COMMON" ]; then
+  IS_WORKTREE=true
+  WORKTREE_NAME=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)")
+fi
+
 FROM_REF="${1:-unknown}"
 TO_REF="${2:-unknown}"
 
@@ -61,7 +71,9 @@ TO_BRANCH_JSON="null"
   "from_ref": "$FROM_REF",
   "to_ref": "$TO_REF",
   "from_branch": $FROM_BRANCH_JSON,
-  "to_branch": $TO_BRANCH_JSON
+  "to_branch": $TO_BRANCH_JSON,
+  "is_worktree": $IS_WORKTREE,
+  "worktree_name": $([ "$IS_WORKTREE" = "true" ] && echo "\"$WORKTREE_NAME\"" || echo "null")
 }
 FUELCODE_EOF
 ) 2>&1 | while read -r line; do

@@ -33,6 +33,10 @@ export async function handleGitCheckout(ctx: EventHandlerContext): Promise<void>
   const fromBranch = (event.data.from_branch as string | null) ?? null;
   const toBranch = (event.data.to_branch as string | null) ?? null;
 
+  // Worktree context: defaults ensure backward compatibility with old events
+  const isWorktree = event.data.is_worktree ?? false;
+  const worktreeName = event.data.worktree_name ?? null;
+
   // Use to_branch as the branch field; fall back to to_ref for detached HEAD
   const branch = toBranch ?? toRef;
 
@@ -55,7 +59,7 @@ export async function handleGitCheckout(ctx: EventHandlerContext): Promise<void>
   await sql.begin(async (tx: any) => {
     // Insert into git_activity — checkout events store ref details in data JSONB
     await tx`
-      INSERT INTO git_activity (id, workspace_id, device_id, session_id, type, branch, timestamp, data)
+      INSERT INTO git_activity (id, workspace_id, device_id, session_id, type, branch, is_worktree, worktree_name, timestamp, data)
       VALUES (
         ${event.id},
         ${workspaceId},
@@ -63,6 +67,8 @@ export async function handleGitCheckout(ctx: EventHandlerContext): Promise<void>
         ${correlation.sessionId},
         ${"checkout"},
         ${branch},
+        ${isWorktree},
+        ${worktreeName},
         ${event.timestamp},
         ${JSON.stringify({ from_ref: fromRef, to_ref: toRef, from_branch: fromBranch, to_branch: toBranch })}
       )

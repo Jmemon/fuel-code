@@ -38,6 +38,16 @@ if [ -z "$WORKSPACE_ID" ]; then
   exit 0
 fi
 
+# Worktree detection: compare git-dir to git-common-dir to determine if running inside a worktree
+GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
+GIT_COMMON=$(git rev-parse --git-common-dir 2>/dev/null)
+IS_WORKTREE=false
+WORKTREE_NAME=""
+if [ "$GIT_DIR" != "$GIT_COMMON" ]; then
+  IS_WORKTREE=true
+  WORKTREE_NAME=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)")
+fi
+
 # Extract commit metadata
 HASH=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
 # Commit message: escape double quotes and collapse newlines for JSON
@@ -89,7 +99,9 @@ FILE_LIST+="]"
   "files_changed": $FILES_CHANGED,
   "insertions": $INSERTIONS,
   "deletions": $DELETIONS,
-  "file_list": $FILE_LIST
+  "file_list": $FILE_LIST,
+  "is_worktree": $IS_WORKTREE,
+  "worktree_name": $([ "$IS_WORKTREE" = "true" ] && echo "\"$WORKTREE_NAME\"" || echo "null")
 }
 FUELCODE_EOF
 ) 2>&1 | while read -r line; do

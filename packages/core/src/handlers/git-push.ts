@@ -30,6 +30,10 @@ export async function handleGitPush(ctx: EventHandlerContext): Promise<void> {
   const commitCount = event.data.commit_count as number;
   const commits = event.data.commits ?? null;
 
+  // Worktree context: defaults ensure backward compatibility with old events
+  const isWorktree = event.data.is_worktree ?? false;
+  const worktreeName = event.data.worktree_name ?? null;
+
   // Correlate this git event to an active CC session
   const correlation = await correlateGitEventToSession(
     sql,
@@ -49,7 +53,7 @@ export async function handleGitPush(ctx: EventHandlerContext): Promise<void> {
   await sql.begin(async (tx: any) => {
     // Insert into git_activity — push events store remote/commit info in data JSONB
     await tx`
-      INSERT INTO git_activity (id, workspace_id, device_id, session_id, type, branch, timestamp, data)
+      INSERT INTO git_activity (id, workspace_id, device_id, session_id, type, branch, is_worktree, worktree_name, timestamp, data)
       VALUES (
         ${event.id},
         ${workspaceId},
@@ -57,6 +61,8 @@ export async function handleGitPush(ctx: EventHandlerContext): Promise<void> {
         ${correlation.sessionId},
         ${"push"},
         ${branch},
+        ${isWorktree},
+        ${worktreeName},
         ${event.timestamp},
         ${JSON.stringify({ remote, commit_count: commitCount, commits })}
       )

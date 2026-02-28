@@ -53,6 +53,16 @@ if [ -z "$WORKSPACE_ID" ]; then
   exit 0
 fi
 
+# Worktree detection: compare git-dir to git-common-dir to determine if running inside a worktree
+GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
+GIT_COMMON=$(git rev-parse --git-common-dir 2>/dev/null)
+IS_WORKTREE=false
+WORKTREE_NAME=""
+if [ "$GIT_DIR" != "$GIT_COMMON" ]; then
+  IS_WORKTREE=true
+  WORKTREE_NAME=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)")
+fi
+
 REMOTE_NAME="${1:-origin}"
 
 # Process each pushed ref
@@ -106,7 +116,9 @@ printf '%b' "$PUSH_REFS" | while IFS=' ' read -r local_ref local_sha remote_ref 
   "branch": "$BRANCH",
   "remote": "$REMOTE_NAME",
   "commit_count": $COMMIT_COUNT,
-  "commits": $COMMITS_JSON
+  "commits": $COMMITS_JSON,
+  "is_worktree": $IS_WORKTREE,
+  "worktree_name": $([ "$IS_WORKTREE" = "true" ] && echo "\"$WORKTREE_NAME\"" || echo "null")
 }
 FUELCODE_EOF
   ) 2>&1 | while read -r line; do

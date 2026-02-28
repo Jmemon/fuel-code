@@ -36,13 +36,22 @@ if [ -z "$WORKSPACE_ID" ]; then
   exit 0
 fi
 
+# Worktree detection: compare git-dir to git-common-dir to determine if running inside a worktree
+GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
+GIT_COMMON=$(git rev-parse --git-common-dir 2>/dev/null)
+IS_WORKTREE=false
+WORKTREE_NAME=""
+if [ "$GIT_DIR" != "$GIT_COMMON" ]; then
+  IS_WORKTREE=true
+  WORKTREE_NAME=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)")
+fi
+
 MERGE_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
 MESSAGE=$(git log -1 --pretty=%B HEAD 2>/dev/null | head -c 4096)
 INTO_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "HEAD")
 
 # Determine merged branch: try MERGE_HEAD first, then parse commit message
 MERGED_BRANCH="unknown"
-GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
 if [ -n "$GIT_DIR" ] && [ -f "$GIT_DIR/MERGE_HEAD" ]; then
   MERGE_HEAD=$(head -1 "$GIT_DIR/MERGE_HEAD" 2>/dev/null)
   if [ -n "$MERGE_HEAD" ]; then
@@ -83,7 +92,9 @@ fi
   "merged_branch": "$MERGED_BRANCH",
   "into_branch": "$INTO_BRANCH",
   "files_changed": $FILES_CHANGED,
-  "had_conflicts": $HAD_CONFLICTS
+  "had_conflicts": $HAD_CONFLICTS,
+  "is_worktree": $IS_WORKTREE,
+  "worktree_name": $([ "$IS_WORKTREE" = "true" ] && echo "\"$WORKTREE_NAME\"" || echo "null")
 }
 FUELCODE_EOF
 ) 2>&1 | while read -r line; do

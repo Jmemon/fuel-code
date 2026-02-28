@@ -37,6 +37,10 @@ export async function handleGitCommit(ctx: EventHandlerContext): Promise<void> {
   const deletions = event.data.deletions as number;
   const fileList = event.data.file_list ?? null;
 
+  // Worktree context: defaults ensure backward compatibility with old events
+  const isWorktree = event.data.is_worktree ?? false;
+  const worktreeName = event.data.worktree_name ?? null;
+
   // Correlate this git event to an active CC session
   const correlation = await correlateGitEventToSession(
     sql,
@@ -57,7 +61,7 @@ export async function handleGitCommit(ctx: EventHandlerContext): Promise<void> {
     // Insert into git_activity — stores the structured git data
     // data JSONB holds author info and file list for detailed queries
     await tx`
-      INSERT INTO git_activity (id, workspace_id, device_id, session_id, type, branch, commit_sha, message, files_changed, insertions, deletions, timestamp, data)
+      INSERT INTO git_activity (id, workspace_id, device_id, session_id, type, branch, commit_sha, message, files_changed, insertions, deletions, is_worktree, worktree_name, timestamp, data)
       VALUES (
         ${event.id},
         ${workspaceId},
@@ -70,6 +74,8 @@ export async function handleGitCommit(ctx: EventHandlerContext): Promise<void> {
         ${filesChanged},
         ${insertions},
         ${deletions},
+        ${isWorktree},
+        ${worktreeName},
         ${event.timestamp},
         ${JSON.stringify({ author_name: authorName, author_email: authorEmail, file_list: fileList })}
       )
