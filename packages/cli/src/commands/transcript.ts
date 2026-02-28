@@ -78,12 +78,16 @@ export function createTranscriptCommand(): Command {
  * This function NEVER throws and NEVER sets a non-zero exit code.
  * All errors are logged to stderr and the function returns gracefully.
  *
- * @param sessionId - The session this transcript belongs to
- * @param filePath  - Absolute path to the JSONL transcript file on disk
+ * @param sessionId   - The session this transcript belongs to
+ * @param filePath    - Absolute path to the JSONL transcript file on disk
+ * @param subagentId  - Optional sub-agent ID. When set, the server stores the
+ *                       transcript under the subagent S3 key path and links it
+ *                       to the subagent row.
  */
 export async function runTranscriptUpload(
   sessionId: string,
   filePath: string,
+  subagentId?: string,
 ): Promise<void> {
   // 1. Load config. If missing: exit gracefully (fuel-code not initialized)
   let config;
@@ -121,7 +125,8 @@ export async function runTranscriptUpload(
   }
 
   // 4. POST to server — stream the file body
-  const url = `${config.backend.url.replace(/\/+$/, "")}/api/sessions/${sessionId}/transcript/upload`;
+  const baseUrl = `${config.backend.url.replace(/\/+$/, "")}/api/sessions/${sessionId}/transcript/upload`;
+  const url = subagentId ? `${baseUrl}?subagent_id=${encodeURIComponent(subagentId)}` : baseUrl;
 
   // Read the file once — reused across retries
   const fileContent = fs.readFileSync(filePath);

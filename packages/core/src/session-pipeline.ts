@@ -210,6 +210,17 @@ export async function runSessionPipeline(
   await persistRelationships(sql, sessionId, parseResult, log);
 
   // -------------------------------------------------------------------------
+  // Step 5.6: Parse sub-agent transcripts
+  //
+  // For each subagent that was persisted and has a transcript_s3_key, download
+  // and parse its transcript through the same parser, then insert messages and
+  // content blocks with the subagent_id FK set. Non-fatal — failures are
+  // logged but don't block the rest of the pipeline.
+  // -------------------------------------------------------------------------
+
+  await parseSubagentTranscripts(sql, s3, sessionId, log);
+
+  // -------------------------------------------------------------------------
   // Step 6: Advance lifecycle to 'parsed' with computed stats
   // -------------------------------------------------------------------------
 
@@ -437,16 +448,103 @@ async function persistRelationships(
 }
 
 // ---------------------------------------------------------------------------
+// Sub-agent transcript parsing
+// ---------------------------------------------------------------------------
+
+/**
+ * Download, parse, and persist transcripts for all sub-agents in a session
+ * that have a transcript_s3_key set. Each sub-agent's messages and content
+ * blocks are inserted with the subagent_id FK pointing to the subagent ULID.
+ *
+ * Non-fatal: individual sub-agent failures are logged but don't block the
+ * pipeline or other sub-agents from being processed.
+ */
+async function parseSubagentTranscripts(
+  sql: Sql,
+  s3: S3Client,
+  sessionId: string,
+  logger: Logger,
+): Promise<void> {
+  try {
+    // Find all subagents for this session that have an uploaded transcript
+    const subagentRows = await sql`
+      SELECT id, agent_id, transcript_s3_key
+      FROM subagents
+      WHERE session_id = ${sessionId}
+        AND transcript_s3_key IS NOT NULL
+    `;
+
+    if (subagentRows.length === 0) return;
+
+    logger.info(
+      { count: subagentRows.length },
+      `Processing ${subagentRows.length} sub-agent transcript(s)`,
+    );
+
+    for (const row of subagentRows) {
+      const subagentUlid = row.id as string;
+      const agentId = row.agent_id as string;
+      const s3Key = row.transcript_s3_key as string;
+
+      try {
+        // Download sub-agent transcript from S3
+        const content = await s3.download(s3Key);
+
+        // Parse through the same transcript parser
+        const subParseResult = await parseTranscript(sessionId, content);
+
+        if (subParseResult.messages.length === 0) {
+          logger.info({ agentId }, "Sub-agent transcript has no messages — skipping");
+          continue;
+        }
+
+        // Persist parsed messages and content blocks with subagent_id FK set
+        // TransactionSql type is missing template literal call signatures in postgres.js types
+        await sql.begin(async (tx: any) => {
+          // Clear any previously parsed sub-agent data (idempotent re-run)
+          await tx`DELETE FROM content_blocks WHERE session_id = ${sessionId} AND subagent_id = ${subagentUlid}`;
+          await tx`DELETE FROM transcript_messages WHERE session_id = ${sessionId} AND subagent_id = ${subagentUlid}`;
+
+          await batchInsertMessages(tx, subParseResult.messages, subagentUlid);
+          await batchInsertContentBlocks(tx, subParseResult.contentBlocks, subagentUlid);
+        });
+
+        logger.info(
+          { agentId, messages: subParseResult.messages.length, blocks: subParseResult.contentBlocks.length },
+          `Parsed sub-agent transcript for ${agentId}`,
+        );
+      } catch (err) {
+        // Non-fatal per sub-agent — log and continue with remaining sub-agents
+        logger.warn(
+          { agentId, error: err instanceof Error ? err.message : String(err) },
+          `Failed to parse sub-agent transcript for ${agentId} — continuing`,
+        );
+      }
+    }
+  } catch (err) {
+    // Non-fatal: log warning but don't block pipeline
+    logger.warn(
+      { err, sessionId },
+      "Failed to process sub-agent transcripts — continuing pipeline",
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Batch insert helpers
 // ---------------------------------------------------------------------------
 
 /**
  * Insert transcript messages in batches of BATCH_SIZE.
  * Uses sql.unsafe with parameterized values to avoid exceeding Postgres limits.
+ *
+ * @param subagentId - When set, all messages are attributed to this sub-agent
+ *                     via the subagent_id FK column. Pass null for main session messages.
  */
 async function batchInsertMessages(
   tx: Sql,
   messages: TranscriptMessage[],
+  subagentId: string | null = null,
 ): Promise<void> {
   for (let i = 0; i < messages.length; i += BATCH_SIZE) {
     const chunk = messages.slice(i, i + BATCH_SIZE);
@@ -454,8 +552,8 @@ async function batchInsertMessages(
     if (chunk.length === 0) continue;
 
     // Build parameterized INSERT with numbered placeholders
-    // Each message has 21 columns (matches all transcript_messages columns)
-    const colCount = 21;
+    // Each message has 22 columns (transcript_messages columns + subagent_id)
+    const colCount = 22;
     const placeholders: string[] = [];
     const values: unknown[] = [];
 
@@ -467,7 +565,7 @@ async function batchInsertMessages(
         `$${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10}, ` +
         `$${offset + 11}, $${offset + 12}, $${offset + 13}, $${offset + 14}, $${offset + 15}, ` +
         `$${offset + 16}, $${offset + 17}, $${offset + 18}, $${offset + 19}, $${offset + 20}, ` +
-        `$${offset + 21})`,
+        `$${offset + 21}, $${offset + 22})`,
       );
       values.push(
         m.id,                                    // 1
@@ -491,6 +589,7 @@ async function batchInsertMessages(
         m.has_thinking,                          // 19
         m.has_tool_use,                          // 20
         m.has_tool_result,                       // 21
+        subagentId,                              // 22
       );
     }
 
@@ -499,7 +598,7 @@ async function batchInsertMessages(
         id, session_id, line_number, ordinal, message_type, role, model,
         tokens_in, tokens_out, cache_read, cache_write, cost_usd,
         compact_sequence, is_compacted, timestamp, raw_message, metadata,
-        has_text, has_thinking, has_tool_use, has_tool_result
+        has_text, has_thinking, has_tool_use, has_tool_result, subagent_id
       ) VALUES ${placeholders.join(", ")}`,
       values as any[],
     );
@@ -509,18 +608,22 @@ async function batchInsertMessages(
 /**
  * Insert content blocks in batches of BATCH_SIZE.
  * Uses sql.unsafe with parameterized values to avoid exceeding Postgres limits.
+ *
+ * @param subagentId - When set, all blocks are attributed to this sub-agent
+ *                     via the subagent_id FK column. Pass null for main session blocks.
  */
 async function batchInsertContentBlocks(
   tx: Sql,
   blocks: ParsedContentBlock[],
+  subagentId: string | null = null,
 ): Promise<void> {
   for (let i = 0; i < blocks.length; i += BATCH_SIZE) {
     const chunk = blocks.slice(i, i + BATCH_SIZE);
 
     if (chunk.length === 0) continue;
 
-    // Each content block has 14 columns
-    const colCount = 14;
+    // Each content block has 15 columns (content_blocks columns + subagent_id)
+    const colCount = 15;
     const placeholders: string[] = [];
     const values: unknown[] = [];
 
@@ -530,7 +633,7 @@ async function batchInsertContentBlocks(
       placeholders.push(
         `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, ` +
         `$${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10}, ` +
-        `$${offset + 11}, $${offset + 12}, $${offset + 13}, $${offset + 14})`,
+        `$${offset + 11}, $${offset + 12}, $${offset + 13}, $${offset + 14}, $${offset + 15})`,
       );
       values.push(
         b.id,                                    // 1
@@ -547,6 +650,7 @@ async function batchInsertContentBlocks(
         b.is_error,                              // 12
         b.result_text,                           // 13
         JSON.stringify(b.metadata),              // 14
+        subagentId,                              // 15
       );
     }
 
@@ -554,7 +658,7 @@ async function batchInsertContentBlocks(
       `INSERT INTO content_blocks (
         id, message_id, session_id, block_order, block_type,
         content_text, thinking_text, tool_name, tool_use_id, tool_input,
-        tool_result_id, is_error, result_text, metadata
+        tool_result_id, is_error, result_text, metadata, subagent_id
       ) VALUES ${placeholders.join(", ")}`,
       values as any[],
     );

@@ -25,7 +25,8 @@
  *   - Logs go to stderr only via the emit command's logger
  */
 
-import { basename } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { readdirSync, existsSync } from "node:fs";
 import { Command } from "commander";
 import { execSync } from "../lib/exec.js";
 import { deriveWorkspaceCanonicalId } from "../lib/workspace.js";
@@ -214,6 +215,11 @@ function createSessionEndHandler(): Command {
         // Upload transcript directly (runTranscriptUpload never throws, has 120s timeout)
         if (transcriptPath) {
           await runTranscriptUpload(sessionId, transcriptPath);
+
+          // Discover and upload sub-agent transcripts.
+          // CC stores them alongside the main transcript in a subagents/ subdirectory.
+          // Check both: transcriptDir/subagents/ and transcriptDir/{sessionId}/subagents/
+          await discoverAndUploadSubagentTranscripts(sessionId, transcriptPath);
         }
       } catch {
         // Swallow all errors — hooks must never fail
@@ -534,6 +540,58 @@ function createWorktreeRemoveHandler(): Command {
 
       process.exit(0);
     });
+}
+
+// ---------------------------------------------------------------------------
+// Sub-agent transcript discovery
+// ---------------------------------------------------------------------------
+
+/**
+ * Discover sub-agent transcript JSONL files near the main transcript and
+ * upload each one. Non-fatal — failures are logged to stderr but never
+ * propagated, so the session-end hook completes regardless.
+ */
+async function discoverAndUploadSubagentTranscripts(
+  sessionId: string,
+  transcriptPath: string,
+): Promise<void> {
+  const transcriptDir = dirname(transcriptPath);
+
+  // CC may store sub-agent transcripts in either location:
+  //   1. <transcriptDir>/subagents/
+  //   2. <transcriptDir>/<sessionId>/subagents/
+  const candidates = [
+    join(transcriptDir, "subagents"),
+    join(transcriptDir, sessionId, "subagents"),
+  ];
+
+  for (const subagentsDir of candidates) {
+    if (!existsSync(subagentsDir)) continue;
+
+    let files: string[];
+    try {
+      files = readdirSync(subagentsDir);
+    } catch {
+      continue;
+    }
+
+    const agentFiles = files.filter(
+      (f) => f.startsWith("agent-") && f.endsWith(".jsonl"),
+    );
+
+    for (const file of agentFiles) {
+      const agentPath = join(subagentsDir, file);
+      const agentId = file.replace("agent-", "").replace(".jsonl", "");
+      try {
+        await runTranscriptUpload(sessionId, agentPath, agentId);
+      } catch {
+        // Non-fatal — log and continue with remaining sub-agents
+        process.stderr.write(
+          `[fuel-code] Failed to upload sub-agent transcript ${file}\n`,
+        );
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

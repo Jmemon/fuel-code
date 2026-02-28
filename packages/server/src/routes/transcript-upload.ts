@@ -18,7 +18,7 @@ import { Router } from "express";
 import type { Request, Response, NextFunction } from "express";
 import type { Sql } from "postgres";
 import type { Logger } from "pino";
-import { buildTranscriptKey } from "@fuel-code/shared";
+import { buildTranscriptKey, buildSubagentTranscriptKey } from "@fuel-code/shared";
 import type { FuelCodeS3Client } from "../aws/s3.js";
 import type { PipelineDeps } from "@fuel-code/core";
 import { runSessionPipeline } from "@fuel-code/core";
@@ -68,18 +68,20 @@ export function createTranscriptUploadRouter(deps: {
   /**
    * POST /:id/transcript/upload
    *
-   * Streams the raw JSONL transcript body directly to S3 and optionally
-   * triggers the post-processing pipeline if the session has already ended.
+   * Uploads a raw JSONL transcript to S3 and optionally triggers the
+   * post-processing pipeline if the session has already ended.
    *
-   * No express.raw() middleware — the request body stream is piped directly
-   * to the S3 PutObject command, keeping memory usage constant regardless
-   * of transcript size.
+   * When ?subagent_id=<id> is present, the transcript is stored under
+   * the subagent S3 key path and linked to the subagent row instead of
+   * the session. No pipeline trigger for subagent uploads — the pipeline
+   * handles sub-agent transcript parsing after the main transcript is parsed.
    */
   router.post(
     "/:id/transcript/upload",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const sessionId = req.params.id as string;
+        const subagentId = (req.query.subagent_id as string | undefined)?.trim() || null;
 
         // --- Step 1: Validate Content-Length is present and within limits ---
         const contentLength = parseInt(req.headers["content-length"] || "0", 10);
@@ -108,8 +110,9 @@ export function createTranscriptUploadRouter(deps: {
 
         const session = sessionRows[0];
 
-        // --- Step 3: Idempotency — if transcript already uploaded, return early ---
-        if (session.transcript_s3_key) {
+        // --- Step 3: Idempotency (main transcript only) ---
+        // Sub-agent uploads skip this check — each sub-agent has its own key.
+        if (!subagentId && session.transcript_s3_key) {
           res.status(200).json({
             status: "already_uploaded",
             s3_key: session.transcript_s3_key,
@@ -132,15 +135,17 @@ export function createTranscriptUploadRouter(deps: {
         const canonicalId = workspaceRows[0].canonical_id as string;
 
         // --- Step 5: Build the S3 key ---
-        const s3Key = buildTranscriptKey(canonicalId, sessionId);
+        const s3Key = subagentId
+          ? buildSubagentTranscriptKey(canonicalId, sessionId, subagentId)
+          : buildTranscriptKey(canonicalId, sessionId);
 
         logger.info(
-          { sessionId, s3Key, contentLength },
-          `Streaming transcript upload for session ${sessionId} (${contentLength} bytes)`,
+          { sessionId, subagentId, s3Key, contentLength },
+          `Uploading ${subagentId ? "sub-agent" : "main"} transcript for session ${sessionId} (${contentLength} bytes)`,
         );
 
         // --- Step 6: Buffer request body then upload to S3 ---
-        // Buffering decouples the client→server and server→S3 connections so a
+        // Buffering decouples the client->server and server->S3 connections so a
         // client disconnect mid-stream can't corrupt the S3 upload. Memory is
         // bounded by MAX_UPLOAD_BYTES (200MB) checked in step 1.
         const chunks: Buffer[] = [];
@@ -151,34 +156,46 @@ export function createTranscriptUploadRouter(deps: {
 
         await s3.upload(s3Key, body, "application/x-ndjson");
 
-        // --- Step 7: Update session with the S3 key and get CURRENT lifecycle ---
-        // RETURNING lifecycle gives us the row's actual state after the write,
-        // avoiding a stale-read race with the session.end event handler.
-        // Without this, if session.end transitions lifecycle to "ended" between
-        // our initial SELECT (step 2) and this UPDATE, we'd use the stale
-        // "detected" value and neither side would trigger the pipeline.
-        const [updatedSession] = await sql`
-          UPDATE sessions
-          SET transcript_s3_key = ${s3Key}, updated_at = now()
-          WHERE id = ${sessionId}
-          RETURNING lifecycle
-        `;
+        // --- Step 7: Update DB with the S3 key ---
+        if (subagentId) {
+          // Sub-agent upload: update the subagent row's transcript_s3_key.
+          // Uses (session_id, agent_id) unique index to find the right row.
+          await sql`
+            UPDATE subagents
+            SET transcript_s3_key = ${s3Key}
+            WHERE session_id = ${sessionId} AND agent_id = ${subagentId}
+          `;
 
-        // --- Step 8: Trigger pipeline if session has already ended ---
-        const lifecycle = updatedSession.lifecycle as string;
-        const pipelineTriggered = lifecycle === "ended";
+          res.status(202).json({
+            status: "uploaded",
+            s3_key: s3Key,
+            subagent_id: subagentId,
+            pipeline_triggered: false,
+          });
+        } else {
+          // Main transcript: update session and conditionally trigger pipeline.
+          // RETURNING lifecycle gives us the row's actual state after the write,
+          // avoiding a stale-read race with the session.end event handler.
+          const [updatedSession] = await sql`
+            UPDATE sessions
+            SET transcript_s3_key = ${s3Key}, updated_at = now()
+            WHERE id = ${sessionId}
+            RETURNING lifecycle
+          `;
 
-        if (pipelineTriggered) {
-          // Route through the bounded pipeline queue for concurrency control
-          triggerPipeline(pipelineDeps, sessionId, logger);
+          const lifecycle = updatedSession.lifecycle as string;
+          const pipelineTriggered = lifecycle === "ended";
+
+          if (pipelineTriggered) {
+            triggerPipeline(pipelineDeps, sessionId, logger);
+          }
+
+          res.status(202).json({
+            status: "uploaded",
+            s3_key: s3Key,
+            pipeline_triggered: pipelineTriggered,
+          });
         }
-
-        // --- Step 9: Return success response ---
-        res.status(202).json({
-          status: "uploaded",
-          s3_key: s3Key,
-          pipeline_triggered: pipelineTriggered,
-        });
       } catch (err) {
         next(err);
       }

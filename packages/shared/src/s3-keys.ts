@@ -22,6 +22,18 @@ export function buildTranscriptKey(
 }
 
 /**
+ * Build the S3 key for a sub-agent's raw transcript JSONL file.
+ * @returns `transcripts/{workspaceCanonicalId}/{sessionId}/subagents/{agentId}.jsonl`
+ */
+export function buildSubagentTranscriptKey(
+  workspaceCanonicalId: string,
+  sessionId: string,
+  agentId: string,
+): string {
+  return `transcripts/${workspaceCanonicalId}/${sessionId}/subagents/${agentId}.jsonl`;
+}
+
+/**
  * Build the S3 key for a parsed transcript backup.
  * @returns `transcripts/{workspaceCanonicalId}/{sessionId}/parsed.json`
  */
