@@ -4,14 +4,18 @@
  * Events are the core data primitive — every user action, system signal,
  * and lifecycle transition is captured as an Event and ingested to the backend.
  *
- * There are 14 event types across 4 categories:
+ * There are 21 event types across 7 categories:
  *   - session.*    — Claude Code session lifecycle
  *   - git.*        — git operations detected by hooks
  *   - remote.*     — remote dev environment provisioning
  *   - system.*     — device registration, hook installation, heartbeats
+ *   - subagent.*   — sub-agent spawning and completion
+ *   - team.*       — multi-agent team coordination
+ *   - skill.*      — skill invocations
+ *   - worktree.*   — git worktree lifecycle
  */
 
-/** All 14 event types in the fuel-code system */
+/** All 21 event types in the fuel-code system */
 export type EventType =
   | "session.start"
   | "session.end"
@@ -26,7 +30,14 @@ export type EventType =
   | "remote.terminate"
   | "system.device.register"
   | "system.hooks.installed"
-  | "system.heartbeat";
+  | "system.heartbeat"
+  | "subagent.start"
+  | "subagent.stop"
+  | "team.create"
+  | "team.message"
+  | "skill.invoke"
+  | "worktree.create"
+  | "worktree.remove";
 
 /**
  * Runtime array of all EventType values.
@@ -48,6 +59,13 @@ export const EVENT_TYPES = [
   "system.device.register",
   "system.hooks.installed",
   "system.heartbeat",
+  "subagent.start",
+  "subagent.stop",
+  "team.create",
+  "team.message",
+  "skill.invoke",
+  "worktree.create",
+  "worktree.remove",
 ] as const satisfies readonly EventType[];
 
 /**
@@ -70,7 +88,7 @@ export interface BlobRef {
 export interface Event {
   /** ULID — globally unique, time-sortable identifier */
   id: string;
-  /** One of the 14 EventType values */
+  /** One of the 21 EventType values */
   type: EventType;
   /** ISO-8601 timestamp of when the event occurred on the client */
   timestamp: string;

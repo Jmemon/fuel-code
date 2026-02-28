@@ -36,7 +36,7 @@ export const blobRefSchema = z.object({
 export const eventSchema = z.object({
   /** ULID — must match Crockford Base32 format */
   id: z.string().regex(ULID_REGEX, "id must be a valid ULID"),
-  /** Must be one of the 14 known event types */
+  /** Must be one of the 21 known event types */
   type: z.enum(EVENT_TYPES),
   /** ISO-8601 datetime string */
   timestamp: z.string().datetime(),

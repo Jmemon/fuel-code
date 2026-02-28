@@ -19,6 +19,13 @@ import { gitCommitPayloadSchema } from "./git-commit.js";
 import { gitPushPayloadSchema } from "./git-push.js";
 import { gitCheckoutPayloadSchema } from "./git-checkout.js";
 import { gitMergePayloadSchema } from "./git-merge.js";
+import { subagentStartPayloadSchema } from "./subagent-start.js";
+import { subagentStopPayloadSchema } from "./subagent-stop.js";
+import { teamCreatePayloadSchema } from "./team-create.js";
+import { teamMessagePayloadSchema } from "./team-message.js";
+import { skillInvokePayloadSchema } from "./skill-invoke.js";
+import { worktreeCreatePayloadSchema } from "./worktree-create.js";
+import { worktreeRemovePayloadSchema } from "./worktree-remove.js";
 
 /**
  * Registry mapping event types to their payload Zod schemas.
@@ -32,6 +39,13 @@ export const PAYLOAD_SCHEMAS: Partial<Record<EventType, z.ZodSchema>> = {
   "git.push": gitPushPayloadSchema,
   "git.checkout": gitCheckoutPayloadSchema,
   "git.merge": gitMergePayloadSchema,
+  "subagent.start": subagentStartPayloadSchema,
+  "subagent.stop": subagentStopPayloadSchema,
+  "team.create": teamCreatePayloadSchema,
+  "team.message": teamMessagePayloadSchema,
+  "skill.invoke": skillInvokePayloadSchema,
+  "worktree.create": worktreeCreatePayloadSchema,
+  "worktree.remove": worktreeRemovePayloadSchema,
 };
 
 /**
