@@ -6,7 +6,7 @@
  *   - sessions-index.json metadata enrichment
  *   - Subagent directory skipping
  *   - Non-JSONL file skipping
- *   - Recently modified file skipping (potentially active)
+ *   - Active session detection (content-based /exit check + lsof)
  *   - projectDirToPath directory name → path conversion
  *   - Workspace resolution (_unassociated fallback)
  *   - Empty JSONL file handling
@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { scanForSessions, projectDirToPath } from "../session-backfill.js";
+import { scanForSessions, isSessionActive, projectDirToPath } from "../session-backfill.js";
 import { loadBackfillState, saveBackfillState, type BackfillState } from "../backfill-state.js";
 
 // ---------------------------------------------------------------------------
@@ -65,8 +65,32 @@ function createProjectDir(
   return projectDir;
 }
 
-/** Build minimal JSONL content with a first line containing metadata */
+/** Build minimal JSONL content with a first line containing metadata.
+ *  Includes /exit command at the end so the session appears closed. */
 function buildMinimalJsonl(sessionId: string): string {
+  const line1 = JSON.stringify({
+    type: "user",
+    sessionId,
+    timestamp: "2025-06-01T10:00:00.000Z",
+    gitBranch: "main",
+    cwd: "/Users/test/project",
+    message: { role: "user", content: "Hello" },
+  });
+  const line2 = JSON.stringify({
+    type: "assistant",
+    timestamp: "2025-06-01T10:01:00.000Z",
+    message: { role: "assistant", content: [{ type: "text", text: "Hi" }] },
+  });
+  const exitLine = JSON.stringify({
+    type: "user",
+    timestamp: "2025-06-01T10:02:00.000Z",
+    message: { role: "user", content: "<command-name>/exit</command-name>\n<command-message>exit</command-message>" },
+  });
+  return line1 + "\n" + line2 + "\n" + exitLine + "\n";
+}
+
+/** Build JSONL content without /exit — simulates an interrupted or active session */
+function buildActiveJsonl(sessionId: string): string {
   const line1 = JSON.stringify({
     type: "user",
     sessionId,
@@ -84,6 +108,29 @@ function buildMinimalJsonl(sessionId: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Tests: isSessionActive
+// ---------------------------------------------------------------------------
+
+describe("isSessionActive", () => {
+  it("returns false when file contains /exit command (gracefully closed)", () => {
+    const filePath = path.join(tmpDir, "closed-session.jsonl");
+    fs.writeFileSync(filePath, buildMinimalJsonl("11111111-1111-1111-1111-111111111111"));
+    expect(isSessionActive(filePath)).toBe(false);
+  });
+
+  it("returns false when file has no /exit and no process holds it open (abandoned)", () => {
+    const filePath = path.join(tmpDir, "abandoned-session.jsonl");
+    fs.writeFileSync(filePath, buildActiveJsonl("22222222-2222-2222-2222-222222222222"));
+    // No process has this file open, so lsof will exit non-zero → not active
+    expect(isSessionActive(filePath)).toBe(false);
+  });
+
+  it("returns false for nonexistent file", () => {
+    expect(isSessionActive(path.join(tmpDir, "nope.jsonl"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests: scanForSessions
 // ---------------------------------------------------------------------------
 
@@ -94,9 +141,7 @@ describe("scanForSessions", () => {
       { id: sessionId, mtimeMs: Date.now() - 600_000 }, // 10 min ago
     ]);
 
-    const result = await scanForSessions(tmpDir, {
-      skipActiveThresholdMs: 300_000,
-    });
+    const result = await scanForSessions(tmpDir);
 
     expect(result.discovered.length).toBe(1);
     expect(result.discovered[0].sessionId).toBe(sessionId);
@@ -129,9 +174,7 @@ describe("scanForSessions", () => {
       JSON.stringify(index),
     );
 
-    const result = await scanForSessions(tmpDir, {
-      skipActiveThresholdMs: 300_000,
-    });
+    const result = await scanForSessions(tmpDir);
 
     expect(result.discovered.length).toBe(1);
     const session = result.discovered[0];
@@ -162,9 +205,7 @@ describe("scanForSessions", () => {
       '{"type":"user"}\n',
     );
 
-    const result = await scanForSessions(tmpDir, {
-      skipActiveThresholdMs: 300_000,
-    });
+    const result = await scanForSessions(tmpDir);
 
     // Only the top-level JSONL should be discovered, not the subagent one
     expect(result.discovered.length).toBe(1);
@@ -186,36 +227,31 @@ describe("scanForSessions", () => {
       "[]",
     );
 
-    const result = await scanForSessions(tmpDir, {
-      skipActiveThresholdMs: 300_000,
-    });
+    const result = await scanForSessions(tmpDir);
 
     expect(result.discovered.length).toBe(1);
     expect(result.skipped.nonJsonl).toBeGreaterThanOrEqual(2); // .DS_Store + sessions-index.json
   });
 
-  it("skips files modified within the active threshold (potentially active)", async () => {
-    // One old session (10 min ago) and one recent (1 min ago)
+  it("skips sessions without /exit that have the file open (active)", async () => {
+    // Session without /exit and no process holding it open → treated as ended (crashed/abandoned)
     createProjectDir("-Users-test-Desktop-active", [
       {
         id: "66666666-7777-8888-9999-aaaaaaaaaaaa",
-        mtimeMs: Date.now() - 600_000, // 10 min ago — should be included
+        // default content includes /exit → closed session, should be discovered
       },
       {
         id: "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
-        mtimeMs: Date.now() - 60_000, // 1 min ago — should be skipped
+        content: buildActiveJsonl("bbbbbbbb-cccc-dddd-eeee-ffffffffffff"),
+        // no /exit, but no process has file open → abandoned, should still be discovered
       },
     ]);
 
-    const result = await scanForSessions(tmpDir, {
-      skipActiveThresholdMs: 300_000, // 5 min threshold
-    });
+    const result = await scanForSessions(tmpDir);
 
-    expect(result.discovered.length).toBe(1);
-    expect(result.discovered[0].sessionId).toBe(
-      "66666666-7777-8888-9999-aaaaaaaaaaaa",
-    );
-    expect(result.skipped.potentiallyActive).toBe(1);
+    // Both discovered: one has /exit (closed), one has no /exit but no lsof match (abandoned)
+    expect(result.discovered.length).toBe(2);
+    expect(result.skipped.potentiallyActive).toBe(0);
   });
 
   it("handles empty JSONL files (discovered with null metadata)", async () => {
@@ -227,9 +263,7 @@ describe("scanForSessions", () => {
       },
     ]);
 
-    const result = await scanForSessions(tmpDir, {
-      skipActiveThresholdMs: 300_000,
-    });
+    const result = await scanForSessions(tmpDir);
 
     expect(result.discovered.length).toBe(1);
     expect(result.discovered[0].sessionId).toBe(
@@ -271,9 +305,7 @@ describe("scanForSessions", () => {
     fs.utimesSync(path.join(projectDir, `${sessionA}.jsonl`), oldTime, oldTime);
     fs.utimesSync(path.join(projectDir, `${sessionB}.jsonl`), oldTime, oldTime);
 
-    const result = await scanForSessions(tmpDir, {
-      skipActiveThresholdMs: 300_000,
-    });
+    const result = await scanForSessions(tmpDir);
 
     expect(result.discovered.length).toBe(2);
     // Session B (January) should come before Session A (March)
@@ -284,7 +316,6 @@ describe("scanForSessions", () => {
   it("returns empty result when projects directory doesn't exist", async () => {
     const result = await scanForSessions(
       path.join(tmpDir, "nonexistent"),
-      { skipActiveThresholdMs: 300_000 },
     );
 
     expect(result.discovered.length).toBe(0);
@@ -299,9 +330,7 @@ describe("scanForSessions", () => {
       },
     ]);
 
-    const result = await scanForSessions(tmpDir, {
-      skipActiveThresholdMs: 300_000,
-    });
+    const result = await scanForSessions(tmpDir);
 
     expect(result.discovered.length).toBe(1);
     expect(result.discovered[0].workspaceCanonicalId).toBe("_unassociated");
@@ -323,7 +352,7 @@ describe("scanForSessions", () => {
 
     const progressDirs: string[] = [];
     await scanForSessions(tmpDir, {
-      skipActiveThresholdMs: 300_000,
+
       onProgress: (dir) => progressDirs.push(dir),
     });
 
@@ -351,9 +380,7 @@ describe("scanForSessions", () => {
     fs.utimesSync(path.join(projectDir, `${validId}.jsonl`), oldTime, oldTime);
     fs.utimesSync(path.join(projectDir, "not-a-uuid.jsonl"), oldTime, oldTime);
 
-    const result = await scanForSessions(tmpDir, {
-      skipActiveThresholdMs: 300_000,
-    });
+    const result = await scanForSessions(tmpDir);
 
     expect(result.discovered.length).toBe(1);
     expect(result.discovered[0].sessionId).toBe(validId);
@@ -389,9 +416,7 @@ describe("scanForSessions", () => {
       JSON.stringify(index),
     );
 
-    const result = await scanForSessions(tmpDir, {
-      skipActiveThresholdMs: 300_000,
-    });
+    const result = await scanForSessions(tmpDir);
 
     expect(result.discovered.length).toBe(1);
     const session = result.discovered[0];
@@ -421,9 +446,7 @@ describe("scanForSessions", () => {
       { id: sessionId, content: jsonlContent, mtimeMs: Date.now() - 600_000 },
     ]);
 
-    const result = await scanForSessions(tmpDir, {
-      skipActiveThresholdMs: 300_000,
-    });
+    const result = await scanForSessions(tmpDir);
 
     expect(result.discovered.length).toBe(1);
     // CWD from JSONL should be used (projectDirToPath would produce something different)
@@ -464,9 +487,7 @@ describe("scanForSessions", () => {
       JSON.stringify(index),
     );
 
-    const result = await scanForSessions(tmpDir, {
-      skipActiveThresholdMs: 300_000,
-    });
+    const result = await scanForSessions(tmpDir);
 
     expect(result.discovered.length).toBe(1);
     expect(result.discovered[0].resolvedCwd).toBe(indexPath);
@@ -504,9 +525,7 @@ describe("scanForSessions", () => {
       { id: sessionId, content: jsonlContent, mtimeMs: Date.now() - 600_000 },
     ]);
 
-    const result = await scanForSessions(tmpDir, {
-      skipActiveThresholdMs: 300_000,
-    });
+    const result = await scanForSessions(tmpDir);
 
     expect(result.discovered.length).toBe(1);
     // Should resolve via git commands or parent walk, not _unassociated
@@ -542,9 +561,7 @@ describe("scanForSessions", () => {
       { id: sessionId, content: jsonlContent, mtimeMs: Date.now() - 600_000 },
     ]);
 
-    const result = await scanForSessions(tmpDir, {
-      skipActiveThresholdMs: 300_000,
-    });
+    const result = await scanForSessions(tmpDir);
 
     expect(result.discovered.length).toBe(1);
     // Should be local:<sha256>, not _unassociated

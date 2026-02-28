@@ -143,9 +143,6 @@ const DEFAULT_CLAUDE_PROJECTS_DIR = path.join(
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Default: skip files modified within last 5 minutes (likely active sessions) */
-const DEFAULT_SKIP_ACTIVE_THRESHOLD_MS = 300_000;
-
 /** HTTP timeout for dedup checks and transcript uploads (2 minutes) */
 const HTTP_TIMEOUT_MS = 120_000;
 
@@ -252,6 +249,58 @@ export function projectDirToPath(dirName: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Active session detection: check JSONL content + lsof instead of mtime
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a JSONL transcript file belongs to an active (currently running) session.
+ *
+ * Two-stage check:
+ *   1. Read the last ~4KB of the file and look for a `/exit` command — if found,
+ *      the session was gracefully closed and is definitely not active.
+ *   2. If no `/exit` found, run `lsof` to check whether any process has the file
+ *      open — if so, the session is still running.
+ *
+ * This replaces the old mtime-based heuristic which incorrectly skipped long sessions.
+ */
+export function isSessionActive(filePath: string): boolean {
+  // Stage 1: check tail of file for /exit command (definitive "session ended")
+  try {
+    const fd = fs.openSync(filePath, "r");
+    try {
+      const stat = fs.fstatSync(fd);
+      // Read last 4KB — /exit lines are small, this is more than enough
+      const tailSize = Math.min(4096, stat.size);
+      const buf = Buffer.alloc(tailSize);
+      fs.readSync(fd, buf, 0, tailSize, stat.size - tailSize);
+      const tail = buf.toString("utf-8");
+
+      if (tail.includes("<command-name>/exit</command-name>")) {
+        return false; // gracefully closed
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    // If we can't read the file, assume not active (let later steps handle errors)
+    return false;
+  }
+
+  // Stage 2: no /exit found — check if a process has the file open
+  try {
+    execSync(`lsof -- ${JSON.stringify(filePath)}`, {
+      stdio: "pipe",
+      timeout: 5_000,
+    });
+    // lsof exits 0 if file is open → session is active
+    return true;
+  } catch {
+    // lsof exits non-zero if no process has the file open → not active
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // scanForSessions: discover all historical sessions
 // ---------------------------------------------------------------------------
 
@@ -260,23 +309,18 @@ export function projectDirToPath(dirName: string): string {
  *
  * Scans each project subdirectory for JSONL transcript files, using
  * sessions-index.json for metadata when available. Skips subagent
- * directories, non-JSONL files, and recently modified files.
+ * directories, non-JSONL files, and active sessions (detected via content + lsof).
  *
  * @param claudeProjectsDir - Path to ~/.claude/projects/ (overridable for tests)
- * @param options.skipActiveThresholdMs - Skip files modified within this many ms (default: 5 min)
  * @param options.onProgress - Called with directory name as each project dir is scanned
  */
 export async function scanForSessions(
   claudeProjectsDir?: string,
   options?: {
-    skipActiveThresholdMs?: number;
     onProgress?: (dirScanned: string) => void;
   },
 ): Promise<ScanResult> {
   const projectsDir = claudeProjectsDir ?? DEFAULT_CLAUDE_PROJECTS_DIR;
-  const skipThreshold =
-    options?.skipActiveThresholdMs ?? DEFAULT_SKIP_ACTIVE_THRESHOLD_MS;
-  const now = Date.now();
 
   const result: ScanResult = {
     discovered: [],
@@ -374,8 +418,8 @@ export async function scanForSessions(
         continue;
       }
 
-      // Skip files modified within the threshold (potentially active sessions)
-      if (now - fileStat.mtimeMs < skipThreshold) {
+      // Skip active sessions (detected via /exit check + lsof)
+      if (isSessionActive(entryPath)) {
         result.skipped.potentiallyActive++;
         continue;
       }

@@ -1103,14 +1103,9 @@ describe("Phase 2 E2E Pipeline", () => {
       const transcriptPath = join(projectDir, `${fakeSessionId}.jsonl`);
       fs.copyFileSync(TEST_TRANSCRIPT_PATH, transcriptPath);
 
-      // Set the mtime to 10 minutes ago so it's not treated as "potentially active"
-      const tenMinutesAgo = new Date(Date.now() - 600_000);
-      fs.utimesSync(transcriptPath, tenMinutesAgo, tenMinutesAgo);
-
       // Run the scanner on our temp directory
-      const scanResult = await scanForSessions(tmpDir, {
-        skipActiveThresholdMs: 300_000, // default 5 min threshold
-      });
+      // (test transcript includes /exit so isSessionActive() treats it as closed)
+      const scanResult = await scanForSessions(tmpDir);
 
       // Assert: discovers the session
       expect(scanResult.discovered.length).toBe(1);

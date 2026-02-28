@@ -97,8 +97,8 @@ async function waitFor<T>(
 
 /**
  * Create a temporary directory mimicking ~/.claude/projects/ with a single
- * UUID-named JSONL transcript file. The file's mtime is set to 10 minutes
- * ago so scanForSessions does not skip it as "potentially active".
+ * UUID-named JSONL transcript file. The test transcript includes /exit so
+ * isSessionActive() recognizes it as a closed session.
  */
 function createFakeProjectsDir(): { projectsDir: string; sessionId: string } {
   const dir = fs.mkdtempSync(join(os.tmpdir(), "fuel-backfill-e2e-"));
@@ -108,10 +108,6 @@ function createFakeProjectsDir(): { projectsDir: string; sessionId: string } {
   const sessionId = randomUUID();
   const transcriptDest = join(projectDir, `${sessionId}.jsonl`);
   fs.copyFileSync(TEST_TRANSCRIPT_PATH, transcriptDest);
-
-  // Set mtime to 10 minutes ago (past the 5-minute active session threshold)
-  const tenMinAgo = new Date(Date.now() - 600_000);
-  fs.utimesSync(transcriptDest, tenMinAgo, tenMinAgo);
 
   return { projectsDir: dir, sessionId };
 }
@@ -238,9 +234,7 @@ describe("Phase 2 E2E: Backfill Ingestion", () => {
     const { projectsDir, sessionId } = createFakeProjectsDir();
     tempProjectsDir = projectsDir;
 
-    const scanResult = await scanForSessions(projectsDir, {
-      skipActiveThresholdMs: 300_000,
-    });
+    const scanResult = await scanForSessions(projectsDir);
 
     // Assert: discovers exactly 1 session with the correct ID
     expect(scanResult.discovered.length).toBe(1);
@@ -268,9 +262,7 @@ describe("Phase 2 E2E: Backfill Ingestion", () => {
     tempProjectsDir = projectsDir;
 
     // 1. Scan to discover sessions
-    const scanResult = await scanForSessions(projectsDir, {
-      skipActiveThresholdMs: 300_000,
-    });
+    const scanResult = await scanForSessions(projectsDir);
     expect(scanResult.discovered.length).toBe(1);
 
     // 2. Ingest against the real test server
@@ -339,9 +331,7 @@ describe("Phase 2 E2E: Backfill Ingestion", () => {
     tempProjectsDir = projectsDir;
 
     // 1. First ingest: scan + ingest
-    const scanResult = await scanForSessions(projectsDir, {
-      skipActiveThresholdMs: 300_000,
-    });
+    const scanResult = await scanForSessions(projectsDir);
     expect(scanResult.discovered.length).toBe(1);
 
     const deviceId = `backfill-device-${generateId().slice(0, 8)}`;

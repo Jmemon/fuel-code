@@ -97,6 +97,7 @@ export {
 // Session backfill: discover and ingest historical Claude Code sessions
 export {
   scanForSessions,
+  isSessionActive,
   ingestBackfillSessions,
   waitForPipelineCompletion,
   projectDirToPath,
