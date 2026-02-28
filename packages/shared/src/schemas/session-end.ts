@@ -20,6 +20,18 @@ export const sessionEndPayloadSchema = z.object({
   end_reason: z.enum(["exit", "clear", "logout", "crash"]),
   /** S3 path where the transcript is stored */
   transcript_path: z.string(),
+  // Fields duplicated from session.start so the handler can create the session
+  // row if the start event was missed (e.g. hook didn't fire).
+  /** Working directory where the session ran */
+  cwd: z.string().optional(),
+  /** Git branch at session time */
+  git_branch: z.string().nullable().optional(),
+  /** Git remote URL */
+  git_remote: z.string().nullable().optional(),
+  /** Claude model being used */
+  model: z.string().nullable().optional(),
+  /** Claude Code version string */
+  cc_version: z.string().nullable().optional(),
 });
 
 /** Inferred TypeScript type for session.end payloads */

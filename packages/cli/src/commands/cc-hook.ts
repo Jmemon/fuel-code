@@ -163,12 +163,33 @@ function createSessionEndHandler(): Command {
 
         const workspace = resolveWorkspace(cwd);
 
+        const model = context.model ? String(context.model).trim() : null;
+
+        let ccVersion: string | null = null;
+        try {
+          ccVersion = execSync("claude --version", {
+            stdio: "pipe",
+            timeout: 3000,
+          })
+            .toString()
+            .trim();
+        } catch {
+          // Swallow — cc_version is optional
+        }
+
         // duration_ms: 0 signals the server to compute actual duration from started_at and ended_at.
+        // Extra fields (cwd, git_branch, etc.) let the handler create the session
+        // row if session.start was missed.
         const payload = {
           cc_session_id: sessionId,
           duration_ms: 0,
           end_reason: endReason,
           transcript_path: transcriptPath,
+          cwd,
+          git_branch: workspace.gitBranch,
+          git_remote: workspace.gitRemote,
+          model,
+          cc_version: ccVersion,
         };
 
         // session_id is null for session.end events (same as session.start) to

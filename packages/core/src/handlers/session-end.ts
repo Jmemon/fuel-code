@@ -25,7 +25,7 @@ import { transitionSession } from "../session-lifecycle.js";
  *   - duration_ms: total session duration in milliseconds
  */
 export async function handleSessionEnd(ctx: EventHandlerContext): Promise<void> {
-  const { sql, event, logger } = ctx;
+  const { sql, event, workspaceId, logger } = ctx;
 
   // Extract fields from the session.end payload
   const ccSessionId = event.data.cc_session_id as string;
@@ -65,11 +65,42 @@ export async function handleSessionEnd(ctx: EventHandlerContext): Promise<void> 
   );
 
   if (!result.success) {
-    logger.warn(
-      { ccSessionId, reason: result.reason },
-      "session.end: lifecycle transition failed",
-    );
-    return;
+    // If the session row doesn't exist, the start event was missed.
+    // Create the session directly in 'ended' state using fields from the
+    // enriched session.end payload so transcript upload and pipeline proceed.
+    if (result.reason === "Session not found") {
+      logger.warn({ ccSessionId }, "session.end: session not found, creating backfill row");
+
+      const gitBranch = (event.data.git_branch as string | null) ?? null;
+      const model = (event.data.model as string | null) ?? null;
+
+      await sql`
+        INSERT INTO sessions (
+          id, workspace_id, device_id, lifecycle, started_at, ended_at,
+          end_reason, duration_ms, git_branch, model, source, metadata
+        ) VALUES (
+          ${ccSessionId},
+          ${workspaceId},
+          ${event.device_id},
+          ${"ended"},
+          ${event.timestamp},
+          ${event.timestamp},
+          ${endReason},
+          ${0},
+          ${gitBranch},
+          ${model},
+          ${"backfill"},
+          ${JSON.stringify({})}
+        )
+        ON CONFLICT (id) DO NOTHING
+      `;
+    } else {
+      logger.warn(
+        { ccSessionId, reason: result.reason },
+        "session.end: lifecycle transition failed",
+      );
+      return;
+    }
   }
 
   // Backfill events.session_id so this event appears in "events for session X"
