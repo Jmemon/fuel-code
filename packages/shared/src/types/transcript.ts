@@ -126,6 +126,44 @@ export interface ParsedContentBlock {
 }
 
 // ---------------------------------------------------------------------------
+// Parsed relationship types (extracted from transcript content blocks)
+// ---------------------------------------------------------------------------
+
+/** A subagent spawned during the session, extracted from tool_use blocks */
+export interface ParsedSubagent {
+  agent_id: string;
+  agent_type: string;
+  agent_name?: string;
+  model?: string;
+  team_name?: string;
+  isolation?: string;
+  run_in_background: boolean;
+  spawning_tool_use_id: string;
+  started_at?: string;
+}
+
+/** A team referenced in the transcript (multi-agent coordination) */
+export interface ParsedTeam {
+  team_name: string;
+  description?: string;
+  message_count: number;
+}
+
+/** A skill invocation detected in the transcript */
+export interface ParsedSkill {
+  skill_name: string;
+  invoked_at: string;
+  invoked_by: 'user' | 'claude';
+  args?: string;
+}
+
+/** A worktree creation detected in the transcript */
+export interface ParsedWorktree {
+  worktree_name?: string;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
 // Parse result and aggregate statistics
 // ---------------------------------------------------------------------------
 
@@ -143,6 +181,21 @@ export interface ParseResult {
     firstTimestamp: string | null;
     lastTimestamp: string | null;
   };
+
+  // -- Phase 4-2: extracted relationships --
+
+  /** Subagents spawned during the session */
+  subagents: ParsedSubagent[];
+  /** Teams referenced in the session */
+  teams: ParsedTeam[];
+  /** Skills invoked during the session */
+  skills: ParsedSkill[];
+  /** Worktrees created during the session */
+  worktrees: ParsedWorktree[];
+  /** Permission mode the session ran under */
+  permission_mode?: string;
+  /** Session ID this session was resumed from */
+  resumed_from_session_id?: string;
 }
 
 /** Aggregate statistics computed from a parsed transcript */

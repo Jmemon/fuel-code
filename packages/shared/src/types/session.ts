@@ -6,6 +6,11 @@
  * lifecycle from detection through parsing (transcript analysis) to summarization.
  */
 
+import type { Subagent } from './subagent.js';
+import type { SessionSkill } from './skill.js';
+import type { SessionWorktree } from './worktree.js';
+import type { Team } from './team.js';
+
 /**
  * Session lifecycle states.
  * Progression: detected -> capturing -> ended -> parsed -> summarized -> archived
@@ -60,4 +65,30 @@ export interface Session {
   ended_at: string | null;
   /** Arbitrary metadata */
   metadata: Record<string, unknown>;
+
+  // -- Phase 4-2: session chain, team membership, permission mode --
+
+  /** ID of the session this one was resumed from (session chaining) */
+  resumed_from_session_id?: string;
+  /** Team this session belongs to (multi-agent coordination) */
+  team_name?: string;
+  /** Role within the team: lead orchestrates, member executes */
+  team_role?: 'lead' | 'member';
+  /** Permission mode the session ran under (e.g. "plan", "auto-edit") */
+  permission_mode?: string;
+
+  // -- Joined data (populated by detail queries, not stored inline) --
+
+  /** Subagents spawned during this session */
+  subagents?: Subagent[];
+  /** Skills invoked during this session */
+  skills?: SessionSkill[];
+  /** Worktrees created during this session */
+  worktrees?: SessionWorktree[];
+  /** Team this session is a member of */
+  team?: Team;
+  /** The session this one was resumed from */
+  resumed_from?: { id: string; started_at: string; initial_prompt?: string };
+  /** Sessions that resumed from this one */
+  resumed_by?: { id: string; started_at: string; initial_prompt?: string }[];
 }

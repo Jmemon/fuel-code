@@ -265,6 +265,11 @@ export async function parseTranscript(
       firstTimestamp,
       lastTimestamp,
     },
+    // Phase 4-2: empty arrays for now — extraction logic comes in Tasks 7 and 9
+    subagents: [],
+    teams: [],
+    skills: [],
+    worktrees: [],
   };
 }
 
