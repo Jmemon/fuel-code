@@ -188,7 +188,15 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
     const concurrency = Math.max(1, parseInt(opts.concurrency, 10) || 10);
     console.error(`Processing with concurrency: ${concurrency}`);
 
-    const result = await ingestBackfillSessions(scanResult.discovered, {
+    // Shared state for concurrent upload + pipeline polling
+    const ingestedIds: string[] = [];
+    let uploadsDone = false;
+    let uploadBarLine = `  Uploading:   ${buildProgressBar(0, scanResult.discovered.length, 30)} 0/${scanResult.discovered.length}`;
+    let processingBarLine = "  Processing:  waiting...";
+    const renderBars = () => writeDualBars(uploadBarLine, processingBarLine);
+
+    // Upload promise: ingests sessions, pushes IDs via onSessionIngested
+    const uploadPromise = ingestBackfillSessions(scanResult.discovered, {
       serverUrl: config.backend.url,
       apiKey: config.backend.api_key,
       deviceId: config.device.id,
@@ -197,18 +205,42 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
       signal: abortController.signal,
       alreadyIngested,
       concurrency,
+      onSessionIngested: (id) => ingestedIds.push(id),
       onProgress: (progress: BackfillProgress) => {
         const bar = buildProgressBar(progress.completed, progress.total, 30);
         const sessionShort = progress.currentSession
           ? progress.currentSession.slice(0, 8) + "..."
           : "";
         const failStr = progress.failed > 0 ? `  (${progress.failed} failed)` : "";
-        writeDualBars(
-          `  Uploading:   ${bar} ${progress.completed}/${progress.total}  ${sessionShort}${failStr}`,
-          `  Processing:  waiting for uploads...`,
-        );
+        uploadBarLine = `  Uploading:   ${bar} ${progress.completed}/${progress.total}  ${sessionShort}${failStr}`;
+        renderBars();
       },
-    });
+    }).then(r => { uploadsDone = true; return r; });
+
+    // Pipeline polling promise: watches processing progress concurrently
+    const pipelinePromise = waitForPipelineCompletion(
+      () => [...ingestedIds],
+      {
+        serverUrl: config.backend.url,
+        apiKey: config.backend.api_key,
+        signal: abortController.signal,
+        uploadsComplete: () => uploadsDone,
+        onProgress: (progress: PipelineWaitProgress) => {
+          const bar = buildProgressBar(progress.completed, progress.total, 30);
+          const parts: string[] = [];
+          for (const [lifecycle, count] of Object.entries(progress.byLifecycle)) {
+            if (count > 0 && lifecycle !== "parsed" && lifecycle !== "summarized" && lifecycle !== "archived" && lifecycle !== "failed") {
+              parts.push(`${count} ${lifecycle}`);
+            }
+          }
+          const statusStr = parts.length > 0 ? `  ${parts.join(", ")}` : "";
+          processingBarLine = `  Processing:  ${bar} ${progress.completed}/${progress.total}${statusStr}`;
+          renderBars();
+        },
+      },
+    );
+
+    const [result, pipelineResult] = await Promise.all([uploadPromise, pipelinePromise]);
 
     // Save final state
     const finalState: BackfillState = {
@@ -218,61 +250,25 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
       startedAt: null,
       ingestedSessionIds: [
         ...alreadyIngested,
-        ...scanResult.discovered
-          .filter((s) => !alreadyIngested.has(s.sessionId))
-          .slice(0, result.ingested)
-          .map((s) => s.sessionId),
+        ...ingestedIds,
       ],
     };
     saveBackfillState(finalState, stateDir);
 
-    // Phase 4: Wait for server-side processing (parse + summarize)
-    const ingestedIds = scanResult.discovered
-      .filter((s) => !alreadyIngested.has(s.sessionId))
-      .slice(0, result.ingested)
-      .map((s) => s.sessionId);
-
-    // Freeze upload bar as "done" for the processing phase.
-    // Use scanResult.discovered.length as total to match the ingestion progress bar.
+    // Freeze upload bar as "done"
     const uploadTotal = scanResult.discovered.length;
     const uploadCompleted = result.ingested + result.skipped + result.failed;
     const uploadDoneStr = result.failed > 0
       ? `done (${result.failed} failed)`
       : "done";
     const uploadDoneLine = `  Uploading:   ${buildProgressBar(uploadCompleted, uploadTotal, 30)} ${uploadCompleted}/${uploadTotal}  ${uploadDoneStr}`;
+    writeDualBars(uploadDoneLine, processingBarLine);
+
+    // Clear dual bars and print final summary
+    process.stderr.write("\n");
+    console.log("");
 
     if (ingestedIds.length > 0) {
-      // Update upload bar to "done", show processing bar starting
-      writeDualBars(
-        uploadDoneLine,
-        `  Processing:  ${buildProgressBar(0, ingestedIds.length, 30)} 0/${ingestedIds.length}`,
-      );
-
-      const pipelineResult = await waitForPipelineCompletion(ingestedIds, {
-        serverUrl: config.backend.url,
-        apiKey: config.backend.api_key,
-        signal: abortController.signal,
-        onProgress: (progress: PipelineWaitProgress) => {
-          const bar = buildProgressBar(progress.completed, progress.total, 30);
-          // Show breakdown of non-terminal states so user knows what's pending
-          const parts: string[] = [];
-          for (const [lifecycle, count] of Object.entries(progress.byLifecycle)) {
-            if (count > 0 && lifecycle !== "parsed" && lifecycle !== "summarized" && lifecycle !== "archived" && lifecycle !== "failed") {
-              parts.push(`${count} ${lifecycle}`);
-            }
-          }
-          const statusStr = parts.length > 0 ? `  ${parts.join(", ")}` : "";
-          writeDualBars(
-            uploadDoneLine,
-            `  Processing:  ${bar} ${progress.completed}/${progress.total}${statusStr}`,
-          );
-        },
-      });
-
-      // Clear dual bars and print final summary
-      process.stderr.write("\n");
-
-      console.log("");
       if (pipelineResult.completed) {
         console.log("Backfill complete!");
       } else if (pipelineResult.timedOut) {
@@ -281,7 +277,6 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
         console.log("Backfill uploaded. Processing watch cancelled (server still working in background).");
       }
 
-      // Summary
       console.log(`  Uploaded:   ${result.ingested} sessions` +
         (result.skipped > 0 ? ` (${result.skipped} skipped)` : ""));
       const ps = pipelineResult.summary;
@@ -294,9 +289,6 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
       console.log(`  Processed:  ${ps.summarized + ps.parsed + ps.archived}/${ingestedIds.length}` +
         (processedParts.length > 0 ? ` (${processedParts.join(", ")})` : ""));
     } else {
-      // Nothing to process (all skipped/failed)
-      process.stderr.write("\n");
-      console.log("");
       console.log("Backfill complete!");
       console.log(`  Uploaded:   ${result.ingested} sessions` +
         (result.skipped > 0 ? ` (${result.skipped} skipped)` : ""));

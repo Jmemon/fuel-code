@@ -115,6 +115,8 @@ export interface IngestDeps {
   deviceName?: string;
   /** Device type hint ("local", "remote", etc.) — defaults to "local" */
   deviceType?: string;
+  /** Callback fired when a session is successfully ingested (events + transcript uploaded) */
+  onSessionIngested?: (sessionId: string) => void;
 }
 
 /** Entry from a sessions-index.json file */
@@ -700,6 +702,7 @@ export async function ingestBackfillSessions(
 
       result.ingested++;
       result.totalSizeBytes += session.fileSizeBytes;
+      deps.onSessionIngested?.(session.sessionId);
     } catch (err) {
       result.failed++;
       result.errors.push({
@@ -1263,6 +1266,9 @@ export interface PipelineWaitDeps {
   signal?: AbortSignal;
   /** Progress callback fired after each poll */
   onProgress?: (progress: PipelineWaitProgress) => void;
+  /** When using a dynamic session ID getter, signals that the list is finalized.
+   *  Polling won't declare "completed" until this returns true. */
+  uploadsComplete?: () => boolean;
 }
 
 /** Result of waiting for pipeline completion */
@@ -1287,14 +1293,20 @@ export interface PipelineWaitResult {
  * Poll the batch-status endpoint until all sessions reach a terminal
  * lifecycle state (parsed, summarized, archived, or failed).
  *
- * Used by the backfill command to show server-side processing progress
- * after the local event emission phase completes.
+ * Accepts either a static array or a getter function for session IDs.
+ * When a getter is provided, IDs are re-resolved each poll iteration so
+ * new sessions (e.g. from concurrent uploads) are picked up dynamically.
+ * Pair with `uploadsComplete` in deps to prevent early termination while
+ * uploads are still in flight.
  */
 export async function waitForPipelineCompletion(
-  sessionIds: string[],
+  sessionIds: string[] | (() => string[]),
   deps: PipelineWaitDeps,
 ): Promise<PipelineWaitResult> {
-  if (sessionIds.length === 0) {
+  const resolveIds = typeof sessionIds === "function" ? sessionIds : () => sessionIds;
+
+  // For static empty arrays (no uploadsComplete), return immediately
+  if (typeof sessionIds !== "function" && sessionIds.length === 0) {
     return {
       completed: true,
       timedOut: false,
@@ -1308,50 +1320,79 @@ export async function waitForPipelineCompletion(
   const timeout = deps.timeoutMs ?? 600_000;
   const startTime = Date.now();
 
-  // Poll in batches of 500 (endpoint limit)
-  const idBatches: string[][] = [];
-  for (let i = 0; i < sessionIds.length; i += 500) {
-    idBatches.push(sessionIds.slice(i, i + 500));
-  }
-
   while (true) {
     if (deps.signal?.aborted) {
-      return buildPipelineResult(sessionIds, {}, true, false);
+      return buildPipelineResult(resolveIds(), {}, true, false);
     }
 
     if (Date.now() - startTime > timeout) {
-      return buildPipelineResult(sessionIds, await fetchAllStatuses(baseUrl, deps.apiKey, idBatches, deps.signal), false, true);
+      const currentIds = resolveIds();
+      const idBatches = batchIds(currentIds, 500);
+      return buildPipelineResult(currentIds, await fetchAllStatuses(baseUrl, deps.apiKey, idBatches, deps.signal), false, true);
     }
 
+    // Re-resolve IDs each iteration (may have grown since last poll)
+    const currentIds = resolveIds();
+
+    // If no IDs yet and uploads still running, wait and re-poll
+    if (currentIds.length === 0) {
+      if (deps.uploadsComplete?.() === false) {
+        try {
+          await abortableSleep(pollInterval, deps.signal);
+        } catch {
+          return buildPipelineResult([], {}, true, false);
+        }
+        continue;
+      }
+      // Uploads done with no IDs — nothing to wait for
+      return {
+        completed: true,
+        timedOut: false,
+        aborted: false,
+        summary: { parsed: 0, summarized: 0, archived: 0, failed: 0, pending: 0 },
+      };
+    }
+
+    const idBatches = batchIds(currentIds, 500);
     const statuses = await fetchAllStatuses(baseUrl, deps.apiKey, idBatches, deps.signal);
 
     // Report progress
     if (deps.onProgress) {
       const byLifecycle: Record<string, number> = {};
       let completedCount = 0;
-      for (const id of sessionIds) {
+      for (const id of currentIds) {
         const lifecycle = statuses[id]?.lifecycle ?? "unknown";
         byLifecycle[lifecycle] = (byLifecycle[lifecycle] ?? 0) + 1;
         if (TERMINAL_LIFECYCLES.has(lifecycle)) completedCount++;
       }
-      deps.onProgress({ total: sessionIds.length, completed: completedCount, byLifecycle });
+      deps.onProgress({ total: currentIds.length, completed: completedCount, byLifecycle });
     }
 
-    const allTerminal = sessionIds.every((id) => {
+    const allTerminal = currentIds.every((id) => {
       const lifecycle = statuses[id]?.lifecycle;
       return lifecycle && TERMINAL_LIFECYCLES.has(lifecycle);
     });
 
-    if (allTerminal) {
-      return buildPipelineResult(sessionIds, statuses, false, false);
+    // Only declare complete if uploads are also done (or uploadsComplete not provided)
+    if (allTerminal && deps.uploadsComplete?.() !== false) {
+      return buildPipelineResult(currentIds, statuses, false, false);
     }
 
     try {
       await abortableSleep(pollInterval, deps.signal);
     } catch {
-      return buildPipelineResult(sessionIds, statuses, true, false);
+      return buildPipelineResult(currentIds, statuses, true, false);
     }
   }
+}
+
+/** Split an array into chunks of the given size */
+function batchIds(ids: string[], size: number): string[][] {
+  const batches: string[][] = [];
+  for (let i = 0; i < ids.length; i += size) {
+    batches.push(ids.slice(i, i + size));
+  }
+  return batches;
 }
 
 /** Fetch statuses from all batches and merge into a single map */
