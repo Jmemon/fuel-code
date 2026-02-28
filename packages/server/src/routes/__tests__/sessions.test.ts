@@ -261,6 +261,20 @@ function defaultQueryHandler(queryText: string, values: unknown[]): unknown[] {
     return session ? [session] : [];
   }
 
+  // Batch status: SELECT id, lifecycle, parse_status FROM sessions WHERE id IN (...)
+  // Matches parse_status + WHERE id IN (no workspace join, no single-id WHERE =)
+  if (
+    queryText.includes("parse_status") &&
+    queryText.includes("WHERE id IN")
+  ) {
+    // values[0] is the array of session IDs passed via sql(session_ids)
+    const ids = values[0] as string[] | undefined;
+    if (Array.isArray(ids)) {
+      return ALL_SESSIONS.filter((s) => ids.includes(s.id));
+    }
+    return [];
+  }
+
   // Session parse_status check: SELECT id, parse_status ... FROM sessions WHERE id =
   if (queryText.includes("parse_status") && queryText.includes("FROM sessions")) {
     const id = values.find((v) => typeof v === "string");
@@ -342,6 +356,22 @@ async function get(path: string, headers: Record<string, string> = {}) {
   return fetch(`${baseUrl}${path}`, {
     method: "GET",
     headers: { Authorization: AUTH_HEADER, ...headers },
+  });
+}
+
+async function post(
+  path: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+) {
+  return fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: AUTH_HEADER,
+      ...headers,
+    },
+    body: JSON.stringify(body),
   });
 }
 
@@ -718,6 +748,85 @@ describe("Auth", () => {
     const res = await fetch(`${baseUrl}/api/sessions`, {
       method: "GET",
       headers: { Authorization: "Bearer wrong-key-here" },
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/sessions/batch-status
+// ---------------------------------------------------------------------------
+
+describe("POST /api/sessions/batch-status", () => {
+  test("returns lifecycle and parse_status for requested session IDs", async () => {
+    const res = await post("/api/sessions/batch-status", {
+      session_ids: ["sess-01", "sess-02", "sess-03"],
+    });
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(body.statuses).toBeDefined();
+    expect(body.not_found).toEqual([]);
+
+    // Verify each session's status fields
+    expect(body.statuses["sess-01"]).toEqual({
+      lifecycle: "parsed",
+      parse_status: "completed",
+    });
+    expect(body.statuses["sess-02"]).toEqual({
+      lifecycle: "ended",
+      parse_status: "pending",
+    });
+    expect(body.statuses["sess-03"]).toEqual({
+      lifecycle: "summarized",
+      parse_status: "completed",
+    });
+  });
+
+  test("reports not_found for missing session IDs", async () => {
+    const res = await post("/api/sessions/batch-status", {
+      session_ids: ["sess-01", "nonexistent-a", "nonexistent-b"],
+    });
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(body.statuses["sess-01"]).toBeDefined();
+    expect(body.not_found).toEqual(
+      expect.arrayContaining(["nonexistent-a", "nonexistent-b"]),
+    );
+    expect(body.not_found.length).toBe(2);
+  });
+
+  test("returns 400 for empty session_ids array", async () => {
+    const res = await post("/api/sessions/batch-status", {
+      session_ids: [],
+    });
+    expect(res.status).toBe(400);
+
+    const body = await res.json();
+    expect(body.error).toBe("Invalid request body");
+  });
+
+  test("returns 400 for missing body", async () => {
+    const res = await fetch(`${baseUrl}/api/sessions/batch-status`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: AUTH_HEADER,
+      },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+
+    const body = await res.json();
+    expect(body.error).toBe("Invalid request body");
+  });
+
+  test("returns 401 without auth", async () => {
+    const res = await fetch(`${baseUrl}/api/sessions/batch-status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_ids: ["sess-01"] }),
     });
     expect(res.status).toBe(401);
   });

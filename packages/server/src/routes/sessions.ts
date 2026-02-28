@@ -24,6 +24,7 @@ import {
   sessionListQuerySchema,
   sessionPatchSchema,
   parseLifecycleParam,
+  batchStatusRequestSchema,
 } from "@fuel-code/shared";
 
 // ---------------------------------------------------------------------------
@@ -567,6 +568,51 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
         `;
 
         res.json({ session: resultRows[0] });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // =========================================================================
+  // POST /sessions/batch-status — Batch lifecycle status for multiple sessions
+  // =========================================================================
+  router.post(
+    "/sessions/batch-status",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const parseResult = batchStatusRequestSchema.safeParse(req.body);
+        if (!parseResult.success) {
+          res.status(400).json({
+            error: "Invalid request body",
+            details: parseResult.error.issues,
+          });
+          return;
+        }
+
+        const { session_ids } = parseResult.data;
+
+        const rows = await sql`
+          SELECT id, lifecycle, parse_status
+          FROM sessions
+          WHERE id IN ${sql(session_ids)}
+        `;
+
+        // Build statuses map and detect not_found IDs
+        const statuses: Record<string, { lifecycle: string; parse_status: string }> = {};
+        const foundIds = new Set<string>();
+
+        for (const row of rows) {
+          statuses[row.id as string] = {
+            lifecycle: row.lifecycle as string,
+            parse_status: row.parse_status as string,
+          };
+          foundIds.add(row.id as string);
+        }
+
+        const not_found = session_ids.filter((id) => !foundIds.has(id));
+
+        res.json({ statuses, not_found });
       } catch (err) {
         next(err);
       }
