@@ -39,6 +39,10 @@ const MAX_FILE_SIZE_BYTES = 200 * 1024 * 1024;
 /** Upload timeout — transcripts can be large, allow generous time */
 const UPLOAD_TIMEOUT_MS = 120_000;
 
+/** Retry config for 404s — the session.end event may not be processed yet */
+const RETRY_ON_404_MAX = 5;
+const RETRY_ON_404_DELAY_MS = 1_000;
+
 // ---------------------------------------------------------------------------
 // Command definition
 // ---------------------------------------------------------------------------
@@ -119,46 +123,62 @@ export async function runTranscriptUpload(
   // 4. POST to server — stream the file body
   const url = `${config.backend.url.replace(/\/+$/, "")}/api/sessions/${sessionId}/transcript/upload`;
 
-  try {
-    // Read the file into a buffer for the upload
-    const fileContent = fs.readFileSync(filePath);
+  // Read the file once — reused across retries
+  const fileContent = fs.readFileSync(filePath);
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-ndjson",
-        Authorization: `Bearer ${config.backend.api_key}`,
-      },
-      body: fileContent,
-      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
-    });
+  // Retry loop: the session.end event is processed async via Redis streams,
+  // so the session row may not exist yet when this upload fires. Retry on 404
+  // to give the event processor time to create the row (including backfill).
+  for (let attempt = 1; attempt <= RETRY_ON_404_MAX; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-ndjson",
+          Authorization: `Bearer ${config.backend.api_key}`,
+        },
+        body: fileContent,
+        signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+      });
 
-    if (!response.ok) {
-      const body = await response.text().catch(() => "<unreadable>");
+      if (response.status === 404 && attempt < RETRY_ON_404_MAX) {
+        logger.info(
+          { sessionId, attempt },
+          "Session not found yet — retrying after delay",
+        );
+        await new Promise((r) => setTimeout(r, RETRY_ON_404_DELAY_MS));
+        continue;
+      }
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => "<unreadable>");
+        logger.warn(
+          { sessionId, status: response.status, body },
+          `Transcript upload returned HTTP ${response.status}`,
+        );
+        process.stderr.write(
+          `fuel-code: transcript upload failed (HTTP ${response.status})\n`,
+        );
+        return;
+      }
+
+      const result = await response.json().catch(() => ({}));
+      logger.info(
+        { sessionId, result },
+        "Transcript uploaded successfully",
+      );
+      return;
+    } catch (err) {
+      // Network error, timeout, etc. — log and exit gracefully
+      const message = err instanceof Error ? err.message : String(err);
       logger.warn(
-        { sessionId, status: response.status, body },
-        `Transcript upload returned HTTP ${response.status}`,
+        { sessionId, filePath, error: message },
+        "Transcript upload failed",
       );
       process.stderr.write(
-        `fuel-code: transcript upload failed (HTTP ${response.status})\n`,
+        `fuel-code: transcript upload failed: ${message}\n`,
       );
       return;
     }
-
-    const result = await response.json().catch(() => ({}));
-    logger.info(
-      { sessionId, result },
-      "Transcript uploaded successfully",
-    );
-  } catch (err) {
-    // Network error, timeout, etc. — log and exit gracefully
-    const message = err instanceof Error ? err.message : String(err);
-    logger.warn(
-      { sessionId, filePath, error: message },
-      "Transcript upload failed",
-    );
-    process.stderr.write(
-      `fuel-code: transcript upload failed: ${message}\n`,
-    );
   }
 }
