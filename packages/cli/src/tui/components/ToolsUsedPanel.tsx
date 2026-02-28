@@ -1,12 +1,14 @@
 /**
- * ToolsUsedPanel — displays tool usage frequency table in the sidebar.
+ * ToolsUsedPanel -- displays tool usage frequency as a horizontal bar chart.
  *
- * Shows tool names sorted by frequency descending, with counts.
+ * Shows tool names sorted by frequency descending via the BarChart primitive.
+ * Title is handled by the parent Sidebar's Divider.
  * Empty state: "No tool usage recorded"
  */
 
 import React from "react";
 import { Box, Text } from "ink";
+import { BarChart } from "../primitives/index.js";
 
 export interface ToolsUsedPanelProps {
   /** Map of tool name -> usage count, or raw array of tool names to count */
@@ -14,33 +16,28 @@ export interface ToolsUsedPanelProps {
 }
 
 export function ToolsUsedPanel({ toolCounts }: ToolsUsedPanelProps): React.ReactElement {
-  // Normalize to sorted entries
+  // Normalize to sorted entries (descending by count)
   const entries: Array<[string, number]> =
     toolCounts instanceof Map
       ? Array.from(toolCounts.entries())
       : Object.entries(toolCounts);
 
-  // Sort descending by count
   entries.sort((a, b) => b[1] - a[1]);
 
   if (entries.length === 0) {
     return (
       <Box flexDirection="column">
-        <Text bold>Tools Used</Text>
         <Text dimColor>No tool usage recorded</Text>
       </Box>
     );
   }
 
+  // Convert sorted entries to BarChart items format
+  const items = entries.map(([label, value]) => ({ label, value }));
+
   return (
     <Box flexDirection="column">
-      <Text bold>Tools Used</Text>
-      {entries.map(([name, count]) => (
-        <Box key={name}>
-          <Text>{name}</Text>
-          <Text dimColor> ({count})</Text>
-        </Box>
-      ))}
+      <BarChart items={items} maxBarWidth={8} />
     </Box>
   );
 }

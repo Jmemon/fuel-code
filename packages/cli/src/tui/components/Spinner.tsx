@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect } from "react";
 import { Text } from "ink";
+import { theme } from "../primitives/index.js";
 
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -24,7 +25,7 @@ export function Spinner({ label = "Loading..." }: SpinnerProps): React.ReactElem
 
   return (
     <Text>
-      <Text color="cyan">{FRAMES[frame]}</Text> {label}
+      <Text color={theme.accent}>{FRAMES[frame]}</Text> {label}
     </Text>
   );
 }

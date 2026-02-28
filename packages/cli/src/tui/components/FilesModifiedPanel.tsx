@@ -1,7 +1,8 @@
 /**
- * FilesModifiedPanel — displays modified files list in the sidebar.
+ * FilesModifiedPanel -- displays modified files list in the sidebar.
  *
  * Shows deduplicated, alphabetically sorted file paths.
+ * Title is handled by the parent Sidebar's Divider.
  * Empty state: "No files modified"
  */
 
@@ -19,7 +20,6 @@ export function FilesModifiedPanel({ files }: FilesModifiedPanelProps): React.Re
   if (uniqueSorted.length === 0) {
     return (
       <Box flexDirection="column">
-        <Text bold>Files Modified</Text>
         <Text dimColor>No files modified</Text>
       </Box>
     );
@@ -27,7 +27,6 @@ export function FilesModifiedPanel({ files }: FilesModifiedPanelProps): React.Re
 
   return (
     <Box flexDirection="column">
-      <Text bold>Files Modified</Text>
       {uniqueSorted.map((file) => (
         <Box key={file}>
           <Text>{file}</Text>
