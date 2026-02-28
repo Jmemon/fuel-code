@@ -277,7 +277,7 @@ describe("SessionDetail — Header", () => {
     expect(frame).toContain("JWT authentication");
   });
 
-  it("2. renders token counts (125K in / 48K out / 890K cache)", async () => {
+  it("2. renders token counts in compact format", async () => {
     const api = makeMockApiClient();
     const ws = makeMockWsClient();
     const { lastFrame } = render(
@@ -286,9 +286,9 @@ describe("SessionDetail — Header", () => {
     await waitForText(lastFrame, "125K");
 
     const frame = lastFrame();
-    expect(frame).toContain("125K in");
-    expect(frame).toContain("48K out");
-    expect(frame).toContain("890K cache");
+    // Panel title now shows compact format: "125K/48K tok"
+    expect(frame).toContain("125K/48K");
+    expect(frame).toContain("tok");
   });
 });
 
@@ -445,25 +445,27 @@ describe("SessionDetail — Sidebar", () => {
     const { lastFrame } = render(
       <SessionDetailView apiClient={api} wsClient={ws} sessionId="01JTEST1234567890ABCDEFGHI" onBack={() => {}} />
     );
-    await waitForText(lastFrame, "abc1234");
+    // Sidebar section header is now "GIT" (Divider title), sha may be truncated in narrow panel
+    await waitForText(lastFrame, "GIT");
 
     const frame = lastFrame();
-    expect(frame).toContain("Git Activity");
-    expect(frame).toContain("abc1234");
-    // Message may wrap across terminal lines; check for a substring
+    expect(frame).toContain("GIT");
+    // SHA may be partially visible due to narrow sidebar panel width
+    expect(frame).toContain("abc123");
     expect(frame).toContain("resolve parsing");
   });
 
-  it("12. shows tools used frequency table", async () => {
+  it("12. shows tools used frequency bar chart", async () => {
     const api = makeMockApiClient();
     const ws = makeMockWsClient();
     const { lastFrame } = render(
       <SessionDetailView apiClient={api} wsClient={ws} sessionId="01JTEST1234567890ABCDEFGHI" onBack={() => {}} />
     );
-    await waitForText(lastFrame, "Tools Used");
+    // Sidebar section header is now "TOOLS" (Divider title)
+    await waitForText(lastFrame, "TOOLS");
 
     const frame = lastFrame();
-    expect(frame).toContain("Tools Used");
+    expect(frame).toContain("TOOLS");
     expect(frame).toContain("Read");
     expect(frame).toContain("Edit");
   });
@@ -474,10 +476,11 @@ describe("SessionDetail — Sidebar", () => {
     const { lastFrame } = render(
       <SessionDetailView apiClient={api} wsClient={ws} sessionId="01JTEST1234567890ABCDEFGHI" onBack={() => {}} />
     );
-    await waitForText(lastFrame, "Files Modified");
+    // Sidebar section header is now "FILES" (Divider title)
+    await waitForText(lastFrame, "FILES");
 
     const frame = lastFrame();
-    expect(frame).toContain("Files Modified");
+    expect(frame).toContain("FILES");
     expect(frame).toContain("/src/test.ts");
   });
 });
@@ -665,10 +668,10 @@ describe("SessionDetail — Live session", () => {
     );
     await waitForText(lastFrame, "LIVE");
 
-    // The duration should show some seconds
     const frame = lastFrame();
-    // Should show either "5s" or "6s" or similar (elapsed from recentStart)
-    expect(frame).toContain("Duration:");
+    // SessionHeader shows "Started <relative time>" and lifecycle tag in Panel title
+    expect(frame).toContain("Started");
+    expect(frame).toContain("LIVE");
   });
 });
 

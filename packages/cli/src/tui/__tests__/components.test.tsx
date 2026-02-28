@@ -143,7 +143,7 @@ describe("SessionRow", () => {
     expect(output).toContain("8 tool uses");
   });
 
-  test("6. summarized sessions show commit messages", () => {
+  test("6. summarized sessions show inline commit count", () => {
     const { lastFrame } = render(
       <SessionRow
         session={makeSession({
@@ -153,31 +153,22 @@ describe("SessionRow", () => {
       />,
     );
     const output = stripAnsi(lastFrame()!);
-    expect(output).toContain("Fix login bug");
-    expect(output).toContain("Add tests");
+    // SessionRow now shows inline commit count instead of individual messages
+    expect(output).toContain("2 commits");
   });
 
-  test("7. overflow commits show +N more", () => {
+  test("7. single commit shows '1 commit' (no plural)", () => {
     const { lastFrame } = render(
       <SessionRow
         session={makeSession({
-          commit_messages: [
-            "Commit 1",
-            "Commit 2",
-            "Commit 3",
-            "Commit 4",
-            "Commit 5",
-          ],
+          commit_messages: ["Fix login bug"],
         })}
         selected={false}
       />,
     );
     const output = stripAnsi(lastFrame()!);
-    // Should show 2 commits + overflow message
-    expect(output).toContain("Commit 1");
-    expect(output).toContain("Commit 2");
-    expect(output).not.toContain("Commit 3");
-    expect(output).toContain("... 3 more commits");
+    expect(output).toContain("1 commit");
+    expect(output).not.toContain("1 commits");
   });
 });
 
