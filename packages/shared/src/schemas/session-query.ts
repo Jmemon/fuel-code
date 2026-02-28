@@ -53,6 +53,12 @@ export const sessionListQuerySchema = z.object({
   ended_before: z.string().datetime().optional(),
   /** Filter sessions containing this tag */
   tag: z.string().optional(),
+  /** Filter sessions by team_name */
+  team: z.string().optional(),
+  /** Filter sessions that have subagent_count > 0 ("true" to enable) */
+  has_subagents: z.enum(["true", "false"]).optional(),
+  /** Filter sessions that have team_name IS NOT NULL ("true" to enable) */
+  has_team: z.enum(["true", "false"]).optional(),
   /** Number of results per page (default 50, max 250) */
   limit: z.coerce.number().int().min(1).max(250).default(50),
   /** Cursor for pagination — base64 encoded { s: started_at, i: id } */

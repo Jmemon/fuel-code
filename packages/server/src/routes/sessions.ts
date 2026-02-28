@@ -3,7 +3,10 @@
  *
  * Provides REST endpoints for querying and mutating sessions:
  *   - GET  /api/sessions           — List with filtering and cursor-based pagination
- *   - GET  /api/sessions/:id       — Session detail with workspace/device names
+ *   - GET  /api/sessions/:id       — Session detail with relationship data
+ *   - GET  /api/sessions/:id/subagents      — Sub-agents spawned in this session
+ *   - GET  /api/sessions/:id/skills         — Skills invoked in this session
+ *   - GET  /api/sessions/:id/worktrees      — Worktrees used in this session
  *   - GET  /api/sessions/:id/transcript     — Parsed messages with nested content blocks
  *   - GET  /api/sessions/:id/transcript/raw — Presigned S3 URL for raw transcript
  *   - GET  /api/sessions/:id/events         — Events belonging to this session
@@ -186,6 +189,19 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
           conditions.push(sql`s.tags @> ARRAY[${query.tag}]::text[]`);
         }
 
+        // Phase 4-2 filters: team name, has_subagents, has_team
+        if (query.team) {
+          conditions.push(sql`s.team_name = ${query.team}`);
+        }
+
+        if (query.has_subagents === "true") {
+          conditions.push(sql`s.subagent_count > 0`);
+        }
+
+        if (query.has_team === "true") {
+          conditions.push(sql`s.team_name IS NOT NULL`);
+        }
+
         if (cursor) {
           // Keyset pagination: get rows after the cursor position.
           // Orders by (started_at DESC, id DESC) so "after" means earlier timestamps
@@ -242,7 +258,8 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
   );
 
   // =========================================================================
-  // GET /sessions/:id — Session detail with workspace/device names
+  // GET /sessions/:id — Session detail with workspace/device names and
+  // inline relationship data (subagents, skills, worktrees, team, resume chain)
   // =========================================================================
   router.get(
     "/sessions/:id",
@@ -266,7 +283,130 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
           return;
         }
 
-        res.json({ session: rows[0] });
+        const session = rows[0];
+
+        // Fetch all relationship data in parallel for performance
+        const [subagents, skills, worktrees, teamRows, resumedFromRows, resumedByRows] =
+          await Promise.all([
+            sql`SELECT * FROM subagents WHERE session_id = ${id} ORDER BY started_at`,
+            sql`SELECT * FROM session_skills WHERE session_id = ${id} ORDER BY invoked_at`,
+            sql`SELECT * FROM session_worktrees WHERE session_id = ${id} ORDER BY created_at`,
+            // Only query teams table if session has a team_name
+            session.team_name
+              ? sql`SELECT * FROM teams WHERE team_name = ${session.team_name}`
+              : Promise.resolve([]),
+            // Only query resumed_from if session has a resumed_from_session_id
+            session.resumed_from_session_id
+              ? sql`SELECT id, started_at, initial_prompt FROM sessions WHERE id = ${session.resumed_from_session_id}`
+              : Promise.resolve([]),
+            // Find sessions that resumed from this one
+            sql`SELECT id, started_at, initial_prompt FROM sessions WHERE resumed_from_session_id = ${id}`,
+          ]);
+
+        session.subagents = subagents;
+        session.skills = skills;
+        session.worktrees = worktrees;
+        session.team = teamRows.length > 0 ? teamRows[0] : null;
+        session.resumed_from = resumedFromRows.length > 0 ? resumedFromRows[0] : null;
+        session.resumed_by = resumedByRows;
+
+        res.json({ session });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // =========================================================================
+  // GET /sessions/:id/subagents — List sub-agents spawned in this session
+  // =========================================================================
+  router.get(
+    "/sessions/:id/subagents",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const { id } = req.params;
+
+        // Verify the session exists
+        const sessionRows = await sql`
+          SELECT id FROM sessions WHERE id = ${id}
+        `;
+
+        if (sessionRows.length === 0) {
+          res.status(404).json({ error: "Session not found" });
+          return;
+        }
+
+        const subagents = await sql`
+          SELECT * FROM subagents
+          WHERE session_id = ${id}
+          ORDER BY started_at
+        `;
+
+        res.json({ subagents });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // =========================================================================
+  // GET /sessions/:id/skills — List skills invoked in this session
+  // =========================================================================
+  router.get(
+    "/sessions/:id/skills",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const { id } = req.params;
+
+        // Verify the session exists
+        const sessionRows = await sql`
+          SELECT id FROM sessions WHERE id = ${id}
+        `;
+
+        if (sessionRows.length === 0) {
+          res.status(404).json({ error: "Session not found" });
+          return;
+        }
+
+        const skills = await sql`
+          SELECT * FROM session_skills
+          WHERE session_id = ${id}
+          ORDER BY invoked_at
+        `;
+
+        res.json({ skills });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // =========================================================================
+  // GET /sessions/:id/worktrees — List worktrees used in this session
+  // =========================================================================
+  router.get(
+    "/sessions/:id/worktrees",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const { id } = req.params;
+
+        // Verify the session exists
+        const sessionRows = await sql`
+          SELECT id FROM sessions WHERE id = ${id}
+        `;
+
+        if (sessionRows.length === 0) {
+          res.status(404).json({ error: "Session not found" });
+          return;
+        }
+
+        const worktrees = await sql`
+          SELECT * FROM session_worktrees
+          WHERE session_id = ${id}
+          ORDER BY created_at
+        `;
+
+        res.json({ worktrees });
       } catch (err) {
         next(err);
       }
