@@ -178,11 +178,9 @@ describe("Dashboard", () => {
     const instance = renderDashboard({ workspaces: [ws1, ws2] });
     await wait(100);
     const output = strip(instance.lastFrame());
-    expect(output).toContain("alpha");
-    // beta-repo may be truncated in narrow Panel, check partial match
-    expect(output).toContain("beta");
-    // Session counts may be partially truncated in narrow Panel; check partial matches
-    expect(output).toContain("(3");
+    expect(output).toContain("alpha-repo");
+    expect(output).toContain("beta-repo");
+    expect(output).toContain("(3)");
     expect(output).toContain("(7)");
   });
 
@@ -385,8 +383,8 @@ describe("Dashboard", () => {
     expect(output).toContain("15 messages");
   });
 
-  // 11. Summarized sessions with commits show inline commit count
-  it("summarized sessions show inline commit count", async () => {
+  // 11. Summarized sessions with commits show commit messages
+  it("summarized sessions show commit messages when available", async () => {
     const sess = makeSession({ id: "s1", lifecycle: "summarized" });
     (sess as any).commit_messages = ["fix: login bug", "feat: add dashboard"];
 
@@ -396,12 +394,11 @@ describe("Dashboard", () => {
     });
     await wait(100);
     const output = strip(instance.lastFrame());
-    // SessionRow now shows "· 2 commits" instead of individual commit messages
-    expect(output).toContain("2 commits");
+    expect(output).toContain("fix: login bug");
   });
 
-  // 12. Status Panel shows today's stats
-  it("Status Panel displays aggregate statistics", async () => {
+  // 12. StatusBar shows today's stats
+  it("StatusBar displays aggregate statistics", async () => {
     const ws = makeWorkspace({
       session_count: 12,
       total_tokens_in: 500000,
@@ -411,20 +408,18 @@ describe("Dashboard", () => {
     const instance = renderDashboard({ workspaces: [ws] });
     await wait(100);
     const output = strip(instance.lastFrame());
-    // Dashboard now shows stats in Panel title: "12 sess" not "12 sessions"
-    expect(output).toContain("12 sess");
+    expect(output).toContain("12 sessions");
     expect(output).toContain("500K/200K");
   });
 
-  // 13. Status Panel shows WS connected/polling status
-  it("Status Panel shows WebSocket connection state", async () => {
+  // 13. StatusBar shows WS connected/polling status
+  it("StatusBar shows WebSocket connection state", async () => {
     const mockWs = new MockWsClient();
     mockWs._state = "connected";
     const instance = renderDashboard({ ws: mockWs as any });
     await wait(100);
     const output = strip(instance.lastFrame());
-    // Dashboard now shows compact "● ws" in Panel title
-    expect(output).toContain("\u25CF ws");
+    expect(output).toContain("\u25CF Connected");
   });
 
   // 14. WS session.update updates session in-place

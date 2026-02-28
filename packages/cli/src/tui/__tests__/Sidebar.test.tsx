@@ -98,7 +98,7 @@ describe("GitActivityPanel", () => {
     ];
     const { lastFrame } = render(<GitActivityPanel commits={commits} />);
     const frame = lastFrame();
-    // Title is now handled by parent Sidebar's Divider, not by GitActivityPanel
+    expect(frame).toContain("Git Activity");
     expect(frame).toContain("abc1234");
     expect(frame).toContain("resolve parsing error");
     expect(frame).toContain("def5678");
@@ -125,14 +125,13 @@ describe("ToolsUsedPanel", () => {
       <ToolsUsedPanel toolCounts={{ Read: 5, Edit: 3, Bash: 1 }} />
     );
     const frame = lastFrame();
-    // Title is now handled by parent Sidebar's Divider, not by ToolsUsedPanel
-    // ToolsUsedPanel now renders a BarChart: "Read ████████ 5" format
+    expect(frame).toContain("Tools Used");
     expect(frame).toContain("Read");
-    expect(frame).toContain("5");
+    expect(frame).toContain("(5)");
     expect(frame).toContain("Edit");
-    expect(frame).toContain("3");
+    expect(frame).toContain("(3)");
     expect(frame).toContain("Bash");
-    expect(frame).toContain("1");
+    expect(frame).toContain("(1)");
   });
 
   it("4. tools sorted descending by count", () => {
