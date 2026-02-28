@@ -1,20 +1,22 @@
 /**
- * SessionHeader — renders the body content inside the session detail Panel.
+ * SessionHeader — top metadata panel for the session detail view.
  *
- * Now simplified to render only 2 lines inside the parent Panel:
- *   Line 1: Summary text (or "Session in progress..." for live sessions)
- *   Line 2: Started relative time + model + cost, separated by " · "
+ * Displays session context in 4 lines:
+ *   Line 1: Workspace + Device
+ *   Line 2: Started + Duration + Cost
+ *   Line 3: Tokens (125K in / 48K out / 890K cache)
+ *   Line 4: Summary
  *
- * The Panel title (workspace, device, tokens, lifecycle) is constructed
- * by SessionDetailView and passed to the wrapping Panel component.
- *
- * For live sessions, an elapsed timer interval keeps the duration updating.
+ * For live sessions (lifecycle === 'capturing'):
+ *   - Duration shows an elapsed time counter updated every second
+ *   - Cost shows running estimate
+ *   - Summary shows "Session in progress..." if no summary yet
  */
 
 import React, { useState, useEffect, useRef } from "react";
 import { Box, Text } from "ink";
 import type { SessionDetail } from "../../commands/session-detail.js";
-import { formatDuration, formatRelativeTime, formatCost } from "../../lib/formatters.js";
+import { formatDuration, formatRelativeTime, formatNumber } from "../../lib/formatters.js";
 
 export interface SessionHeaderProps {
   session: SessionDetail;
@@ -44,26 +46,61 @@ export function SessionHeader({ session }: SessionHeaderProps): React.ReactEleme
     setElapsedMs(session.duration_ms ?? 0);
   }, [isLive, session.started_at, session.duration_ms]);
 
+  const workspaceName = session.workspace_name ?? session.workspace_id;
+  const deviceName = session.device_name ?? session.device_id;
+  const duration = isLive ? formatDuration(elapsedMs) : formatDuration(session.duration_ms);
+
+  // Token counts
+  const stats = session.stats;
+  const tokensIn = formatNumber(stats?.tokens_in ?? null);
+  const tokensOut = formatNumber(stats?.tokens_out ?? null);
+  const tokensCache = formatNumber(stats?.tokens_cache ?? null);
+  const tokenStr = stats?.tokens_cache
+    ? `${tokensIn} in / ${tokensOut} out / ${tokensCache} cache`
+    : `${tokensIn} in / ${tokensOut} out`;
+
   // Summary with live session fallback
   const summary = session.summary ?? session.initial_prompt ?? (isLive ? "Session in progress..." : null);
 
-  // Second line parts: started relative time, model, cost — joined by " · "
-  const metaParts: string[] = [];
-  metaParts.push(`Started ${formatRelativeTime(session.started_at)}`);
-  if (session.model) {
-    metaParts.push(session.model);
-  }
-  const cost = formatCost(session.cost_estimate_usd);
-  if (cost !== "\u2014") {
-    metaParts.push(cost);
-  }
-
   return (
     <Box flexDirection="column">
-      {/* Line 1: Summary */}
-      {summary && <Text>{summary}</Text>}
-      {/* Line 2: Started · model · cost */}
-      <Text dimColor>{metaParts.join(" · ")}</Text>
+      {/* Line 1: Workspace + Device */}
+      <Box>
+        <Text bold>Workspace: </Text>
+        <Text>{workspaceName}</Text>
+        <Text>  </Text>
+        <Text bold>Device: </Text>
+        <Text>{deviceName}</Text>
+        {isLive && (
+          <>
+            <Text>  </Text>
+            <Text color="green" bold>LIVE</Text>
+          </>
+        )}
+      </Box>
+
+      {/* Line 2: Started + Duration */}
+      <Box>
+        <Text bold>Started: </Text>
+        <Text>{formatRelativeTime(session.started_at)}</Text>
+        <Text>  </Text>
+        <Text bold>Duration: </Text>
+        <Text>{duration}</Text>
+      </Box>
+
+      {/* Line 3: Tokens */}
+      <Box>
+        <Text bold>Tokens: </Text>
+        <Text>{tokenStr}</Text>
+      </Box>
+
+      {/* Line 4: Summary */}
+      {summary && (
+        <Box>
+          <Text bold>Summary: </Text>
+          <Text>{summary}</Text>
+        </Box>
+      )}
     </Box>
   );
 }
