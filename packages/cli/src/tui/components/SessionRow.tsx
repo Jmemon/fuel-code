@@ -46,6 +46,8 @@ export interface SessionDisplayData extends Session {
   commit_messages?: string[] | null;
   /** Per-tool usage counts for live sessions, e.g. { Edit: 3, Bash: 2, Read: 5 } */
   tool_counts?: Record<string, number> | null;
+  /** Number of subagents spawned (from DB column) */
+  subagent_count?: number | null;
 }
 
 export interface SessionRowProps {
@@ -71,6 +73,11 @@ export function SessionRow({
   const overflowCount = Math.max(0, commitMessages.length - 2);
   const overflowText = overflowCount > 0 ? "... " + overflowCount + " more commits" : "";
 
+  // Badges: subagents, team, resumed-from (dim, subtle, only when data exists)
+  const subagentCount = session.subagent_count ?? 0;
+  const hasTeam = !!session.team_name;
+  const hasResumedFrom = !!session.resumed_from_session_id;
+
   return (
     <Box flexDirection="column">
       <Box>
@@ -86,6 +93,25 @@ export function SessionRow({
         <Text>{duration}</Text>
         <Text>{"  "}</Text>
         <Text>{tokens}</Text>
+        {/* Dim badges for subagents, team, and session chain */}
+        {subagentCount > 0 && (
+          <>
+            <Text>{"  "}</Text>
+            <Text dimColor>[{subagentCount} agent{subagentCount !== 1 ? "s" : ""}]</Text>
+          </>
+        )}
+        {hasTeam && (
+          <>
+            <Text>{"  "}</Text>
+            <Text dimColor>[team]</Text>
+          </>
+        )}
+        {hasResumedFrom && (
+          <>
+            <Text>{"  "}</Text>
+            <Text dimColor>[{"\u2190"}]</Text>
+          </>
+        )}
       </Box>
       <Box paddingLeft={4}>
         <Text dimColor wrap="truncate">

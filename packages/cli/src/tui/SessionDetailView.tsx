@@ -255,6 +255,8 @@ export function SessionDetailView({
               <Sidebar
                 gitActivity={gitActivity}
                 messages={(transcript as TranscriptMessageWithBlocks[]) ?? []}
+                subagents={session?.subagents}
+                skills={session?.skills}
               />
             </Box>
           </Box>
@@ -298,6 +300,8 @@ export function SessionDetailView({
               <Sidebar
                 gitActivity={gitActivity}
                 messages={(transcript as TranscriptMessageWithBlocks[]) ?? []}
+                subagents={session?.subagents}
+                skills={session?.skills}
               />
             </Box>
           </Box>

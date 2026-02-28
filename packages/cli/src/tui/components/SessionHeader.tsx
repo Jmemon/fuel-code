@@ -1,11 +1,12 @@
 /**
  * SessionHeader — top metadata panel for the session detail view.
  *
- * Displays session context in 4 lines:
- *   Line 1: Workspace + Device
+ * Displays session context in 4+ lines:
+ *   Line 1: Workspace + Device + LIVE indicator
  *   Line 2: Started + Duration + Cost
  *   Line 3: Tokens (125K in / 48K out / 890K cache)
  *   Line 4: Summary
+ *   Line 5 (conditional badges): session chain breadcrumb, team badge, worktree indicator
  *
  * For live sessions (lifecycle === 'capturing'):
  *   - Duration shows an elapsed time counter updated every second
@@ -62,6 +63,13 @@ export function SessionHeader({ session }: SessionHeaderProps): React.ReactEleme
   // Summary with live session fallback
   const summary = session.summary ?? session.initial_prompt ?? (isLive ? "Session in progress..." : null);
 
+  // Conditional header badges: session chain, team, worktree
+  const resumedFrom = session.resumed_from;
+  const teamName = session.team_name;
+  const teamRole = session.team_role;
+  const worktrees = session.worktrees;
+  const hasBadges = !!(resumedFrom || teamName || (worktrees && worktrees.length > 0));
+
   return (
     <Box flexDirection="column">
       {/* Line 1: Workspace + Device */}
@@ -99,6 +107,31 @@ export function SessionHeader({ session }: SessionHeaderProps): React.ReactEleme
         <Box>
           <Text bold>Summary: </Text>
           <Text>{summary}</Text>
+        </Box>
+      )}
+
+      {/* Line 5: Conditional badges — session chain, team, worktree */}
+      {hasBadges && (
+        <Box>
+          {resumedFrom && (
+            <Text dimColor>
+              {"\u2190"} Resumed from {resumedFrom.id.slice(0, 8)}...
+            </Text>
+          )}
+          {resumedFrom && teamName && <Text dimColor>{"  "}</Text>}
+          {teamName && (
+            <Text dimColor>
+              [team: {teamName}{teamRole ? ` (${teamRole})` : ""}]
+            </Text>
+          )}
+          {(resumedFrom || teamName) && worktrees && worktrees.length > 0 && (
+            <Text dimColor>{"  "}</Text>
+          )}
+          {worktrees && worktrees.length > 0 && (
+            <Text dimColor>
+              [worktree: {worktrees[0].worktree_name ?? worktrees[0].branch ?? worktrees[0].id.slice(0, 12)}]
+            </Text>
+          )}
         </Box>
       )}
     </Box>

@@ -1,26 +1,34 @@
 /**
  * Sidebar — right panel (~35%) in the session detail transcript tab.
  *
- * Aggregates three sub-panels:
+ * Aggregates five sub-panels (last two conditional):
  *   1. GitActivityPanel — recent commits
  *   2. ToolsUsedPanel — tool frequency table
  *   3. FilesModifiedPanel — deduplicated file list
+ *   4. SubagentsPanel — sub-agents spawned (only when present)
+ *   5. SkillsPanel — skills invoked (only when present)
  *
  * Data is derived from transcript content_blocks and git activity.
  */
 
 import React from "react";
 import { Box } from "ink";
-import type { GitActivity, ParsedContentBlock } from "@fuel-code/shared";
+import type { GitActivity, ParsedContentBlock, Subagent, SessionSkill } from "@fuel-code/shared";
 import { GitActivityPanel } from "./GitActivityPanel.js";
 import { ToolsUsedPanel } from "./ToolsUsedPanel.js";
 import { FilesModifiedPanel } from "./FilesModifiedPanel.js";
+import { SubagentsPanel } from "./SubagentsPanel.js";
+import { SkillsPanel } from "./SkillsPanel.js";
 import type { TranscriptMessageWithBlocks } from "./MessageBlock.js";
 
 export interface SidebarProps {
   gitActivity: GitActivity[];
   /** Transcript messages to derive tool usage and file modifications from */
   messages: TranscriptMessageWithBlocks[];
+  /** Subagents spawned during the session (optional, only rendered when present) */
+  subagents?: Subagent[];
+  /** Skills invoked during the session (optional, only rendered when present) */
+  skills?: SessionSkill[];
 }
 
 /**
@@ -84,7 +92,7 @@ export function extractModifiedFiles(
   return files;
 }
 
-export function Sidebar({ gitActivity, messages }: SidebarProps): React.ReactElement {
+export function Sidebar({ gitActivity, messages, subagents, skills }: SidebarProps): React.ReactElement {
   const toolCounts = extractToolCounts(messages);
   const modifiedFiles = extractModifiedFiles(messages, gitActivity);
 
@@ -97,6 +105,16 @@ export function Sidebar({ gitActivity, messages }: SidebarProps): React.ReactEle
       <Box marginTop={1}>
         <FilesModifiedPanel files={modifiedFiles} />
       </Box>
+      {subagents && subagents.length > 0 && (
+        <Box marginTop={1}>
+          <SubagentsPanel subagents={subagents} />
+        </Box>
+      )}
+      {skills && skills.length > 0 && (
+        <Box marginTop={1}>
+          <SkillsPanel skills={skills} />
+        </Box>
+      )}
     </Box>
   );
 }
