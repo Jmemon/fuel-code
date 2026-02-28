@@ -845,4 +845,298 @@ describe("parseTranscript", () => {
     expect(result.stats.cache_read_tokens).toBe(50);
     expect(result.stats.cache_write_tokens).toBe(10);
   });
+
+  // ---------------------------------------------------------------------------
+  // Skill extraction (Task 9)
+  // ---------------------------------------------------------------------------
+
+  test("skill extraction: user-invoked skill (slash command) and claude-invoked skill", async () => {
+    // User types "/commit", Claude invokes Skill tool with skill="commit"
+    // Then Claude auto-invokes Skill tool with skill="review-pr" (no slash command)
+    const input = jsonl(
+      {
+        type: "user",
+        timestamp: "2025-05-10T10:00:00.000Z",
+        message: { role: "user", content: "Please /commit these changes" },
+      },
+      {
+        type: "assistant",
+        timestamp: "2025-05-10T10:00:01.000Z",
+        message: {
+          role: "assistant",
+          id: "msg_skill1",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_skill1",
+              name: "Skill",
+              input: { skill: "commit", args: "-m 'Fix bug'" },
+            },
+          ],
+          usage: { input_tokens: 100, output_tokens: 50 },
+        },
+      },
+      {
+        type: "user",
+        timestamp: "2025-05-10T10:00:02.000Z",
+        message: {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_skill1", content: "Committed." },
+          ],
+        },
+      },
+      {
+        type: "assistant",
+        timestamp: "2025-05-10T10:00:03.000Z",
+        message: {
+          role: "assistant",
+          id: "msg_skill2",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_skill2",
+              name: "Skill",
+              input: { skill: "review-pr", args: "123" },
+            },
+          ],
+          usage: { input_tokens: 100, output_tokens: 50 },
+        },
+      },
+    );
+
+    const result = await parseTranscript("sess_1", input);
+
+    expect(result.skills).toHaveLength(2);
+
+    // First skill: user-invoked via /commit
+    expect(result.skills[0].skill_name).toBe("commit");
+    expect(result.skills[0].invoked_by).toBe("user");
+    expect(result.skills[0].args).toBe("-m 'Fix bug'");
+
+    // Second skill: claude-invoked (no /review-pr in preceding user message)
+    expect(result.skills[1].skill_name).toBe("review-pr");
+    expect(result.skills[1].invoked_by).toBe("claude");
+    expect(result.skills[1].args).toBe("123");
+  });
+
+  test("skill extraction: skill with no preceding user message defaults to claude-invoked", async () => {
+    // Assistant is the first message — no preceding user message to check
+    const input = jsonl({
+      type: "assistant",
+      timestamp: "2025-05-10T10:00:00.000Z",
+      message: {
+        role: "assistant",
+        id: "msg_skill_no_user",
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_skill_auto",
+            name: "Skill",
+            input: { skill: "pdf" },
+          },
+        ],
+        usage: { input_tokens: 100, output_tokens: 50 },
+      },
+    });
+
+    const result = await parseTranscript("sess_1", input);
+
+    expect(result.skills).toHaveLength(1);
+    expect(result.skills[0].skill_name).toBe("pdf");
+    expect(result.skills[0].invoked_by).toBe("claude");
+    expect(result.skills[0].args).toBeUndefined();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Worktree extraction (Task 9)
+  // ---------------------------------------------------------------------------
+
+  test("worktree extraction: EnterWorktree tool call produces ParsedWorktree", async () => {
+    const input = jsonl(
+      {
+        type: "user",
+        timestamp: "2025-05-10T10:00:00.000Z",
+        message: { role: "user", content: "Work in a worktree called bugfix" },
+      },
+      {
+        type: "assistant",
+        timestamp: "2025-05-10T10:00:01.000Z",
+        message: {
+          role: "assistant",
+          id: "msg_wt1",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_wt1",
+              name: "EnterWorktree",
+              input: { name: "bugfix" },
+            },
+          ],
+          usage: { input_tokens: 100, output_tokens: 50 },
+        },
+      },
+    );
+
+    const result = await parseTranscript("sess_1", input);
+
+    expect(result.worktrees).toHaveLength(1);
+    expect(result.worktrees[0].worktree_name).toBe("bugfix");
+  });
+
+  test("worktree extraction: EnterWorktree without name produces worktree with undefined name", async () => {
+    const input = jsonl({
+      type: "assistant",
+      timestamp: "2025-05-10T10:00:00.000Z",
+      message: {
+        role: "assistant",
+        id: "msg_wt_noname",
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_wt_noname",
+            name: "EnterWorktree",
+            input: {},
+          },
+        ],
+        usage: { input_tokens: 100, output_tokens: 50 },
+      },
+    });
+
+    const result = await parseTranscript("sess_1", input);
+
+    expect(result.worktrees).toHaveLength(1);
+    expect(result.worktrees[0].worktree_name).toBeUndefined();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Permission mode extraction (Task 9)
+  // ---------------------------------------------------------------------------
+
+  test("permission_mode extracted from first transcript line", async () => {
+    const input = jsonl(
+      {
+        type: "user",
+        timestamp: "2025-05-10T10:00:00.000Z",
+        permissionMode: "bypassPermissions",
+        message: { role: "user", content: "Hello" },
+      },
+      {
+        type: "assistant",
+        timestamp: "2025-05-10T10:00:01.000Z",
+        message: {
+          role: "assistant",
+          id: "msg_pm",
+          content: [{ type: "text", text: "Hi" }],
+          usage: { input_tokens: 10, output_tokens: 5 },
+        },
+      },
+    );
+
+    const result = await parseTranscript("sess_1", input);
+
+    expect(result.permission_mode).toBe("bypassPermissions");
+  });
+
+  test("permission_mode is undefined when not in transcript", async () => {
+    const input = jsonl({
+      type: "user",
+      timestamp: "2025-05-10T10:00:00.000Z",
+      message: { role: "user", content: "Hello" },
+    });
+
+    const result = await parseTranscript("sess_1", input);
+
+    expect(result.permission_mode).toBeUndefined();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Empty transcript edge case for new fields (Task 9)
+  // ---------------------------------------------------------------------------
+
+  test("empty transcript returns empty skills and worktrees arrays", async () => {
+    const result = await parseTranscript("sess_1", "");
+
+    expect(result.skills).toHaveLength(0);
+    expect(result.worktrees).toHaveLength(0);
+    expect(result.permission_mode).toBeUndefined();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Combined: skills + worktrees + subagents in same transcript (Task 9)
+  // ---------------------------------------------------------------------------
+
+  test("transcript with skills, worktrees, and subagents extracts all", async () => {
+    const input = jsonl(
+      {
+        type: "user",
+        timestamp: "2025-05-10T10:00:00.000Z",
+        permissionMode: "default",
+        message: { role: "user", content: "Start a worktree" },
+      },
+      // Worktree creation
+      {
+        type: "assistant",
+        timestamp: "2025-05-10T10:00:01.000Z",
+        message: {
+          role: "assistant",
+          id: "msg_combo1",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_combo_wt",
+              name: "EnterWorktree",
+              input: { name: "feature-x" },
+            },
+          ],
+          usage: { input_tokens: 100, output_tokens: 50 },
+        },
+      },
+      {
+        type: "user",
+        timestamp: "2025-05-10T10:00:02.000Z",
+        message: {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_combo_wt", content: "Worktree created." },
+          ],
+        },
+      },
+      // User asks to commit via slash command
+      {
+        type: "user",
+        timestamp: "2025-05-10T10:00:02.500Z",
+        message: { role: "user", content: "/commit these changes" },
+      },
+      // Skill invocation (user-invoked via /commit in the immediately preceding user message)
+      {
+        type: "assistant",
+        timestamp: "2025-05-10T10:00:03.000Z",
+        message: {
+          role: "assistant",
+          id: "msg_combo2",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_combo_sk",
+              name: "Skill",
+              input: { skill: "commit" },
+            },
+          ],
+          usage: { input_tokens: 100, output_tokens: 50 },
+        },
+      },
+    );
+
+    const result = await parseTranscript("sess_1", input);
+
+    expect(result.worktrees).toHaveLength(1);
+    expect(result.worktrees[0].worktree_name).toBe("feature-x");
+
+    expect(result.skills).toHaveLength(1);
+    expect(result.skills[0].skill_name).toBe("commit");
+    expect(result.skills[0].invoked_by).toBe("user");
+
+    expect(result.permission_mode).toBe("default");
+  });
 });

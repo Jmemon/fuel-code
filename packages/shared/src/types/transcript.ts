@@ -39,6 +39,7 @@ export interface RawTranscriptLine {
   gitBranch?: string;
   timestamp?: string;
   uuid?: string;
+  permissionMode?: string;
   message?: {
     role?: string;
     model?: string;

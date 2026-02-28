@@ -23,6 +23,8 @@ import type {
   RawContentBlock,
   ParsedSubagent,
   ParsedTeam,
+  ParsedSkill,
+  ParsedWorktree,
 } from "@fuel-code/shared";
 import { generateId } from "@fuel-code/shared";
 
@@ -367,6 +369,83 @@ export async function parseTranscript(
 
   teams.push(...teamMap.values());
 
+  // --- Skill extraction: Skill tool calls ---
+  // Identifies slash-command skills invoked during the session. Determines
+  // whether the skill was triggered by the user (via /<name> in a user
+  // message) or auto-invoked by Claude.
+
+  const skills: ParsedSkill[] = [];
+
+  for (const block of contentBlocks) {
+    if (block.block_type === "tool_use" && block.tool_name === "Skill") {
+      const input = block.tool_input as Record<string, unknown> | null;
+      const skillName = (input?.skill as string) ?? "";
+      const args = input?.args as string | undefined;
+
+      // Default: claude-invoked. Check if the preceding user message
+      // contains /<skillName>, which indicates the user typed a slash command.
+      let invokedBy: "user" | "claude" = "claude";
+
+      const containingMessage = messages.find(
+        (m) =>
+          m.message_type === "assistant" &&
+          contentBlocks.some(
+            (b) => b.message_id === m.id && b.tool_use_id === block.tool_use_id,
+          ),
+      );
+      if (containingMessage) {
+        const msgIndex = messages.indexOf(containingMessage);
+        for (let i = msgIndex - 1; i >= 0; i--) {
+          if (messages[i].role === "user") {
+            const userText = contentBlocks
+              .filter(
+                (b) =>
+                  b.message_id === messages[i].id && b.block_type === "text",
+              )
+              .map((b) => b.content_text)
+              .join("");
+            if (skillName && userText.includes(`/${skillName}`)) {
+              invokedBy = "user";
+            }
+            break;
+          }
+        }
+      }
+
+      skills.push({
+        skill_name: skillName,
+        invoked_at: (block.metadata?.timestamp as string) ?? "",
+        invoked_by: invokedBy,
+        args,
+      });
+    }
+  }
+
+  // --- Worktree extraction: EnterWorktree tool calls ---
+
+  const worktrees: ParsedWorktree[] = [];
+
+  for (const block of contentBlocks) {
+    if (block.block_type === "tool_use" && block.tool_name === "EnterWorktree") {
+      const input = block.tool_input as Record<string, unknown> | null;
+      worktrees.push({
+        worktree_name: input?.name as string | undefined,
+        created_at: (block.metadata?.timestamp as string) ?? "",
+      });
+    }
+  }
+
+  // --- Session metadata: permission_mode from the first transcript line ---
+
+  let permissionMode: string | undefined;
+
+  if (classifiedLines.length > 0) {
+    const firstLine = classifiedLines[0].parsed;
+    if (firstLine.permissionMode) {
+      permissionMode = firstLine.permissionMode;
+    }
+  }
+
   return {
     messages,
     contentBlocks,
@@ -382,8 +461,9 @@ export async function parseTranscript(
     },
     subagents,
     teams,
-    skills: [],      // Task 9 fills this
-    worktrees: [],   // Task 9 fills this
+    skills,
+    worktrees,
+    permission_mode: permissionMode,
   };
 }
 
