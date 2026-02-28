@@ -415,12 +415,18 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
 
   // =========================================================================
   // GET /sessions/:id/transcript — Parsed messages with nested content blocks
+  //
+  // Supports sub-agent filtering via ?subagent_id query parameter:
+  //   - No param (default): main session messages only (subagent_id IS NULL)
+  //   - ?subagent_id=all: all messages (main + all sub-agents) by timestamp
+  //   - ?subagent_id=<ulid>: messages for a specific sub-agent (404 if not found)
   // =========================================================================
   router.get(
     "/sessions/:id/transcript",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const { id } = req.params;
+        const subagentId = (req.query.subagent_id as string | undefined)?.trim() || undefined;
 
         // First verify the session exists and check its parse status
         const sessionRows = await sql`
@@ -445,6 +451,31 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
             lifecycle: session.lifecycle,
           });
           return;
+        }
+
+        // Build the subagent WHERE filter based on the query parameter.
+        // Default (no param): only main session messages where subagent_id is null.
+        // "all": no subagent filter, returns everything ordered by timestamp.
+        // Specific ULID: validate the sub-agent exists for this session, then filter.
+        let subagentFilter: ReturnType<typeof sql>;
+        if (!subagentId) {
+          subagentFilter = sql`AND tm.subagent_id IS NULL`;
+        } else if (subagentId === "all") {
+          subagentFilter = sql``;
+        } else {
+          // Validate the sub-agent exists for this session before querying messages
+          const subagentRows = await sql`
+            SELECT id FROM subagents
+            WHERE id = ${subagentId} AND session_id = ${id}
+          `;
+          if (subagentRows.length === 0) {
+            res.status(404).json({
+              error: "Sub-agent not found",
+              details: `No sub-agent with id '${subagentId}' found for session ${id}`,
+            });
+            return;
+          }
+          subagentFilter = sql`AND tm.subagent_id = ${subagentId}`;
         }
 
         // Fetch messages with nested content blocks aggregated as JSON array.
@@ -476,6 +507,7 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
           FROM transcript_messages tm
           LEFT JOIN content_blocks cb ON cb.message_id = tm.id
           WHERE tm.session_id = ${id}
+          ${subagentFilter}
           GROUP BY tm.id
           ORDER BY tm.ordinal
         `;
@@ -489,33 +521,68 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
 
   // =========================================================================
   // GET /sessions/:id/transcript/raw — Presigned S3 URL for raw transcript
+  //
+  // Supports sub-agent raw transcripts via ?subagent_id=<ulid> query param.
+  // When provided, looks up the sub-agent's transcript_s3_key instead of the
+  // session's. No param returns the main session transcript (existing behavior).
   // =========================================================================
   router.get(
     "/sessions/:id/transcript/raw",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const { id } = req.params;
+        const subagentId = (req.query.subagent_id as string | undefined)?.trim() || undefined;
 
-        // Look up the session's transcript S3 key
-        const sessionRows = await sql`
-          SELECT id, transcript_s3_key
-          FROM sessions
-          WHERE id = ${id}
-        `;
+        // Determine the S3 key source: sub-agent row or session row
+        let s3Key: string | null = null;
 
-        if (sessionRows.length === 0) {
-          res.status(404).json({ error: "Session not found" });
-          return;
-        }
+        if (subagentId) {
+          // Sub-agent raw transcript: look up the subagent's transcript_s3_key
+          const subagentRows = await sql`
+            SELECT id, transcript_s3_key
+            FROM subagents
+            WHERE id = ${subagentId} AND session_id = ${id}
+          `;
 
-        const session = sessionRows[0];
+          if (subagentRows.length === 0) {
+            res.status(404).json({
+              error: "Sub-agent not found",
+              details: `No sub-agent with id '${subagentId}' found for session ${id}`,
+            });
+            return;
+          }
 
-        if (!session.transcript_s3_key) {
-          res.status(404).json({
-            error: "Raw transcript not available",
-            details: "No transcript has been uploaded for this session",
-          });
-          return;
+          s3Key = subagentRows[0].transcript_s3_key as string | null;
+
+          if (!s3Key) {
+            res.status(404).json({
+              error: "Raw transcript not available",
+              details: "No transcript has been uploaded for this sub-agent",
+            });
+            return;
+          }
+        } else {
+          // Main session transcript: existing behavior
+          const sessionRows = await sql`
+            SELECT id, transcript_s3_key
+            FROM sessions
+            WHERE id = ${id}
+          `;
+
+          if (sessionRows.length === 0) {
+            res.status(404).json({ error: "Session not found" });
+            return;
+          }
+
+          s3Key = sessionRows[0].transcript_s3_key as string | null;
+
+          if (!s3Key) {
+            res.status(404).json({
+              error: "Raw transcript not available",
+              details: "No transcript has been uploaded for this session",
+            });
+            return;
+          }
         }
 
         // S3 client is optional — if not configured, we can't generate presigned URLs
@@ -528,7 +595,7 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
         }
 
         // Generate a presigned URL (default 1 hour expiry)
-        const url = await s3.presignedUrl(session.transcript_s3_key);
+        const url = await s3.presignedUrl(s3Key);
 
         // If the client explicitly requests no redirect, return the URL as JSON
         if (req.query.redirect === "false") {
