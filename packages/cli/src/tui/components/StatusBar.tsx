@@ -54,7 +54,7 @@ export function StatusBar({
       </Box>
       <Box>
         <Text dimColor>
-          j/k:navigate  enter:detail  tab:switch  r:refresh  q:quit
+          j/k:navigate  enter:detail  tab:switch  t:teams  r:refresh  q:quit
         </Text>
       </Box>
     </Box>

@@ -134,6 +134,54 @@ export interface DeviceDetailResponse {
   recent_sessions: Session[];
 }
 
+/** Lead session info embedded in team API responses */
+export interface TeamLeadSessionInfo {
+  id: string;
+  initial_prompt: string | null;
+  started_at: string;
+  lifecycle: string;
+}
+
+/** A team summary as returned by GET /api/teams */
+export interface TeamSummaryResponse {
+  id: string;
+  team_name: string;
+  description: string | null;
+  lead_session_id: string | null;
+  lead_session: TeamLeadSessionInfo | null;
+  created_at: string;
+  ended_at: string | null;
+  member_count: number;
+  metadata: Record<string, unknown>;
+}
+
+/** A sub-agent member as returned by GET /api/teams/:name */
+export interface TeamMemberResponse {
+  id: string;
+  agent_id: string;
+  agent_type: string;
+  agent_name: string | null;
+  model: string | null;
+  status: string;
+  started_at: string;
+  ended_at: string | null;
+  session_id: string | null;
+}
+
+/** Response from GET /api/teams (list) */
+export interface TeamsListResponse {
+  teams: TeamSummaryResponse[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+/** Response from GET /api/teams/:name (detail) */
+export interface TeamDetailResponse {
+  team: TeamSummaryResponse & {
+    members: TeamMemberResponse[];
+  };
+}
+
 /** Backend health status response */
 export interface HealthStatus {
   status: "ok" | "degraded" | "down";
@@ -557,6 +605,26 @@ export class FuelApiClient implements ApiClient {
     if (params?.before) query.before = params.before;
     if (params?.types) query.types = params.types;
     return this.request<TimelineResponse>("GET", "/api/timeline", { query });
+  }
+
+  // -------------------------------------------------------------------------
+  // Teams Endpoints
+  // -------------------------------------------------------------------------
+
+  /** List teams with optional cursor pagination */
+  async listTeams(params?: { limit?: number; cursor?: string }): Promise<TeamsListResponse> {
+    const query: Record<string, string | undefined> = {};
+    if (params?.limit) query.limit = String(params.limit);
+    if (params?.cursor) query.cursor = params.cursor;
+    return this.request<TeamsListResponse>("GET", "/api/teams", { query });
+  }
+
+  /** Get a team by name, returns team detail with sub-agent members */
+  async getTeam(name: string): Promise<TeamDetailResponse> {
+    return this.request<TeamDetailResponse>(
+      "GET",
+      `/api/teams/${encodeURIComponent(name)}`,
+    );
   }
 
   // -------------------------------------------------------------------------
