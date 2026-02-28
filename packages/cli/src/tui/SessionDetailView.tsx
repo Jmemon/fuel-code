@@ -2,7 +2,7 @@
  * SessionDetailView — main TUI screen for viewing a session's details.
  *
  * Reached by pressing Enter on a session in the dashboard. Implements:
- *   - Header with session metadata (workspace, device, duration, cost, tokens, summary)
+ *   - Compact Panel header with session metadata in the title
  *   - Scrollable transcript viewer (left ~65%)
  *   - Sidebar with git/tools/files (right ~35%)
  *   - Tab switching: t=transcript, e=events (lazy fetch), g=git (full-width)
@@ -28,9 +28,10 @@ import { useSessionDetail } from "./hooks/useSessionDetail.js";
 import { SessionHeader } from "./components/SessionHeader.js";
 import { TranscriptViewer } from "./components/TranscriptViewer.js";
 import { Sidebar } from "./components/Sidebar.js";
-import { FooterBar } from "./components/FooterBar.js";
 import { Spinner } from "./components/Spinner.js";
 import { GitActivityPanel } from "./components/GitActivityPanel.js";
+import { Panel, KeyHint, theme } from "./primitives/index.js";
+import { formatDuration, formatTokensCompact, formatCost } from "../lib/formatters.js";
 import type { TranscriptMessageWithBlocks } from "./components/MessageBlock.js";
 import type { Event } from "@fuel-code/shared";
 
@@ -77,6 +78,27 @@ function formatEventData(evt: Event): string {
     }
     default:
       return JSON.stringify(data).slice(0, 50);
+  }
+}
+
+/** Map lifecycle to icon + label for the Panel title */
+function lifecycleTag(lifecycle: string): string {
+  switch (lifecycle) {
+    case "detected":
+    case "capturing":
+      return "● LIVE";
+    case "ended":
+      return "◑ ENDED";
+    case "parsed":
+      return "◌ PARSING";
+    case "summarized":
+      return "✓ DONE";
+    case "archived":
+      return "▪ ARCHIVED";
+    case "failed":
+      return "✗ FAIL";
+    default:
+      return lifecycle.toUpperCase();
   }
 }
 
@@ -216,32 +238,53 @@ export function SessionDetailView({
     );
   }
 
+  // Build the compact Panel title from session metadata
+  const workspaceName = session.workspace_name ?? session.workspace_id;
+  const deviceName = session.device_name ?? session.device_id;
+  const stats = session.stats;
+  const tokenStr = formatTokensCompact(stats?.tokens_in ?? null, stats?.tokens_out ?? null);
+  const lifecycleStr = lifecycleTag(session.lifecycle);
+  const headerTitle = `Session ── ${workspaceName} / ${deviceName} ── ${tokenStr} tok ── ${lifecycleStr}`;
+
+  // Compute total item count for scroll position indicator
+  const totalItems = activeTab === "transcript"
+    ? (transcript?.length ?? 0)
+    : activeTab === "events"
+      ? (events?.length ?? 0)
+      : gitActivity.length;
+
   return (
     <Box flexDirection="column">
-      {/* Header */}
-      <SessionHeader session={session} />
+      {/* Header: compact Panel with inline metadata */}
+      <Panel title={headerTitle}>
+        <SessionHeader session={session} />
+      </Panel>
 
-      {/* Tab indicator */}
+      {/* Tab bar: active tab in accent color, inactive tabs dim, scroll position right-aligned */}
       <Box marginTop={1}>
-        <Text bold color={activeTab === "transcript" ? "cyan" : undefined}>
+        <Text bold color={activeTab === "transcript" ? theme.accent : undefined} dimColor={activeTab !== "transcript"}>
           [t]ranscript
         </Text>
         <Text>  </Text>
-        <Text bold color={activeTab === "events" ? "cyan" : undefined}>
+        <Text bold color={activeTab === "events" ? theme.accent : undefined} dimColor={activeTab !== "events"}>
           [e]vents
         </Text>
         <Text>  </Text>
-        <Text bold color={activeTab === "git" ? "cyan" : undefined}>
+        <Text bold color={activeTab === "git" ? theme.accent : undefined} dimColor={activeTab !== "git"}>
           [g]it
         </Text>
+        <Box flexGrow={1} justifyContent="flex-end">
+          {totalItems > 0 && (
+            <Text dimColor>msg {scrollOffset + 1} of {totalItems}</Text>
+          )}
+        </Box>
       </Box>
 
       {/* Tab content */}
       <Box marginTop={1} flexGrow={1}>
         {activeTab === "transcript" && (
           <Box>
-            {/* Left panel: transcript (~65%) */}
-            <Box flexGrow={1} flexBasis="65%">
+            <Panel title="Transcript" flexBasis="65%" flexGrow={1}>
               <TranscriptViewer
                 messages={transcript as TranscriptMessageWithBlocks[] | null}
                 scrollOffset={scrollOffset}
@@ -249,33 +292,25 @@ export function SessionDetailView({
                 isLive={isLive}
                 lifecycle={session?.lifecycle}
               />
-            </Box>
-            {/* Right panel: sidebar (~35%) */}
-            <Box flexBasis="35%">
+            </Panel>
+            <Panel title="Sidebar" flexBasis="35%">
               <Sidebar
                 gitActivity={gitActivity}
                 messages={(transcript as TranscriptMessageWithBlocks[]) ?? []}
               />
-            </Box>
+            </Panel>
           </Box>
         )}
 
         {activeTab === "events" && (
           <Box>
-            {/* Left panel: events table (~65%) */}
-            <Box flexGrow={1} flexBasis="65%" flexDirection="column">
+            <Panel title="Events" flexBasis="65%" flexGrow={1}>
               {events === null ? (
                 <Text dimColor>Loading events...</Text>
               ) : events.length === 0 ? (
                 <Text dimColor>No events for this session.</Text>
               ) : (
                 <Box flexDirection="column">
-                  {/* Scroll position indicator */}
-                  <Box>
-                    <Text dimColor>
-                      Event {scrollOffset + 1} of {events.length}
-                    </Text>
-                  </Box>
                   {/* Events table header */}
                   <Box>
                     <Box width={12}><Text bold>TIME</Text></Box>
@@ -292,27 +327,38 @@ export function SessionDetailView({
                   ))}
                 </Box>
               )}
-            </Box>
-            {/* Right panel: sidebar (~35%) */}
-            <Box flexBasis="35%">
+            </Panel>
+            <Panel title="Sidebar" flexBasis="35%">
               <Sidebar
                 gitActivity={gitActivity}
                 messages={(transcript as TranscriptMessageWithBlocks[]) ?? []}
               />
-            </Box>
+            </Panel>
           </Box>
         )}
 
         {activeTab === "git" && (
-          <Box flexDirection="column" width="100%">
+          <Panel title="Git Activity" flexGrow={1}>
             <GitActivityPanel commits={gitActivity} detailed />
-          </Box>
+          </Panel>
         )}
       </Box>
 
-      {/* Footer */}
+      {/* Footer: KeyHint replaces FooterBar */}
       <Box marginTop={1}>
-        <FooterBar activeTab={activeTab} isLive={isLive} />
+        <KeyHint
+          hints={[
+            { key: 'b', action: 'back' },
+            { key: 't', action: 'transcript' },
+            { key: 'e', action: 'events' },
+            { key: 'g', action: 'git' },
+            { key: 'j/k', action: 'scroll' },
+            { key: 'spc', action: 'page' },
+            { key: 'x', action: 'export' },
+            { key: 'q', action: 'quit' },
+          ]}
+          extra={isLive ? "LIVE" : undefined}
+        />
       </Box>
     </Box>
   );
