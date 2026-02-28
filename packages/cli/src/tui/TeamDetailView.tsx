@@ -72,6 +72,12 @@ export function TeamDetailView({
       return;
     }
 
+    // Navigate to lead session
+    if (input === "l" && team?.lead_session_id) {
+      onSelectSession(team.lead_session_id);
+      return;
+    }
+
     // Back to teams list
     if (input === "b" || key.escape) {
       onBack();
@@ -185,7 +191,7 @@ export function TeamDetailView({
       {/* Footer with keybinding hints */}
       <Box borderStyle="single" borderTop borderBottom={false} borderLeft={false} borderRight={false}>
         <Text dimColor>
-          j/k:navigate  enter:session  r:refresh  b:back  q:quit
+          j/k:navigate  enter:member session  l:lead session  r:refresh  b:back  q:quit
         </Text>
       </Box>
     </Box>

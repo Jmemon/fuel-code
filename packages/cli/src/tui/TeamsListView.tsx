@@ -38,12 +38,19 @@ export function TeamsListView({
   onBack,
 }: TeamsListViewProps): React.ReactElement {
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const { teams, loading, error, refresh } = useTeams(apiClient);
+  const { teams, loading, error, refresh, hasMore, loadMore } = useTeams(apiClient);
 
   useInput((input, key) => {
     // Navigation
     if (input === "j" || key.downArrow) {
-      setSelectedIndex((i) => Math.min(i + 1, teams.length - 1));
+      setSelectedIndex((i) => {
+        const next = Math.min(i + 1, teams.length - 1);
+        // Load more when approaching the end of the list
+        if (next >= teams.length - 3 && hasMore && !loading) {
+          loadMore();
+        }
+        return next;
+      });
       return;
     }
     if (input === "k" || key.upArrow) {
