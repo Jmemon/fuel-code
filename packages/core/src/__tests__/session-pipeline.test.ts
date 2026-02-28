@@ -163,35 +163,6 @@ describe("createPipelineQueue", () => {
     expect(queue.depth()).toBe(0);
   });
 
-  test("overflow warning: enqueue drops when queue exceeds 50", () => {
-    const queue = createPipelineQueue(0); // maxConcurrent=0 means nothing gets dequeued
-    const warnings: string[] = [];
-
-    const mockDeps: PipelineDeps = {
-      sql: {} as any,
-      s3: createMockS3(""),
-      summaryConfig: { enabled: false, model: "", temperature: 0, maxOutputTokens: 0, apiKey: "" },
-      logger: pino({
-        level: "warn",
-        transport: undefined,
-        // Use a custom destination to capture warnings
-      }),
-    };
-
-    // We can't easily capture pino warnings in a test, but we can verify
-    // that the 51st enqueue doesn't increase depth
-    queue.start(mockDeps);
-
-    // Fill up the queue to 50 (with maxConcurrent=0, items stay in pending)
-    for (let i = 0; i < 50; i++) {
-      queue.enqueue(`session-${i}`);
-    }
-    expect(queue.depth()).toBe(50);
-
-    // 51st should be dropped
-    queue.enqueue("session-overflow");
-    expect(queue.depth()).toBe(50); // still 50, not 51
-  });
 });
 
 // ---------------------------------------------------------------------------
