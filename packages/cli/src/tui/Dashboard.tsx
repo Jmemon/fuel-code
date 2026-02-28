@@ -30,9 +30,10 @@ import { useWsConnection } from "./hooks/useWsConnection.js";
 import { useTodayStats } from "./hooks/useTodayStats.js";
 import { WorkspaceItem } from "./components/WorkspaceItem.js";
 import { SessionRow, type SessionDisplayData } from "./components/SessionRow.js";
-import { StatusBar } from "./components/StatusBar.js";
 import { Spinner } from "./components/Spinner.js";
 import { ErrorBanner } from "./components/ErrorBanner.js";
+import { Panel, KeyHint } from "./primitives/index.js";
+import { formatDuration, formatTokensCompact } from "../lib/formatters.js";
 
 export interface DashboardProps {
   api: FuelApiClient;
@@ -218,31 +219,23 @@ export function Dashboard({
   const loading = wsLoading || sessLoading;
   const error = wsError || sessError;
 
+  // Terminal width calculation for left pane
+  const termWidth = process.stdout.columns || 120;
+  const leftWidth = Math.max(20, Math.floor(termWidth * 0.28));
+
+  // Status bar title: sparkline placeholder + stats + WS indicator
+  const wsIndicator = wsConnected ? "● ws" : "○ polling";
+  const statusTitle = `▁▂▄▇█▅▃▁ ${stats.sessions} sess · ${formatDuration(stats.durationMs)} · ${formatTokensCompact(stats.tokensIn, stats.tokensOut)} · ${stats.commits} commits ── ${wsIndicator}`;
+
   return (
     <Box flexDirection="column" width="100%">
-      {/* Title bar */}
-      <Box>
-        <Text bold> fuel-code </Text>
-      </Box>
-
       {/* Error banner */}
       {error && <ErrorBanner message={error.message} />}
 
       {/* Main content: two panes */}
       <Box flexGrow={1}>
         {/* Left pane: Workspaces */}
-        <Box
-          flexDirection="column"
-          width="30%"
-          borderStyle="single"
-          borderRight
-          borderTop={false}
-          borderBottom={false}
-          borderLeft={false}
-        >
-          <Text bold color={focusPane === "workspaces" ? "cyan" : undefined}>
-            {" "}WORKSPACES
-          </Text>
+        <Panel title="WORKSPACES" focused={focusPane === "workspaces"} width={leftWidth}>
           {loading && workspaces.length === 0 ? (
             <Spinner label="Loading workspaces..." />
           ) : workspaces.length === 0 ? (
@@ -256,13 +249,10 @@ export function Dashboard({
               />
             ))
           )}
-        </Box>
+        </Panel>
 
         {/* Right pane: Sessions */}
-        <Box flexDirection="column" width="70%">
-          <Text bold color={focusPane === "sessions" ? "cyan" : undefined}>
-            {" "}SESSIONS
-          </Text>
+        <Panel title={`SESSIONS (${selectedWorkspace?.display_name ?? ""})`} focused={focusPane === "sessions"} flexGrow={1}>
           {sessLoading && sessions.length === 0 ? (
             <Spinner label="Loading sessions..." />
           ) : sessions.length === 0 ? (
@@ -276,11 +266,19 @@ export function Dashboard({
               />
             ))
           )}
-        </Box>
+        </Panel>
       </Box>
 
-      {/* Bottom: Status bar */}
-      <StatusBar stats={stats} wsState={wsState} />
+      {/* Bottom: Status bar with sparkline stats and key hints */}
+      <Panel title={statusTitle}>
+        <KeyHint hints={[
+          { key: "j/k", action: "nav" },
+          { key: "⏎", action: "open" },
+          { key: "⇥", action: "pane" },
+          { key: "r", action: "refresh" },
+          { key: "q", action: "quit" },
+        ]} />
+      </Panel>
     </Box>
   );
 }
