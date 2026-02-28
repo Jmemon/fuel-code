@@ -98,11 +98,15 @@ export {
 export {
   scanForSessions,
   ingestBackfillSessions,
+  waitForPipelineCompletion,
   projectDirToPath,
   type DiscoveredSession,
   type ScanResult,
   type BackfillProgress,
   type IngestDeps,
+  type PipelineWaitDeps,
+  type PipelineWaitProgress,
+  type PipelineWaitResult,
 } from "./session-backfill.js";
 
 // Backfill state persistence: track backfill runs for status/resume

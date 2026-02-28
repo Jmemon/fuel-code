@@ -1187,3 +1187,187 @@ async function flushEventBatchWithRateLimit(
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// ---------------------------------------------------------------------------
+// Pipeline progress tracking — poll server for processing completion
+// ---------------------------------------------------------------------------
+
+/** Terminal lifecycle states where no further processing will occur */
+const TERMINAL_LIFECYCLES = new Set(["parsed", "summarized", "archived", "failed"]);
+
+/** Progress callback data during pipeline wait phase */
+export interface PipelineWaitProgress {
+  /** Total sessions being tracked */
+  total: number;
+  /** Sessions that have reached a terminal lifecycle state */
+  completed: number;
+  /** Breakdown by current lifecycle state */
+  byLifecycle: Record<string, number>;
+}
+
+/** Dependencies for waitForPipelineCompletion */
+export interface PipelineWaitDeps {
+  /** Base URL of the fuel-code backend */
+  serverUrl: string;
+  /** API key for authentication */
+  apiKey: string;
+  /** Milliseconds between status polls (default: 3000) */
+  pollIntervalMs?: number;
+  /** Maximum time to wait before giving up (default: 600000 = 10 min) */
+  timeoutMs?: number;
+  /** AbortSignal for clean cancellation (Ctrl-C) */
+  signal?: AbortSignal;
+  /** Progress callback fired after each poll */
+  onProgress?: (progress: PipelineWaitProgress) => void;
+}
+
+/** Result of waiting for pipeline completion */
+export interface PipelineWaitResult {
+  /** Whether all sessions reached terminal state */
+  completed: boolean;
+  /** Whether the wait timed out */
+  timedOut: boolean;
+  /** Whether the wait was aborted by signal */
+  aborted: boolean;
+  /** Count of sessions per terminal lifecycle state */
+  summary: {
+    parsed: number;
+    summarized: number;
+    archived: number;
+    failed: number;
+    pending: number;
+  };
+}
+
+/**
+ * Poll the batch-status endpoint until all sessions reach a terminal
+ * lifecycle state (parsed, summarized, archived, or failed).
+ *
+ * Used by the backfill command to show server-side processing progress
+ * after the local event emission phase completes.
+ */
+export async function waitForPipelineCompletion(
+  sessionIds: string[],
+  deps: PipelineWaitDeps,
+): Promise<PipelineWaitResult> {
+  if (sessionIds.length === 0) {
+    return {
+      completed: true,
+      timedOut: false,
+      aborted: false,
+      summary: { parsed: 0, summarized: 0, archived: 0, failed: 0, pending: 0 },
+    };
+  }
+
+  const baseUrl = deps.serverUrl.replace(/\/+$/, "");
+  const pollInterval = deps.pollIntervalMs ?? 3000;
+  const timeout = deps.timeoutMs ?? 600_000;
+  const startTime = Date.now();
+
+  // Poll in batches of 500 (endpoint limit)
+  const idBatches: string[][] = [];
+  for (let i = 0; i < sessionIds.length; i += 500) {
+    idBatches.push(sessionIds.slice(i, i + 500));
+  }
+
+  while (true) {
+    if (deps.signal?.aborted) {
+      return buildPipelineResult(sessionIds, {}, true, false);
+    }
+
+    if (Date.now() - startTime > timeout) {
+      return buildPipelineResult(sessionIds, await fetchAllStatuses(baseUrl, deps.apiKey, idBatches, deps.signal), false, true);
+    }
+
+    const statuses = await fetchAllStatuses(baseUrl, deps.apiKey, idBatches, deps.signal);
+
+    // Report progress
+    if (deps.onProgress) {
+      const byLifecycle: Record<string, number> = {};
+      let completedCount = 0;
+      for (const id of sessionIds) {
+        const lifecycle = statuses[id]?.lifecycle ?? "unknown";
+        byLifecycle[lifecycle] = (byLifecycle[lifecycle] ?? 0) + 1;
+        if (TERMINAL_LIFECYCLES.has(lifecycle)) completedCount++;
+      }
+      deps.onProgress({ total: sessionIds.length, completed: completedCount, byLifecycle });
+    }
+
+    const allTerminal = sessionIds.every((id) => {
+      const lifecycle = statuses[id]?.lifecycle;
+      return lifecycle && TERMINAL_LIFECYCLES.has(lifecycle);
+    });
+
+    if (allTerminal) {
+      return buildPipelineResult(sessionIds, statuses, false, false);
+    }
+
+    try {
+      await abortableSleep(pollInterval, deps.signal);
+    } catch {
+      return buildPipelineResult(sessionIds, statuses, true, false);
+    }
+  }
+}
+
+/** Fetch statuses from all batches and merge into a single map */
+async function fetchAllStatuses(
+  baseUrl: string,
+  apiKey: string,
+  idBatches: string[][],
+  signal?: AbortSignal,
+): Promise<Record<string, { lifecycle: string; parse_status: string }>> {
+  const merged: Record<string, { lifecycle: string; parse_status: string }> = {};
+
+  for (const batch of idBatches) {
+    try {
+      const response = await fetch(`${baseUrl}/api/sessions/batch-status`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({ session_ids: batch }),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
+      });
+
+      if (response.ok) {
+        const data = await response.json() as {
+          statuses: Record<string, { lifecycle: string; parse_status: string }>;
+        };
+        Object.assign(merged, data.statuses);
+      }
+    } catch {
+      // On fetch error, skip this batch — will retry on next poll
+    }
+  }
+
+  return merged;
+}
+
+/** Build the final PipelineWaitResult from collected statuses */
+function buildPipelineResult(
+  sessionIds: string[],
+  statuses: Record<string, { lifecycle: string; parse_status: string }>,
+  aborted: boolean,
+  timedOut: boolean,
+): PipelineWaitResult {
+  const summary = { parsed: 0, summarized: 0, archived: 0, failed: 0, pending: 0 };
+  let allTerminal = true;
+
+  for (const id of sessionIds) {
+    const lifecycle = statuses[id]?.lifecycle;
+    if (lifecycle === "parsed") summary.parsed++;
+    else if (lifecycle === "summarized") summary.summarized++;
+    else if (lifecycle === "archived") summary.archived++;
+    else if (lifecycle === "failed") summary.failed++;
+    else { summary.pending++; allTerminal = false; }
+  }
+
+  return {
+    completed: allTerminal && !aborted && !timedOut,
+    timedOut,
+    aborted,
+    summary,
+  };
+}
