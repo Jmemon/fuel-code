@@ -15,12 +15,14 @@ export interface StatusBarProps {
   stats: TodayStats;
   wsState: WsConnectionState;
   queuePending?: number;
+  updateAvailable?: boolean;
 }
 
 export function StatusBar({
   stats,
   wsState,
   queuePending = 0,
+  updateAvailable = false,
 }: StatusBarProps): React.ReactElement {
   // WS indicator: filled bullet for connected, open circle for disconnected/polling
   const WS_CONNECTED_LABEL = "\u25CF Connected (ws)";
@@ -52,6 +54,11 @@ export function StatusBar({
         </Text>
         <Text color={wsColor}>{wsLabel}</Text>
       </Box>
+      {updateAvailable && (
+        <Box>
+          <Text color="yellow">{"\u2191"} Update available</Text>
+        </Box>
+      )}
       <Box>
         <Text dimColor>
           j/k:navigate  enter:detail  tab:switch  r:refresh  q:quit

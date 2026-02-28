@@ -6,7 +6,8 @@
   "types": "./src/index.ts",
   "scripts": {
     "build": "tsc -b",
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck": "tsc --noEmit --composite false"
   },
   "dependencies": {
     "ulidx": "^2.4.1",

@@ -18,7 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import pc from "picocolors";
 import type { Session } from "@fuel-code/shared";
-import { ConfigError } from "@fuel-code/shared";
+import { ConfigError, BUILD_INFO } from "@fuel-code/shared";
 import {
   configExists,
   loadConfig,
@@ -38,6 +38,7 @@ import {
   formatError,
   outputResult,
 } from "../lib/formatters.js";
+import { checkForUpdate, type UpdateInfo } from "../lib/update-checker.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -276,10 +277,19 @@ export async function fetchStatus(
  * Format the full status output for terminal display.
  * Handles connected, unreachable, and not-initialized states.
  */
-export function formatStatus(data: StatusData): string {
+export function formatStatus(data: StatusData, updateInfo?: UpdateInfo | null): string {
   const lines: string[] = [];
   lines.push("fuel-code status");
   lines.push("");
+
+  lines.push(`  Version:    ${BUILD_INFO.commitShort} (${BUILD_INFO.buildDate.split("T")[0]}, ${BUILD_INFO.branch})`);
+
+  if (updateInfo) {
+    const dateStr = updateInfo.latestDate ? updateInfo.latestDate.split("T")[0] : "";
+    lines.push(
+      `  Update:     ${pc.yellow("Available!")} ${updateInfo.latestShort}${dateStr ? ` (${dateStr})` : ""} — run: git pull && docker compose up --build -d`,
+    );
+  }
 
   // Device info
   lines.push(`  Device:     ${data.device.name} (${data.device.id.slice(0, 8)}...)`);
@@ -427,11 +437,14 @@ export async function runStatus(opts?: { json?: boolean }): Promise<void> {
       timeout: 3000, // 3-second timeout for status checks
     });
 
-    const data = await fetchStatus(api, config);
+    const [data, updateInfo] = await Promise.all([
+      fetchStatus(api, config),
+      checkForUpdate(),
+    ]);
 
     outputResult(data, {
       json: opts?.json,
-      format: formatStatus,
+      format: (d) => formatStatus(d, updateInfo),
     });
   } catch (err) {
     console.error(formatError(err));

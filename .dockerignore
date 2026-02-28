@@ -1,0 +1,14 @@
+node_modules
+.git
+.claude
+.turbo
+logs
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+*.tsbuildinfo
+tasks
+docs
+human-resources

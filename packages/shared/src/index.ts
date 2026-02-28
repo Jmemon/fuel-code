@@ -26,3 +26,6 @@ export * from "./s3-keys.js";
 
 // Structured error classes
 export * from "./errors.js";
+
+// Build metadata (git SHA, build date, branch)
+export * from "./build-info.js";

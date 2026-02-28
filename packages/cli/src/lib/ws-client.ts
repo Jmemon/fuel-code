@@ -328,7 +328,7 @@ export class WsClient extends EventEmitter {
     }
 
     // Guard: ensure message has a type field
-    if (!msg || typeof (msg as Record<string, unknown>).type !== "string") {
+    if (!msg || typeof (msg as unknown as Record<string, unknown>).type !== "string") {
       return;
     }
 

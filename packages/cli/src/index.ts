@@ -37,6 +37,7 @@ import { createTranscriptCommand } from "./commands/transcript.js";
 import { createBackfillCommand } from "./commands/backfill.js";
 import { createSessionDetailCommand } from "./commands/session-detail.js";
 import { registerWorkspacesCommands } from "./commands/workspaces.js";
+import { BUILD_INFO } from "@fuel-code/shared";
 import { configExists, loadConfig } from "./lib/config.js";
 import { checkPendingPrompts } from "./lib/prompt-checker.js";
 import { showGitHooksPrompt } from "./lib/git-hooks-prompt.js";
@@ -104,7 +105,7 @@ const program = new Command();
 program
   .name("fuel-code")
   .description("Developer activity tracking")
-  .version("0.1.0");
+  .version(`${BUILD_INFO.commitShort} (${BUILD_INFO.buildDate.split("T")[0]})`);
 
 // Register subcommands
 program.addCommand(createInitCommand());

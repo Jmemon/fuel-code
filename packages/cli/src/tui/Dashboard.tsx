@@ -28,6 +28,7 @@ import { useWorkspaces } from "./hooks/useWorkspaces.js";
 import { useSessions } from "./hooks/useSessions.js";
 import { useWsConnection } from "./hooks/useWsConnection.js";
 import { useTodayStats } from "./hooks/useTodayStats.js";
+import { useUpdateCheck } from "./hooks/useUpdateCheck.js";
 import { WorkspaceItem } from "./components/WorkspaceItem.js";
 import { SessionRow, type SessionDisplayData } from "./components/SessionRow.js";
 import { StatusBar } from "./components/StatusBar.js";
@@ -79,6 +80,7 @@ export function Dashboard({
 
   const { connected: wsConnected, state: wsState } = useWsConnection(ws);
   const stats = useTodayStats(workspaces);
+  const updateInfo = useUpdateCheck();
 
   // ----- Reset session index when workspace changes -----
   useEffect(() => {
@@ -280,7 +282,7 @@ export function Dashboard({
       </Box>
 
       {/* Bottom: Status bar */}
-      <StatusBar stats={stats} wsState={wsState} />
+      <StatusBar stats={stats} wsState={wsState} updateAvailable={!!updateInfo} />
     </Box>
   );
 }

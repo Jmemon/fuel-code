@@ -12,11 +12,9 @@
 import { Router } from "express";
 import type postgres from "postgres";
 import type Redis from "ioredis";
+import { BUILD_INFO } from "@fuel-code/shared";
 import { checkDbHealth } from "../db/postgres.js";
 import { checkRedisHealth } from "../redis/client.js";
-
-/** The server version reported in health check responses */
-const VERSION = "0.1.0";
 
 /** Timestamp when the server process started (for uptime calculation) */
 const startTime = Date.now();
@@ -75,7 +73,7 @@ export function createHealthRouter(
       },
       ws_clients: opts?.getWsClientCount?.() ?? 0,
       uptime_seconds: Math.floor((Date.now() - startTime) / 1000),
-      version: VERSION,
+      version: `${BUILD_INFO.commitShort} (${BUILD_INFO.buildDate.split("T")[0]})`,
     });
   });
 

@@ -67,7 +67,7 @@ function validateEnv(): {
     DATABASE_URL: process.env.DATABASE_URL!,
     REDIS_URL: process.env.REDIS_URL!,
     API_KEY: process.env.API_KEY!,
-    PORT: parseInt(process.env.PORT || "3000", 10),
+    PORT: parseInt(process.env.PORT || "3020", 10),
   };
 }
 

@@ -66,10 +66,10 @@ export async function resolveSessionId(api: FuelApiClient, idArg: string): Promi
   const candidates = matches
     .map((s) => {
       const short = s.id.slice(0, 16) + "...";
-      const ws = (s as Record<string, unknown>).workspace_name ?? s.workspace_id;
+      const ws = (s as unknown as Record<string, unknown>).workspace_name ?? s.workspace_id;
       const relTime = formatRelativeTime(s.started_at);
-      const summary = (s as Record<string, unknown>).summary
-        ?? (s as Record<string, unknown>).initial_prompt
+      const summary = (s as unknown as Record<string, unknown>).summary
+        ?? (s as unknown as Record<string, unknown>).initial_prompt
         ?? "(no summary)";
       return `  ${short}  ${ws}  ${relTime}  "${summary}"`;
     })

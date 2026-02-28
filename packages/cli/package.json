@@ -9,9 +9,11 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck": "tsc --noEmit --composite false"
   },
   "dependencies": {
+    "@fuel-code/core": "workspace:*",
     "@fuel-code/shared": "workspace:*",
     "commander": "^14.0.3",
     "ink": "^6.8.0",
