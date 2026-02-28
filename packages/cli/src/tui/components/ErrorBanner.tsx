@@ -5,7 +5,6 @@
 
 import React from "react";
 import { Text, Box } from "ink";
-import { theme } from "../primitives/index.js";
 
 export interface ErrorBannerProps {
   message: string;
@@ -14,10 +13,10 @@ export interface ErrorBannerProps {
 export function ErrorBanner({ message }: ErrorBannerProps): React.ReactElement {
   return (
     <Box>
-      <Text color={theme.error} bold>
+      <Text color="red" bold>
         ✗ Error:
       </Text>
-      <Text color={theme.error}> {message}</Text>
+      <Text color="red"> {message}</Text>
     </Box>
   );
 }

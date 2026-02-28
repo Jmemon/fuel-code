@@ -1,16 +1,28 @@
 /**
  * Session row component for the right pane of the Dashboard.
  *
- * Displays lifecycle Badge, device name, duration, token counts, and summary.
- * Live sessions show per-tool usage counts inline.
- * Commit count is shown inline after the summary text to save vertical space.
+ * Displays lifecycle status icon, device name, duration, cost, and summary.
+ * Live sessions show tool usage counts; summarized sessions show commit info.
  */
 
 import React from "react";
 import { Text, Box } from "ink";
 import type { Session } from "@fuel-code/shared";
 import { formatDuration, formatTokensCompact } from "../../lib/formatters.js";
-import { theme, Badge } from "../primitives/index.js";
+
+// Lifecycle display: icon + color mapping
+const LIFECYCLE_DISPLAY: Record<
+  string,
+  { icon: string; label: string; color: string }
+> = {
+  detected: { icon: "\u25CF", label: "LIVE", color: "green" },
+  capturing: { icon: "\u25CF", label: "LIVE", color: "green" },
+  ended: { icon: "\u25D0", label: "ENDED", color: "yellow" },
+  parsed: { icon: "\u25CC", label: "PARSING", color: "yellow" },
+  summarized: { icon: "\u2713", label: "DONE", color: "green" },
+  archived: { icon: "\u25AA", label: "ARCHIVED", color: "gray" },
+  failed: { icon: "\u2717", label: "FAIL", color: "red" },
+};
 
 /** Format per-tool usage counts like "Edit(3) Bash(2) Read(5)" */
 function formatToolCounts(counts: Record<string, number>): string {
@@ -45,51 +57,66 @@ export function SessionRow({
   session,
   selected,
 }: SessionRowProps): React.ReactElement {
-  const isLive = session.lifecycle === "detected" || session.lifecycle === "capturing";
+  const display = LIFECYCLE_DISPLAY[session.lifecycle] ?? {
+    icon: "?",
+    label: session.lifecycle.toUpperCase(),
+    color: "gray",
+  };
+
   const deviceName = session.device_name ?? session.device_id;
   const duration = formatDuration(session.duration_ms);
   const tokens = formatTokensCompact((session as any).tokens_in ?? null, (session as any).tokens_out ?? null);
   const summary = session.summary ?? "(no summary)";
-  const commitCount = (session.commit_messages ?? []).length;
-
-  // Build inline suffix: " . N commits" for summarized sessions with commits
-  const commitSuffix = commitCount > 0 ? ` \u00B7 ${commitCount} commit${commitCount === 1 ? "" : "s"}` : "";
-
-  // Live sessions: tool usage line text
-  const toolLine = isLive && session.total_messages != null
-    ? (session.tool_counts
-        ? formatToolCounts(session.tool_counts)
-        : `${session.total_messages} messages${session.tool_uses != null ? ` / ${session.tool_uses} tool uses` : ""}`)
-    : null;
+  const commitMessages: string[] = session.commit_messages ?? [];
+  const overflowCount = Math.max(0, commitMessages.length - 2);
+  const overflowText = overflowCount > 0 ? "... " + overflowCount + " more commits" : "";
 
   return (
     <Box flexDirection="column">
-      {/* Row 1: selection indicator, badge, device, duration, tokens, (tool counts for live) */}
       <Box>
-        <Text bold={selected} color={selected ? theme.accent : undefined}>
+        <Text bold={selected} color={selected ? "cyan" : undefined}>
           {selected ? "> " : "  "}
         </Text>
-        <Badge lifecycle={session.lifecycle} />
+        <Text color={display.color as any}>
+          {display.icon} {display.label}
+        </Text>
         <Text>{"  "}</Text>
         <Text dimColor>{deviceName}</Text>
         <Text>{"  "}</Text>
         <Text>{duration}</Text>
         <Text>{"  "}</Text>
         <Text>{tokens}</Text>
-        {/* Live sessions: show per-tool breakdown inline on the header row */}
-        {toolLine && (
-          <>
-            <Text>{"  "}</Text>
-            <Text color={theme.live}>{toolLine}</Text>
-          </>
-        )}
       </Box>
-      {/* Row 2: summary text + inline commit count */}
       <Box paddingLeft={4}>
         <Text dimColor wrap="truncate">
-          {summary}{commitSuffix}
+          {summary}
         </Text>
       </Box>
+      {/* Live sessions: show per-tool breakdown or aggregate counts */}
+      {(session.lifecycle === "detected" || session.lifecycle === "capturing") && session.total_messages != null && (
+        <Box paddingLeft={4}>
+          <Text color="green">
+            {session.tool_counts
+              ? formatToolCounts(session.tool_counts)
+              : `${session.total_messages} messages${session.tool_uses != null ? ` / ${session.tool_uses} tool uses` : ""}`}
+          </Text>
+        </Box>
+      )}
+      {/* Summarized sessions: show commit messages if available */}
+      {commitMessages.length > 0 && (
+        <Box paddingLeft={4} flexDirection="column">
+          {commitMessages.slice(0, 2).map((msg, i) => (
+            <Text key={i} dimColor>
+              {"\u2022"} {msg}
+            </Text>
+          ))}
+          {overflowCount > 0 && (
+            <Text dimColor>
+              {overflowText}
+            </Text>
+          )}
+        </Box>
+      )}
     </Box>
   );
 }

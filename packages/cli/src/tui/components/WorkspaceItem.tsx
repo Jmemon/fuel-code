@@ -8,7 +8,6 @@
 import React from "react";
 import { Text, Box } from "ink";
 import type { WorkspaceSummary } from "../../lib/api-client.js";
-import { theme } from "../primitives/index.js";
 
 export interface WorkspaceItemProps {
   workspace: WorkspaceSummary;
@@ -24,12 +23,12 @@ export function WorkspaceItem({
 
   return (
     <Box>
-      <Text bold={selected} color={selected ? theme.accent : undefined}>
+      <Text bold={selected} color={selected ? "cyan" : undefined}>
         {prefix} {workspace.display_name}
       </Text>
       <Text dimColor> ({workspace.session_count})</Text>
       {activeCount > 0 && (
-        <Text color={theme.live}> [{activeCount} live]</Text>
+        <Text color="green"> [{activeCount} live]</Text>
       )}
     </Box>
   );

@@ -1,10 +1,10 @@
 /**
- * Sidebar -- right panel (~35%) in the session detail transcript tab.
+ * Sidebar — right panel (~35%) in the session detail transcript tab.
  *
- * Aggregates three sub-panels separated by Divider section headers:
- *   1. GitActivityPanel -- recent commits
- *   2. ToolsUsedPanel -- tool frequency bar chart
- *   3. FilesModifiedPanel -- deduplicated file list
+ * Aggregates three sub-panels:
+ *   1. GitActivityPanel — recent commits
+ *   2. ToolsUsedPanel — tool frequency table
+ *   3. FilesModifiedPanel — deduplicated file list
  *
  * Data is derived from transcript content_blocks and git activity.
  */
@@ -12,7 +12,6 @@
 import React from "react";
 import { Box } from "ink";
 import type { GitActivity, ParsedContentBlock } from "@fuel-code/shared";
-import { Divider } from "../primitives/index.js";
 import { GitActivityPanel } from "./GitActivityPanel.js";
 import { ToolsUsedPanel } from "./ToolsUsedPanel.js";
 import { FilesModifiedPanel } from "./FilesModifiedPanel.js";
@@ -43,8 +42,8 @@ export function extractToolCounts(messages: TranscriptMessageWithBlocks[]): Reco
 /**
  * Extract modified file paths from transcript messages and git activity.
  * Sources:
- *   1. git_activity[].data.files -- file lists from commits (if available)
- *   2. content_blocks where tool_name in (Edit, Write) -- files touched by tools
+ *   1. git_activity[].data.files — file lists from commits (if available)
+ *   2. content_blocks where tool_name in (Edit, Write) — files touched by tools
  */
 export function extractModifiedFiles(
   messages: TranscriptMessageWithBlocks[],
@@ -91,19 +90,12 @@ export function Sidebar({ gitActivity, messages }: SidebarProps): React.ReactEle
 
   return (
     <Box flexDirection="column" paddingLeft={1}>
-      <Divider title="GIT" width={30} />
       <GitActivityPanel commits={gitActivity} />
       <Box marginTop={1}>
-        <Box flexDirection="column">
-          <Divider title="TOOLS" width={30} />
-          <ToolsUsedPanel toolCounts={toolCounts} />
-        </Box>
+        <ToolsUsedPanel toolCounts={toolCounts} />
       </Box>
       <Box marginTop={1}>
-        <Box flexDirection="column">
-          <Divider title="FILES" width={30} />
-          <FilesModifiedPanel files={modifiedFiles} />
-        </Box>
+        <FilesModifiedPanel files={modifiedFiles} />
       </Box>
     </Box>
   );

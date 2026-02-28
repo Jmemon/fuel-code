@@ -1,18 +1,16 @@
 /**
- * GitActivityPanel -- displays git commits in the sidebar or full-width git tab.
+ * GitActivityPanel — displays git commits in the sidebar or full-width git tab.
  *
  * Sidebar mode (detailed=false): Shows up to 10 commits as: bullet hash message
  * Full-width mode (detailed=true): Shows additional per-commit detail including
  *   insertions/deletions, files_changed count, and branch.
  * Overflow displays "... N more" indicator.
- * Title is handled by the parent Sidebar's Divider.
  * Empty state: "No git activity"
  */
 
 import React from "react";
 import { Box, Text } from "ink";
 import type { GitActivity } from "@fuel-code/shared";
-import { theme } from "../primitives/index.js";
 
 export interface GitActivityPanelProps {
   commits: GitActivity[];
@@ -26,6 +24,7 @@ export function GitActivityPanel({ commits, detailed = false }: GitActivityPanel
   if (commits.length === 0) {
     return (
       <Box flexDirection="column">
+        <Text bold>Git Activity</Text>
         <Text dimColor>No git activity</Text>
       </Box>
     );
@@ -36,6 +35,7 @@ export function GitActivityPanel({ commits, detailed = false }: GitActivityPanel
 
   return (
     <Box flexDirection="column">
+      <Text bold>Git Activity</Text>
       {visible.map((commit, idx) => {
         const sha = commit.commit_sha ? commit.commit_sha.slice(0, 7) : "-------";
         const msg = commit.message ?? commit.type;
@@ -52,7 +52,7 @@ export function GitActivityPanel({ commits, detailed = false }: GitActivityPanel
           return (
             <Box key={idx} flexDirection="column">
               <Box>
-                <Text color={theme.accent}>{"\u25CF"} </Text>
+                <Text color="yellow">{"\u25CF"} </Text>
                 <Text dimColor>{sha}</Text>
                 <Text> {msg}</Text>
                 <Text dimColor>{branchStr}</Text>
@@ -68,7 +68,7 @@ export function GitActivityPanel({ commits, detailed = false }: GitActivityPanel
 
         return (
           <Box key={idx}>
-            <Text color={theme.accent}>{"\u25CF"} </Text>
+            <Text color="yellow">{"\u25CF"} </Text>
             <Text dimColor>{sha}</Text>
             <Text> {msg}</Text>
           </Box>
