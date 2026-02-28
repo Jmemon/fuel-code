@@ -80,6 +80,28 @@ export interface ServerRemoteUpdateMessage {
   public_ip?: string;
 }
 
+/** A sub-agent's status changed (started, completed, or failed) */
+export interface ServerSubagentUpdateMessage {
+  type: "subagent.update";
+  session_id: string;
+  workspace_id: string;
+  subagent: {
+    agent_id: string;
+    agent_type: string;
+    agent_name?: string;
+    status: "running" | "completed" | "failed";
+  };
+}
+
+/** A team was created or its membership changed */
+export interface ServerTeamUpdateMessage {
+  type: "team.update";
+  team_name: string;
+  lead_session_id?: string;
+  workspace_id?: string;
+  member_count: number;
+}
+
 /** Server ping — client must respond with pong within timeout */
 export interface ServerPingMessage {
   type: "ping";
@@ -108,6 +130,8 @@ export type ServerMessage =
   | ServerEventMessage
   | ServerSessionUpdateMessage
   | ServerRemoteUpdateMessage
+  | ServerSubagentUpdateMessage
+  | ServerTeamUpdateMessage
   | ServerPingMessage
   | ServerErrorMessage
   | ServerSubscribedMessage

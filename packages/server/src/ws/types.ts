@@ -19,6 +19,8 @@ export type {
   ServerEventMessage,
   ServerSessionUpdateMessage,
   ServerRemoteUpdateMessage,
+  ServerSubagentUpdateMessage,
+  ServerTeamUpdateMessage,
   ServerPingMessage,
   ServerErrorMessage,
   ServerSubscribedMessage,

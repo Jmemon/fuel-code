@@ -173,13 +173,47 @@ export function startConsumer(
 
           // Broadcast session lifecycle transitions for event types that cause them.
           // session.start -> lifecycle "capturing", session.end -> lifecycle "ended".
-          const { session_id, workspace_id, type: eventType } = entry.event;
+          const { session_id, workspace_id, type: eventType, data: eventData } = entry.event;
           if (session_id && workspace_id) {
             if (eventType === "session.start") {
               broadcaster.broadcastSessionUpdate(session_id, workspace_id, "detected");
             } else if (eventType === "session.end") {
               broadcaster.broadcastSessionUpdate(session_id, workspace_id, "ended");
             }
+          }
+
+          // Broadcast sub-agent status changes when agents start or stop.
+          if (eventType === "subagent.start" && workspace_id) {
+            broadcaster.broadcastSubagentUpdate(
+              (eventData.session_id as string) ?? session_id ?? "",
+              workspace_id,
+              {
+                agent_id: eventData.agent_id as string,
+                agent_type: eventData.agent_type as string,
+                agent_name: (eventData.agent_name as string | undefined) ?? undefined,
+                status: "running",
+              },
+            );
+          } else if (eventType === "subagent.stop" && workspace_id) {
+            broadcaster.broadcastSubagentUpdate(
+              (eventData.session_id as string) ?? session_id ?? "",
+              workspace_id,
+              {
+                agent_id: eventData.agent_id as string,
+                agent_type: eventData.agent_type as string,
+                status: "completed",
+              },
+            );
+          }
+
+          // Broadcast team creation events.
+          if (eventType === "team.create") {
+            broadcaster.broadcastTeamUpdate(
+              eventData.team_name as string,
+              (eventData.session_id as string) ?? session_id ?? undefined,
+              workspace_id ?? undefined,
+              1, // Initial member count (just the lead)
+            );
           }
         }
       }

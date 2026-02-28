@@ -34,6 +34,14 @@ export interface BroadcastFilter {
 // Broadcaster interface — used by the consumer and other server modules
 // ---------------------------------------------------------------------------
 
+/** Subagent info included in subagent.update broadcasts */
+export interface BroadcastSubagentInfo {
+  agent_id: string;
+  agent_type: string;
+  agent_name?: string;
+  status: "running" | "completed" | "failed";
+}
+
 /** Public interface for broadcasting updates to WebSocket clients */
 export interface WsBroadcaster {
   /** Broadcast a new event to clients subscribed to its workspace or session */
@@ -52,6 +60,19 @@ export interface WsBroadcaster {
     workspaceId: string,
     status: string,
     publicIp?: string,
+  ): void;
+  /** Broadcast a sub-agent status change (start/stop/fail) */
+  broadcastSubagentUpdate(
+    sessionId: string,
+    workspaceId: string,
+    subagent: BroadcastSubagentInfo,
+  ): void;
+  /** Broadcast a team creation or membership change */
+  broadcastTeamUpdate(
+    teamName: string,
+    leadSessionId?: string,
+    workspaceId?: string,
+    memberCount?: number,
   ): void;
 }
 
@@ -161,6 +182,41 @@ export function createBroadcaster(
         ...(publicIp !== undefined ? { public_ip: publicIp } : {}),
       };
       broadcastToMatching(msg, { workspace_id: workspaceId });
+    },
+
+    broadcastSubagentUpdate(
+      sessionId: string,
+      workspaceId: string,
+      subagent: BroadcastSubagentInfo,
+    ): void {
+      const msg: ServerMessage = {
+        type: "subagent.update",
+        session_id: sessionId,
+        workspace_id: workspaceId,
+        subagent,
+      };
+      broadcastToMatching(msg, {
+        workspace_id: workspaceId,
+        session_id: sessionId,
+      });
+    },
+
+    broadcastTeamUpdate(
+      teamName: string,
+      leadSessionId?: string,
+      workspaceId?: string,
+      memberCount?: number,
+    ): void {
+      const msg: ServerMessage = {
+        type: "team.update",
+        team_name: teamName,
+        ...(leadSessionId !== undefined ? { lead_session_id: leadSessionId } : {}),
+        ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
+        member_count: memberCount ?? 1,
+      };
+      broadcastToMatching(msg, {
+        ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
+      });
     },
   };
 }
