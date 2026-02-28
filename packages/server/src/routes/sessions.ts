@@ -482,8 +482,20 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
         // LEFT JOIN ensures messages with no content blocks still appear.
         // FILTER (WHERE cb.id IS NOT NULL) prevents null rows from appearing
         // in the json_agg when there are no matching content blocks.
-        const messages = await sql`
+        //
+        // When subagent filtering is active, LEFT JOIN the subagents table to
+        // enrich each message with sub-agent context (agent_id, agent_type, agent_name).
+        // This is skipped in default mode to preserve backward compatibility.
+        const isSubagentFiltering = subagentId !== undefined;
+
+        const rows = await sql`
           SELECT tm.*,
+            ${isSubagentFiltering ? sql`
+              tm.subagent_id,
+              sa.agent_id AS sa_agent_id,
+              sa.agent_type AS sa_agent_type,
+              sa.agent_name AS sa_agent_name,
+            ` : sql``}
             COALESCE(
               json_agg(
                 json_build_object(
@@ -506,11 +518,30 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
             ) AS content_blocks
           FROM transcript_messages tm
           LEFT JOIN content_blocks cb ON cb.message_id = tm.id
+          ${isSubagentFiltering ? sql`LEFT JOIN subagents sa ON sa.id = tm.subagent_id` : sql``}
           WHERE tm.session_id = ${id}
           ${subagentFilter}
           GROUP BY tm.id
+            ${isSubagentFiltering ? sql`, sa.agent_id, sa.agent_type, sa.agent_name` : sql``}
           ORDER BY tm.ordinal
         `;
+
+        // When sub-agent filtering is active, reshape rows to include subagent context object
+        const messages = isSubagentFiltering
+          ? rows.map((row) => {
+              const { sa_agent_id, sa_agent_type, sa_agent_name, ...rest } = row;
+              return {
+                ...rest,
+                subagent: row.subagent_id
+                  ? {
+                      agent_id: sa_agent_id,
+                      agent_type: sa_agent_type,
+                      agent_name: sa_agent_name,
+                    }
+                  : null,
+              };
+            })
+          : rows;
 
         res.json({ messages });
       } catch (err) {
