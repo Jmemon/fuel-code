@@ -35,6 +35,7 @@ import { createTimelineRouter } from "./routes/timeline.js";
 import { createPromptsRouter } from "./routes/prompts.js";
 import { createWorkspacesRouter } from "./routes/workspaces.js";
 import { createDevicesRouter } from "./routes/devices.js";
+import { createTeamsRouter } from "./routes/teams.js";
 
 /** Dependencies injected into createApp for testability */
 export interface AppDeps {
@@ -135,6 +136,10 @@ export function createApp(deps: AppDeps): express.Express {
   // Read-only aggregation endpoints for workspaces and devices.
   app.use("/api", createWorkspacesRouter({ sql: deps.sql, logger }));
   app.use("/api", createDevicesRouter({ sql: deps.sql, logger }));
+
+  // --- 6h. Teams query routes (Phase 4) ---
+  // Read-only endpoints for listing teams and viewing team detail with members.
+  app.use("/api", createTeamsRouter({ sql: deps.sql, logger }));
 
   // --- 7. Error handler — MUST be registered last ---
   app.use(errorHandler);
