@@ -4,6 +4,7 @@
  * Used by:
  *   - GET /api/sessions — list with filtering and cursor-based pagination
  *   - PATCH /api/sessions/:id — update tags or summary
+ *   - POST /api/sessions/batch-status — bulk lifecycle status lookup
  *
  * The sessionListQuerySchema validates query string parameters (all optional),
  * with coerce on `limit` since query strings are always strings.
@@ -105,3 +106,15 @@ export function parseLifecycleParam(
   }
   return values as typeof VALID_LIFECYCLES[number][];
 }
+
+/**
+ * Schema for POST /api/sessions/batch-status request body.
+ * Accepts an array of session IDs and returns their lifecycle/parse_status.
+ * Capped at 500 to prevent oversized queries.
+ */
+export const batchStatusRequestSchema = z.object({
+  session_ids: z.array(z.string()).min(1).max(500),
+});
+
+/** Inferred type for batch status request */
+export type BatchStatusRequest = z.infer<typeof batchStatusRequestSchema>;
