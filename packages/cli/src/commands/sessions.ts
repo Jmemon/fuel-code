@@ -179,7 +179,7 @@ export function createSessionsCommand(): Command {
     .option("--live", "Show only live (capturing) sessions")
     .option("--lifecycle <state>", "Filter by lifecycle state")
     .option("--tag <tag>", "Filter by tag")
-    .option("-l, --limit <n>", "Max results (default 20)", "20")
+    .option("-n, --limit <n>", "Results per page (default 20)", "20")
     .option("--cursor <cursor>", "Pagination cursor for next page")
     .option("--json", "Output raw JSON")
     .action(async (opts) => {
