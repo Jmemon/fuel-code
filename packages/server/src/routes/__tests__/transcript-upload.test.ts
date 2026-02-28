@@ -97,13 +97,14 @@ function createMockSql() {
       return Promise.resolve(workspace ? [workspace] : []);
     }
 
-    // Session update (transcript_s3_key)
+    // Session update (transcript_s3_key) — returns RETURNING lifecycle
     if (query.includes("UPDATE sessions") && query.includes("transcript_s3_key")) {
       updateCalls.push({
         s3Key: String(values[0]),
         sessionId: String(values[1]),
       });
-      return Promise.resolve([]);
+      const session = SESSION_DB[String(values[1])];
+      return Promise.resolve(session ? [{ lifecycle: session.lifecycle }] : []);
     }
 
     // Health check fallback

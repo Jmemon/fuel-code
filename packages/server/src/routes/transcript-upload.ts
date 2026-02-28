@@ -151,15 +151,21 @@ export function createTranscriptUploadRouter(deps: {
 
         await s3.upload(s3Key, body, "application/x-ndjson");
 
-        // --- Step 7: Update session with the S3 key ---
-        await sql`
+        // --- Step 7: Update session with the S3 key and get CURRENT lifecycle ---
+        // RETURNING lifecycle gives us the row's actual state after the write,
+        // avoiding a stale-read race with the session.end event handler.
+        // Without this, if session.end transitions lifecycle to "ended" between
+        // our initial SELECT (step 2) and this UPDATE, we'd use the stale
+        // "detected" value and neither side would trigger the pipeline.
+        const [updatedSession] = await sql`
           UPDATE sessions
           SET transcript_s3_key = ${s3Key}, updated_at = now()
           WHERE id = ${sessionId}
+          RETURNING lifecycle
         `;
 
         // --- Step 8: Trigger pipeline if session has already ended ---
-        const lifecycle = session.lifecycle as string;
+        const lifecycle = updatedSession.lifecycle as string;
         const pipelineTriggered = lifecycle === "ended";
 
         if (pipelineTriggered) {
