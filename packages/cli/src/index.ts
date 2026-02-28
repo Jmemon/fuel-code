@@ -112,8 +112,8 @@ program.addCommand(createStatusCommand());
 program.addCommand(createSessionsCommand());
 program.addCommand(createTimelineCommand());
 
-// Register emit command (Task 10: emit events with local queue fallback)
-program.addCommand(createEmitCommand());
+// Register emit command (internal: called by hooks, hidden from help)
+program.addCommand(createEmitCommand(), { hidden: true });
 
 // Register queue management command (Task 12: queue drainer)
 program.addCommand(createQueueCommand());
@@ -121,8 +121,8 @@ program.addCommand(createQueueCommand());
 // Register hooks command (Task 13: Claude Code hook installation and management)
 program.addCommand(createHooksCommand());
 
-// Register cc-hook command (internal: called by CC hooks in settings.json)
-program.addCommand(createCCHookCommand());
+// Register cc-hook command (internal: called by CC hooks, hidden from help)
+program.addCommand(createCCHookCommand(), { hidden: true });
 
 // Register transcript command (Task 8: transcript upload for session post-processing)
 program.addCommand(createTranscriptCommand());
