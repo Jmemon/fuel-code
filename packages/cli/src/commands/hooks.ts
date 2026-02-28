@@ -4,8 +4,13 @@
  * Manages both Claude Code (CC) hook installation and git hook installation
  * for fuel-code activity tracking.
  *
- * CC hooks: bash scripts registered in ~/.claude/settings.json that fire
- * on SessionStart/SessionEnd events.
+ * CC hooks: commands registered in ~/.claude/settings.json that fire on
+ * various CC lifecycle events. Currently registers 10 hook entries across
+ * 7 event types:
+ *   - SessionStart, SessionEnd (backgrounded via bash -c)
+ *   - SubagentStart, SubagentStop
+ *   - PostToolUse with matchers: TeamCreate, Skill, EnterWorktree, SendMessage
+ *   - WorktreeCreate, WorktreeRemove
  *
  * Git hooks: bash scripts installed via core.hooksPath (global) or
  * .git/hooks/ (per-repo) that fire on post-commit, post-checkout,
@@ -41,6 +46,36 @@ const CLAUDE_SETTINGS_PATH = path.join(
   ".claude",
   "settings.json",
 );
+
+/**
+ * All CC hook entries fuel-code registers.
+ * Each entry describes one hook: the CC event name, the cc-hook subcommand,
+ * and an optional matcher (used by PostToolUse to filter by tool name).
+ *
+ * SessionStart/SessionEnd use a bash wrapper that captures stdin then
+ * backgrounds the actual processing so they never block Claude Code.
+ * All other hooks run synchronously (they are fast enough).
+ */
+interface HookDefinition {
+  event: string;
+  subcommand: string;
+  matcher?: string;
+  /** Whether to wrap the command in bash -c '...' & for background execution */
+  background?: boolean;
+}
+
+const HOOK_DEFINITIONS: HookDefinition[] = [
+  { event: "SessionStart", subcommand: "session-start", background: true },
+  { event: "SessionEnd", subcommand: "session-end", background: true },
+  { event: "SubagentStart", subcommand: "subagent-start" },
+  { event: "SubagentStop", subcommand: "subagent-stop" },
+  { event: "PostToolUse", subcommand: "post-tool-use", matcher: "TeamCreate" },
+  { event: "PostToolUse", subcommand: "post-tool-use", matcher: "Skill" },
+  { event: "PostToolUse", subcommand: "post-tool-use", matcher: "EnterWorktree" },
+  { event: "PostToolUse", subcommand: "post-tool-use", matcher: "SendMessage" },
+  { event: "WorktreeCreate", subcommand: "worktree-create" },
+  { event: "WorktreeRemove", subcommand: "worktree-remove" },
+];
 
 /**
  * Check if a hook command string belongs to fuel-code.
@@ -170,9 +205,10 @@ function createInstallSubcommand(): Command {
 /**
  * Install Claude Code hooks into ~/.claude/settings.json.
  *
- * Writes self-contained commands (`fuel-code cc-hook session-start/end`)
- * directly into settings.json. The commands are wrapped in `bash -c '... &'`
- * to fork to background so they never block Claude Code startup/shutdown.
+ * Registers all fuel-code hook entries defined in HOOK_DEFINITIONS.
+ * SessionStart/SessionEnd commands are wrapped in `bash -c '... &'` to fork
+ * to background so they never block Claude Code startup/shutdown.
+ * Other hooks run synchronously (fast enough to not block).
  *
  * No external shell scripts are referenced — the CLI itself handles all
  * hook logic via the `cc-hook` subcommand.
@@ -184,16 +220,6 @@ export async function runCCInstall(): Promise<void> {
   // Resolve how to invoke the fuel-code CLI from settings.json hooks.
   // Prefers the global `fuel-code` binary; falls back to `bun run <abs-path>`.
   const cliCommand = resolveCliCommand();
-
-  // Construct hook commands. Captures stdin synchronously (CC pipes context
-  // JSON to stdin), then backgrounds the actual processing so the hook
-  // returns immediately and doesn't block Claude Code.
-  //
-  // IMPORTANT: `bash -c 'cmd &'` redirects stdin from /dev/null for the
-  // backgrounded process (POSIX non-interactive shell behavior). We MUST
-  // read stdin BEFORE backgrounding, then pipe the captured data in.
-  const sessionStartCmd = `bash -c 'data=$(cat); printf "%s" "$data" | ${cliCommand} cc-hook session-start &'`;
-  const sessionEndCmd = `bash -c 'data=$(cat); printf "%s" "$data" | ${cliCommand} cc-hook session-end &'`;
 
   // Ensure ~/.claude/ directory exists
   if (!fs.existsSync(settingsDir)) {
@@ -221,11 +247,11 @@ export async function runCCInstall(): Promise<void> {
     settings.hooks = {};
   }
 
-  // Upsert SessionStart hook
-  upsertHook(settings.hooks, "SessionStart", sessionStartCmd);
-
-  // Upsert SessionEnd hook (fires once when the session actually terminates)
-  upsertHook(settings.hooks, "SessionEnd", sessionEndCmd);
+  // Upsert all hook entries from HOOK_DEFINITIONS
+  for (const def of HOOK_DEFINITIONS) {
+    const cmd = buildHookCommand(cliCommand, def);
+    upsertHook(settings.hooks, def.event, cmd, def.matcher);
+  }
 
   // Clean up stale Stop hook from pre-migration installs (was previously
   // used for session-end before we migrated to SessionEnd)
@@ -237,9 +263,14 @@ export async function runCCInstall(): Promise<void> {
   fs.renameSync(tmpPath, settingsPath);
 
   console.log("Claude Code hooks installed successfully.");
-  console.log(`  SessionStart → ${sessionStartCmd}`);
-  console.log(`  SessionEnd   → ${sessionEndCmd}`);
-  console.log(`  Settings     → ${settingsPath}`);
+  for (const def of HOOK_DEFINITIONS) {
+    const label = def.matcher
+      ? `${def.event}[${def.matcher}]`
+      : def.event;
+    const cmd = buildHookCommand(cliCommand, def);
+    console.log(`  ${label.padEnd(28)} → ${cmd}`);
+  }
+  console.log(`  Settings${" ".repeat(18)} → ${settingsPath}`);
 
   // Auto-trigger: scan for historical Claude Code sessions and start background backfill
   try {
@@ -260,6 +291,22 @@ export async function runCCInstall(): Promise<void> {
   } catch {
     // Backfill scan failure should never block hooks install
   }
+}
+
+/**
+ * Build the full command string for a hook definition.
+ * Background hooks (SessionStart/SessionEnd) capture stdin then fork to
+ * background so they return immediately. Other hooks run synchronously.
+ */
+function buildHookCommand(cliCommand: string, def: HookDefinition): string {
+  const base = `${cliCommand} cc-hook ${def.subcommand}`;
+  if (def.background) {
+    // IMPORTANT: `bash -c 'cmd &'` redirects stdin from /dev/null for the
+    // backgrounded process (POSIX non-interactive shell behavior). We MUST
+    // read stdin BEFORE backgrounding, then pipe the captured data in.
+    return `bash -c 'data=$(cat); printf "%s" "$data" | ${base} &'`;
+  }
+  return base;
 }
 
 /**
@@ -311,7 +358,8 @@ function createUninstallSubcommand(): Command {
 
 /**
  * Remove fuel-code CC hooks from ~/.claude/settings.json.
- * Removes the SessionStart and SessionEnd hook entries that contain fuel-code markers.
+ * Removes all fuel-code hook entries from every event type we register.
+ * Non-fuel-code hooks from other tools are preserved.
  */
 async function runCCUninstall(): Promise<void> {
   const settingsPath = getSettingsPath();
@@ -336,9 +384,13 @@ async function runCCUninstall(): Promise<void> {
     return;
   }
 
-  // Remove fuel-code entries from SessionStart and SessionEnd
-  removeHook(settings.hooks, "SessionStart");
-  removeHook(settings.hooks, "SessionEnd");
+  // Collect unique event names from HOOK_DEFINITIONS and remove fuel-code
+  // entries from each. Also remove the stale Stop hook if present.
+  const eventNames = new Set(HOOK_DEFINITIONS.map((d) => d.event));
+  eventNames.add("Stop"); // Legacy cleanup
+  for (const eventName of eventNames) {
+    removeHook(settings.hooks, eventName);
+  }
 
   // Write back
   const tmpPath = settingsPath + `.tmp-${crypto.randomUUID()}`;
@@ -369,9 +421,10 @@ export async function runStatus(): Promise<void> {
 
   console.log("Claude Code hooks:");
 
+  let hooks: Record<string, ClaudeHookConfig[]> = {};
+
   if (!fs.existsSync(settingsPath)) {
-    console.log("  SessionStart: not installed");
-    console.log("  SessionEnd:   not installed");
+    // No settings file — all hooks are not installed
   } else {
     let settings: ClaudeSettings;
     try {
@@ -382,16 +435,17 @@ export async function runStatus(): Promise<void> {
       console.error(`  Error: ${settingsPath} is not valid JSON.`);
       settings = {};
     }
+    hooks = settings.hooks ?? {};
+  }
 
-    const hooks = settings.hooks ?? {};
-    const sessionStartInstalled = hasHook(hooks, "SessionStart");
-    const sessionEndInstalled = hasHook(hooks, "SessionEnd");
-
+  // Report status for every hook definition
+  for (const def of HOOK_DEFINITIONS) {
+    const label = def.matcher
+      ? `${def.event}[${def.matcher}]:`
+      : `${def.event}:`;
+    const installed = hasHook(hooks, def.event, def.matcher);
     console.log(
-      `  SessionStart: ${sessionStartInstalled ? "installed" : "not installed"}`,
-    );
-    console.log(
-      `  SessionEnd:   ${sessionEndInstalled ? "installed" : "not installed"}`,
+      `  ${label.padEnd(29)} ${installed ? "installed" : "not installed"}`,
     );
   }
 
@@ -535,19 +589,23 @@ function resolveCliCommand(): string {
 /**
  * Upsert a fuel-code hook into a Claude Code hook event slot.
  *
- * If the slot already has a fuel-code hook (identified by FUEL_CODE_HOOK_MARKER
- * in the command string), replace it. Otherwise, append a new entry.
+ * If the slot already has a fuel-code hook in a matching config block
+ * (identified by isFuelCodeHookCommand), replace it. Otherwise, append.
  * Non-fuel-code hooks from other tools are always preserved.
  *
  * @param hooks - The hooks object from settings.json
- * @param eventName - CC hook event name (e.g., "SessionStart", "SessionEnd")
+ * @param eventName - CC hook event name (e.g., "SessionStart", "PostToolUse")
  * @param command - The full command string to register as a hook
+ * @param matcher - Optional matcher string (used by PostToolUse to filter by tool name).
+ *                  When provided, the hook is placed in a config block with that matcher.
  */
 function upsertHook(
   hooks: Record<string, ClaudeHookConfig[]>,
   eventName: string,
   command: string,
+  matcher?: string,
 ): void {
+  const targetMatcher = matcher ?? "";
   const newEntry: ClaudeHookEntry = {
     type: "command",
     command,
@@ -555,39 +613,38 @@ function upsertHook(
 
   // If no configs exist for this event, create a fresh one
   if (!hooks[eventName] || !Array.isArray(hooks[eventName])) {
-    hooks[eventName] = [{ matcher: "", hooks: [newEntry] }];
+    hooks[eventName] = [{ matcher: targetMatcher, hooks: [newEntry] }];
     return;
   }
 
   const configs = hooks[eventName];
 
-  // Look for an existing config block that has a fuel-code hook
-  for (const config of configs) {
-    if (!config.hooks || !Array.isArray(config.hooks)) {
-      continue;
+  // Find the config block with the matching matcher value
+  const matchingConfig = configs.find((c) => c.matcher === targetMatcher);
+
+  if (matchingConfig) {
+    if (!matchingConfig.hooks || !Array.isArray(matchingConfig.hooks)) {
+      matchingConfig.hooks = [newEntry];
+      return;
     }
 
-    const fuelCodeIdx = config.hooks.findIndex(
+    // Look for an existing fuel-code hook in this config block
+    const fuelCodeIdx = matchingConfig.hooks.findIndex(
       (h) => h.command && isFuelCodeHookCommand(h.command),
     );
 
     if (fuelCodeIdx !== -1) {
       // Replace existing fuel-code hook in-place
-      config.hooks[fuelCodeIdx] = newEntry;
-      return;
+      matchingConfig.hooks[fuelCodeIdx] = newEntry;
+    } else {
+      // Append to existing config block
+      matchingConfig.hooks.push(newEntry);
     }
+    return;
   }
 
-  // No existing fuel-code hook found — append to the first config's hooks array,
-  // or create a new config block if the first one has a non-empty matcher
-  const firstConfig = configs[0];
-  if (firstConfig && firstConfig.matcher === "") {
-    firstConfig.hooks = firstConfig.hooks ?? [];
-    firstConfig.hooks.push(newEntry);
-  } else {
-    // All existing configs have matchers — add a new catch-all config
-    configs.push({ matcher: "", hooks: [newEntry] });
-  }
+  // No config block with the target matcher — create a new one
+  configs.push({ matcher: targetMatcher, hooks: [newEntry] });
 }
 
 /**
@@ -624,20 +681,26 @@ function removeHook(
 }
 
 /**
- * Check if a fuel-code hook is installed for a given event name.
+ * Check if a fuel-code hook is installed for a given event name and optional matcher.
  *
  * @param hooks - The hooks object from settings.json
- * @param eventName - CC hook event name (e.g., "SessionStart", "SessionEnd")
+ * @param eventName - CC hook event name (e.g., "SessionStart", "PostToolUse")
+ * @param matcher - Optional matcher to check for (e.g., "TeamCreate").
+ *                  When provided, only config blocks with that exact matcher are checked.
  */
 function hasHook(
   hooks: Record<string, ClaudeHookConfig[]>,
   eventName: string,
+  matcher?: string,
 ): boolean {
   const configs = hooks[eventName];
   if (!Array.isArray(configs)) return false;
 
+  const targetMatcher = matcher ?? "";
+
   return configs.some(
     (config) =>
+      config.matcher === targetMatcher &&
       Array.isArray(config.hooks) &&
       config.hooks.some(
         (h) => h.command && isFuelCodeHookCommand(h.command),
