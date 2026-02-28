@@ -23,6 +23,8 @@
 
 import { Command } from "commander";
 import pino from "pino";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { createInitCommand } from "./commands/init.js";
 import { createStatusCommand } from "./commands/status.js";
 import { createSessionsCommand } from "./commands/sessions.js";
@@ -43,15 +45,34 @@ import { showGitHooksPrompt } from "./lib/git-hooks-prompt.js";
 // Logger — structured JSON logging for debugging and error tracking
 // ---------------------------------------------------------------------------
 
-/** CLI-wide logger instance. Logs to stderr so stdout stays clean for output. */
+/** CLI log file lives alongside other CLI state in ~/.fuel-code/logs/ */
+const CLI_LOG_PATH = join(homedir(), ".fuel-code", "logs", "cli.log");
+const CLI_LOG_LEVEL = process.env.LOG_LEVEL ?? "warn";
+
+/** CLI-wide logger instance. Logs to stderr + ~/.fuel-code/logs/cli.log. */
 const logger = pino({
   name: "fuel-code",
-  // Only log warnings and above by default; set LOG_LEVEL=debug for verbose output
-  level: process.env.LOG_LEVEL ?? "warn",
-  transport:
-    process.env.NODE_ENV !== "production"
-      ? { target: "pino/file", options: { destination: 2 } } // stderr
-      : undefined,
+  level: CLI_LOG_LEVEL,
+  transport: {
+    targets: [
+      // stderr for terminal output (dev only)
+      ...(process.env.NODE_ENV !== "production"
+        ? [
+            {
+              target: "pino/file",
+              options: { destination: 2 },
+              level: CLI_LOG_LEVEL,
+            },
+          ]
+        : []),
+      // JSON to log file (always — enables Claude Code log inspection)
+      {
+        target: "pino/file",
+        options: { destination: CLI_LOG_PATH, mkdir: true },
+        level: CLI_LOG_LEVEL,
+      },
+    ],
+  },
 });
 
 // ---------------------------------------------------------------------------

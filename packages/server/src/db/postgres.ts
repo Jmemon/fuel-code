@@ -12,6 +12,7 @@
 
 import postgres from "postgres";
 import { StorageError } from "@fuel-code/shared";
+import { logger } from "../logger.js";
 
 /** Default connection pool settings */
 const POOL_DEFAULTS = {
@@ -71,7 +72,7 @@ export function createDb(
   });
 
   // Log connection target without credentials
-  console.log(`[db] Pool created → ${safeLogInfo} (max: ${options?.max ?? POOL_DEFAULTS.max})`);
+  logger.info({ host: safeLogInfo, maxConnections: options?.max ?? POOL_DEFAULTS.max }, "DB pool created");
 
   return sql;
 }

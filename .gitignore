@@ -4,6 +4,7 @@ dist/
 .env
 .env.*
 *.log
+logs/
 .DS_Store
 .mcp.json
 .claude

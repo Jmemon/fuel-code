@@ -15,6 +15,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type postgres from "postgres";
+import { logger as defaultLogger } from "../logger.js";
 
 /** Advisory lock ID — chosen arbitrarily, must be consistent across instances */
 const ADVISORY_LOCK_ID = 48756301;
@@ -48,6 +49,7 @@ export interface MigrationResult {
 export async function runMigrations(
   sql: postgres.Sql,
   migrationsDir: string,
+  logger = defaultLogger,
 ): Promise<MigrationResult> {
   const result: MigrationResult = { applied: [], skipped: [], errors: [] };
 
@@ -96,12 +98,12 @@ export async function runMigrations(
         });
 
         result.applied.push(file.name);
-        console.log(`[migrator] Applied: ${file.name}`);
+        logger.info({ migration: file.name }, `Migration applied: ${file.name}`);
       } catch (err) {
         const errorMessage =
           err instanceof Error ? err.message : "Unknown migration error";
         result.errors.push({ name: file.name, error: errorMessage });
-        console.error(`[migrator] Failed: ${file.name} — ${errorMessage}`);
+        logger.error({ migration: file.name, error: errorMessage }, `Migration failed: ${file.name}`);
       }
     }
   } finally {

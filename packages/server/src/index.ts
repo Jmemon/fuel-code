@@ -28,7 +28,7 @@ import { runMigrations } from "./db/migrator.js";
 import { createRedisClient } from "./redis/client.js";
 import { ensureConsumerGroup } from "./redis/stream.js";
 import { createApp } from "./app.js";
-import { logger } from "./logger.js";
+import { logger, createLogger } from "./logger.js";
 import { createEventHandler } from "./pipeline/wire.js";
 import { startConsumer } from "./pipeline/consumer.js";
 import { createS3Client } from "./aws/s3.js";
@@ -183,9 +183,11 @@ async function main(): Promise<void> {
   // Consumer gets its own Redis client (blocking XREADGROUP commands).
   // Pipeline deps are passed through so session.end can trigger post-processing.
   // The broadcaster is passed so processed events are broadcast to WS clients.
+  // Consumer gets its own logger writing to logs/consumer.log for isolated inspection
+  const consumerLogger = createLogger("consumer", "consumer.log");
   const { registry } = createEventHandler(sql, logger, pipelineDeps);
   const consumer = startConsumer(
-    { redis: redisConsumer, sql, registry, logger, pipelineDeps, broadcaster: wsServer.broadcaster },
+    { redis: redisConsumer, sql, registry, logger: consumerLogger, pipelineDeps, broadcaster: wsServer.broadcaster },
   );
   logger.info(
     { registeredHandlers: registry.listRegisteredTypes() },

@@ -2,6 +2,10 @@
 # Uses non-standard ports (5433, 6380) to avoid conflicts with any
 # local Postgres/Redis instances running on default ports.
 # Uses tmpfs for Postgres to run entirely in RAM for speed.
+#
+# Container logs are written to logs/docker/ via json-file driver with rotation.
+# Inspect them with: bun run logs:docker
+# Or read directly: cat logs/docker/postgres.log, etc.
 
 services:
   postgres:
@@ -14,11 +18,21 @@ services:
       - "5433:5432"    # non-standard port to avoid conflicts
     tmpfs:
       - /var/lib/postgresql/data  # RAM disk for speed
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   redis:
     image: redis:7-alpine
     ports:
       - "6380:6379"    # non-standard port to avoid conflicts
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # LocalStack provides a local S3-compatible service for transcript storage tests.
   # Phase 2 E2E tests use this to verify upload, download, and presigned URL flows
@@ -30,3 +44,8 @@ services:
       DEFAULT_REGION: us-east-1
     ports:
       - "4566:4566"          # LocalStack gateway port
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

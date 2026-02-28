@@ -7,7 +7,9 @@
   "scripts": {
     "build": "turbo build",
     "test": "turbo test",
-    "clean": "rm -rf packages/*/dist"
+    "clean": "rm -rf packages/*/dist",
+    "logs:docker": "mkdir -p logs/docker && docker compose -f docker-compose.test.yml logs --no-log-prefix postgres > logs/docker/postgres.log 2>&1 && docker compose -f docker-compose.test.yml logs --no-log-prefix redis > logs/docker/redis.log 2>&1 && docker compose -f docker-compose.test.yml logs --no-log-prefix localstack > logs/docker/localstack.log 2>&1 && echo 'Docker logs captured to logs/docker/'",
+    "logs:clear": "rm -rf logs/ && echo 'All log files cleared'"
   },
   "devDependencies": {
     "@types/bun": "^1.3.9",

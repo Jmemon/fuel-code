@@ -15,6 +15,7 @@
 
 import Redis from "ioredis";
 import { StorageError } from "@fuel-code/shared";
+import { logger } from "../logger.js";
 
 /** Maximum number of reconnection attempts before giving up */
 const MAX_RETRIES = 20;
@@ -59,8 +60,9 @@ export function createRedisClient(url: string): Redis {
      */
     retryStrategy(times: number): number | null {
       if (times > MAX_RETRIES) {
-        console.error(
-          `[redis] Exceeded ${MAX_RETRIES} reconnection attempts — giving up`,
+        logger.error(
+          { attempts: MAX_RETRIES },
+          `Exceeded ${MAX_RETRIES} reconnection attempts — giving up`,
         );
         return null;
       }
@@ -72,19 +74,19 @@ export function createRedisClient(url: string): Redis {
   // --- Lifecycle event listeners ---
 
   redis.on("connect", () => {
-    console.info("[redis] Connected to Redis");
+    logger.info("Connected to Redis");
   });
 
   redis.on("error", (err: Error) => {
-    console.error(`[redis] Error: ${err.message}`);
+    logger.error({ err }, "Redis error");
   });
 
   redis.on("close", () => {
-    console.warn("[redis] Connection closed");
+    logger.warn("Redis connection closed");
   });
 
   redis.on("reconnecting", () => {
-    console.warn("[redis] Reconnecting...");
+    logger.warn("Redis reconnecting...");
   });
 
   return redis;
