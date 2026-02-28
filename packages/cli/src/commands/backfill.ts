@@ -159,7 +159,9 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
   // Build the set of already-ingested sessions for resume
   const alreadyIngested = new Set(state.ingestedSessionIds);
 
-  // Phase 3: Ingest sessions
+  // Phase 3+4: Ingest sessions, then wait for server-side processing.
+  // Both progress bars are rendered simultaneously so the user sees the
+  // full pipeline at a glance.
   console.error("");
 
   // Set up Ctrl-C handling for clean abort
@@ -169,6 +171,18 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
     abortController.abort();
   };
   process.on("SIGINT", onSigint);
+
+  // Dual-bar rendering state — two lines updated in place via ANSI escapes
+  let dualBarInit = false;
+  const writeDualBars = (line1: string, line2: string): void => {
+    if (dualBarInit) {
+      // Move cursor up one line so we overwrite both lines
+      process.stderr.write("\x1b[1A\r");
+    }
+    // Clear each line before writing to avoid leftover characters
+    process.stderr.write(`\x1b[2K${line1}\n\x1b[2K${line2}`);
+    dualBarInit = true;
+  };
 
   try {
     const concurrency = Math.max(1, parseInt(opts.concurrency, 10) || 10);
@@ -184,19 +198,17 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
       alreadyIngested,
       concurrency,
       onProgress: (progress: BackfillProgress) => {
-        // Print progress line (overwrite previous with \r)
         const bar = buildProgressBar(progress.completed, progress.total, 30);
         const sessionShort = progress.currentSession
           ? progress.currentSession.slice(0, 8) + "..."
           : "";
-        process.stderr.write(
-          `\rBackfilling: ${bar} ${progress.completed}/${progress.total}  ${sessionShort}    `,
+        const failStr = progress.failed > 0 ? `  (${progress.failed} failed)` : "";
+        writeDualBars(
+          `  Uploading:   ${bar} ${progress.completed}/${progress.total}  ${sessionShort}${failStr}`,
+          `  Processing:  waiting for uploads...`,
         );
       },
     });
-
-    // Clear progress line
-    process.stderr.write("\r" + " ".repeat(80) + "\r");
 
     // Save final state
     const finalState: BackfillState = {
@@ -214,24 +226,25 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
     };
     saveBackfillState(finalState, stateDir);
 
-    // Print results
-    console.log("Backfill complete!");
-    console.log(`  Ingested:  ${result.ingested} sessions`);
-    console.log(
-      `  Skipped:   ${result.skipped} (already tracked)`,
-    );
-    console.log(`  Failed:    ${result.failed}`);
-
     // Phase 4: Wait for server-side processing (parse + summarize)
-    // Collect all session IDs that were successfully ingested
     const ingestedIds = scanResult.discovered
       .filter((s) => !alreadyIngested.has(s.sessionId))
       .slice(0, result.ingested)
       .map((s) => s.sessionId);
 
+    // Freeze upload bar as "done" for the processing phase
+    const uploadTotal = result.ingested + result.skipped + result.failed;
+    const uploadDoneStr = result.failed > 0
+      ? `done (${result.failed} failed)`
+      : "done";
+    const uploadDoneLine = `  Uploading:   ${buildProgressBar(uploadTotal, uploadTotal, 30)} ${uploadTotal}/${uploadTotal}  ${uploadDoneStr}`;
+
     if (ingestedIds.length > 0) {
-      console.error("");
-      console.error("Waiting for server-side processing...");
+      // Update upload bar to "done", show processing bar starting
+      writeDualBars(
+        uploadDoneLine,
+        `  Processing:  ${buildProgressBar(0, ingestedIds.length, 30)} 0/${ingestedIds.length}`,
+      );
 
       const pipelineResult = await waitForPipelineCompletion(ingestedIds, {
         serverUrl: config.backend.url,
@@ -239,49 +252,63 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
         signal: abortController.signal,
         onProgress: (progress: PipelineWaitProgress) => {
           const bar = buildProgressBar(progress.completed, progress.total, 30);
-          // Build status breakdown string for non-terminal states
+          // Show breakdown of non-terminal states so user knows what's pending
           const parts: string[] = [];
-          for (const [state, count] of Object.entries(progress.byLifecycle)) {
-            if (count > 0 && state !== "parsed" && state !== "summarized" && state !== "archived" && state !== "failed") {
-              parts.push(`${count} ${state}`);
+          for (const [lifecycle, count] of Object.entries(progress.byLifecycle)) {
+            if (count > 0 && lifecycle !== "parsed" && lifecycle !== "summarized" && lifecycle !== "archived" && lifecycle !== "failed") {
+              parts.push(`${count} ${lifecycle}`);
             }
           }
           const statusStr = parts.length > 0 ? `  ${parts.join(", ")}` : "";
-          process.stderr.write(
-            `\rProcessing:  ${bar} ${progress.completed}/${progress.total}${statusStr}    `,
+          writeDualBars(
+            uploadDoneLine,
+            `  Processing:  ${bar} ${progress.completed}/${progress.total}${statusStr}`,
           );
         },
       });
 
-      // Clear progress line
-      process.stderr.write("\r" + " ".repeat(80) + "\r");
+      // Clear dual bars and print final summary
+      process.stderr.write("\n");
 
+      console.log("");
       if (pipelineResult.completed) {
-        console.log("Processing complete!");
+        console.log("Backfill complete!");
       } else if (pipelineResult.timedOut) {
-        console.log("Processing timed out (server is still working in the background).");
+        console.log("Backfill uploaded. Processing timed out (server still working in background).");
       } else if (pipelineResult.aborted) {
-        console.log("Processing watch cancelled (server is still working in the background).");
+        console.log("Backfill uploaded. Processing watch cancelled (server still working in background).");
       }
 
-      // Show processing summary
+      // Summary
+      console.log(`  Uploaded:   ${result.ingested} sessions` +
+        (result.skipped > 0 ? ` (${result.skipped} skipped)` : ""));
       const ps = pipelineResult.summary;
-      if (ps.summarized > 0) console.log(`  Summarized: ${ps.summarized}`);
-      if (ps.parsed > 0)     console.log(`  Parsed:     ${ps.parsed}`);
-      if (ps.archived > 0)   console.log(`  Archived:   ${ps.archived}`);
-      if (ps.failed > 0)     console.log(`  Failed:     ${ps.failed}`);
-      if (ps.pending > 0)    console.log(`  Pending:    ${ps.pending}`);
+      const processedParts: string[] = [];
+      if (ps.summarized > 0) processedParts.push(`${ps.summarized} summarized`);
+      if (ps.parsed > 0) processedParts.push(`${ps.parsed} parsed`);
+      if (ps.archived > 0) processedParts.push(`${ps.archived} archived`);
+      if (ps.failed > 0) processedParts.push(`${ps.failed} failed`);
+      if (ps.pending > 0) processedParts.push(`${ps.pending} pending`);
+      console.log(`  Processed:  ${ps.summarized + ps.parsed + ps.archived}/${ingestedIds.length}` +
+        (processedParts.length > 0 ? ` (${processedParts.join(", ")})` : ""));
+    } else {
+      // Nothing to process (all skipped/failed)
+      process.stderr.write("\n");
+      console.log("");
+      console.log("Backfill complete!");
+      console.log(`  Uploaded:   ${result.ingested} sessions` +
+        (result.skipped > 0 ? ` (${result.skipped} skipped)` : ""));
     }
 
+    // Show errors at the end with full detail
     if (result.errors.length > 0) {
-      console.log("Errors:");
+      console.log("");
+      console.log(`Errors (${result.errors.length}):`);
       for (const err of result.errors.slice(0, 20)) {
-        console.log(`  session ${err.sessionId}: ${err.error}`);
+        console.log(`  ${err.sessionId.slice(0, 8)}  ${err.error}`);
       }
       if (result.errors.length > 20) {
-        console.log(
-          `  ... and ${result.errors.length - 20} more errors`,
-        );
+        console.log(`  ... and ${result.errors.length - 20} more`);
       }
     }
   } finally {
