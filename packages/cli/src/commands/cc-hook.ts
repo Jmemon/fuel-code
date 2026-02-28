@@ -11,8 +11,13 @@
  * source repo being present at a specific path.
  *
  * Subcommands:
- *   session-start — Handle SessionStart hook (emits session.start event)
- *   session-end   — Handle SessionEnd hook (emits session.end event + transcript upload)
+ *   session-start   — Handle SessionStart hook (emits session.start event)
+ *   session-end     — Handle SessionEnd hook (emits session.end event + transcript upload)
+ *   subagent-start  — Handle SubagentStart hook (emits subagent.start event)
+ *   subagent-stop   — Handle SubagentStop hook (emits subagent.stop event)
+ *   post-tool-use   — Handle PostToolUse hook (dispatches by tool_name)
+ *   worktree-create — Handle WorktreeCreate hook (emits worktree.create event)
+ *   worktree-remove — Handle WorktreeRemove hook (emits worktree.remove event)
  *
  * Constraints:
  *   - Must produce NO stdout (could confuse CC)
@@ -20,6 +25,7 @@
  *   - Logs go to stderr only via the emit command's logger
  */
 
+import { basename } from "node:path";
 import { Command } from "commander";
 import { execSync } from "../lib/exec.js";
 import { deriveWorkspaceCanonicalId } from "../lib/workspace.js";
@@ -52,6 +58,11 @@ export function createCCHookCommand(): Command {
 
   cmd.addCommand(createSessionStartHandler());
   cmd.addCommand(createSessionEndHandler());
+  cmd.addCommand(createSubagentStartHandler());
+  cmd.addCommand(createSubagentStopHandler());
+  cmd.addCommand(createPostToolUseHandler());
+  cmd.addCommand(createWorktreeCreateHandler());
+  cmd.addCommand(createWorktreeRemoveHandler());
 
   return cmd;
 }
@@ -204,6 +215,319 @@ function createSessionEndHandler(): Command {
         if (transcriptPath) {
           await runTranscriptUpload(sessionId, transcriptPath);
         }
+      } catch {
+        // Swallow all errors — hooks must never fail
+      }
+
+      process.exit(0);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// subagent-start handler
+// ---------------------------------------------------------------------------
+
+function createSubagentStartHandler(): Command {
+  return new Command("subagent-start")
+    .description("Handle Claude Code SubagentStart hook")
+    .action(async () => {
+      try {
+        const input = await readStdin();
+
+        let context: Record<string, unknown>;
+        try {
+          context = JSON.parse(input);
+        } catch {
+          process.exit(0);
+          return;
+        }
+
+        const sessionId = String(context.session_id ?? "").trim();
+        if (!sessionId) {
+          process.exit(0);
+          return;
+        }
+
+        const cwd = String(context.cwd ?? process.cwd()).trim();
+        const agentId = String(context.agent_id ?? "").trim();
+        const agentType = String(context.agent_type ?? "").trim();
+
+        if (!agentId) {
+          console.error("[cc-hook subagent-start] missing agent_id");
+          process.exit(0);
+          return;
+        }
+
+        const workspace = resolveWorkspace(cwd);
+
+        const payload = {
+          session_id: sessionId,
+          agent_id: agentId,
+          agent_type: agentType,
+        };
+
+        await runEmit("subagent.start", {
+          data: JSON.stringify(payload),
+          workspaceId: workspace.workspaceId,
+        });
+      } catch {
+        // Swallow all errors — hooks must never fail
+      }
+
+      process.exit(0);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// subagent-stop handler
+// ---------------------------------------------------------------------------
+
+function createSubagentStopHandler(): Command {
+  return new Command("subagent-stop")
+    .description("Handle Claude Code SubagentStop hook")
+    .action(async () => {
+      try {
+        const input = await readStdin();
+
+        let context: Record<string, unknown>;
+        try {
+          context = JSON.parse(input);
+        } catch {
+          process.exit(0);
+          return;
+        }
+
+        const sessionId = String(context.session_id ?? "").trim();
+        if (!sessionId) {
+          process.exit(0);
+          return;
+        }
+
+        const cwd = String(context.cwd ?? process.cwd()).trim();
+        const agentId = String(context.agent_id ?? "").trim();
+        const agentType = String(context.agent_type ?? "").trim();
+        const agentTranscriptPath = String(
+          context.agent_transcript_path ?? "",
+        ).trim();
+
+        if (!agentId) {
+          console.error("[cc-hook subagent-stop] missing agent_id");
+          process.exit(0);
+          return;
+        }
+
+        const workspace = resolveWorkspace(cwd);
+
+        const payload = {
+          session_id: sessionId,
+          agent_id: agentId,
+          agent_type: agentType,
+          agent_transcript_path: agentTranscriptPath,
+        };
+
+        await runEmit("subagent.stop", {
+          data: JSON.stringify(payload),
+          workspaceId: workspace.workspaceId,
+        });
+      } catch {
+        // Swallow all errors — hooks must never fail
+      }
+
+      process.exit(0);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// post-tool-use handler
+// Dispatches different event types based on tool_name from CC's PostToolUse
+// hook. Unknown tool names are silently ignored.
+// ---------------------------------------------------------------------------
+
+function createPostToolUseHandler(): Command {
+  return new Command("post-tool-use")
+    .description("Handle Claude Code PostToolUse hook")
+    .action(async () => {
+      try {
+        const input = await readStdin();
+
+        let context: Record<string, unknown>;
+        try {
+          context = JSON.parse(input);
+        } catch {
+          process.exit(0);
+          return;
+        }
+
+        const sessionId = String(context.session_id ?? "").trim();
+        if (!sessionId) {
+          process.exit(0);
+          return;
+        }
+
+        const toolName = String(context.tool_name ?? "").trim();
+        if (!toolName) {
+          process.exit(0);
+          return;
+        }
+
+        const toolInput =
+          context.tool_input &&
+          typeof context.tool_input === "object" &&
+          !Array.isArray(context.tool_input)
+            ? (context.tool_input as Record<string, unknown>)
+            : {};
+
+        const cwd = String(context.cwd ?? process.cwd()).trim();
+        const workspace = resolveWorkspace(cwd);
+
+        let eventType: string;
+        let payload: Record<string, unknown>;
+
+        switch (toolName) {
+          case "TeamCreate":
+            eventType = "team.create";
+            payload = {
+              session_id: sessionId,
+              team_name: String(toolInput.team_name ?? "").trim(),
+              description: String(toolInput.description ?? "").trim(),
+            };
+            break;
+
+          case "Skill":
+            eventType = "skill.invoke";
+            payload = {
+              session_id: sessionId,
+              skill_name: String(toolInput.skill ?? "").trim(),
+              args: String(toolInput.args ?? "").trim(),
+            };
+            break;
+
+          case "EnterWorktree":
+            eventType = "worktree.create";
+            payload = {
+              session_id: sessionId,
+              worktree_name: String(toolInput.name ?? "").trim(),
+            };
+            break;
+
+          case "SendMessage":
+            eventType = "team.message";
+            payload = {
+              session_id: sessionId,
+              team_name: String(toolInput.team_name ?? "").trim(),
+              message_type: String(toolInput.type ?? "").trim(),
+              from: String(context.from ?? "").trim(),
+              to: String(toolInput.recipient ?? "").trim(),
+            };
+            break;
+
+          default:
+            // Unknown tool — silently exit
+            process.exit(0);
+            return;
+        }
+
+        await runEmit(eventType, {
+          data: JSON.stringify(payload),
+          workspaceId: workspace.workspaceId,
+        });
+      } catch {
+        // Swallow all errors — hooks must never fail
+      }
+
+      process.exit(0);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// worktree-create handler
+// ---------------------------------------------------------------------------
+
+function createWorktreeCreateHandler(): Command {
+  return new Command("worktree-create")
+    .description("Handle Claude Code WorktreeCreate hook")
+    .action(async () => {
+      try {
+        const input = await readStdin();
+
+        let context: Record<string, unknown>;
+        try {
+          context = JSON.parse(input);
+        } catch {
+          process.exit(0);
+          return;
+        }
+
+        const sessionId = String(context.session_id ?? "").trim();
+        if (!sessionId) {
+          process.exit(0);
+          return;
+        }
+
+        const cwd = String(context.cwd ?? process.cwd()).trim();
+        const name = String(context.name ?? "").trim();
+
+        const workspace = resolveWorkspace(cwd);
+
+        const payload = {
+          session_id: sessionId,
+          worktree_name: name,
+        };
+
+        await runEmit("worktree.create", {
+          data: JSON.stringify(payload),
+          workspaceId: workspace.workspaceId,
+        });
+      } catch {
+        // Swallow all errors — hooks must never fail
+      }
+
+      process.exit(0);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// worktree-remove handler
+// ---------------------------------------------------------------------------
+
+function createWorktreeRemoveHandler(): Command {
+  return new Command("worktree-remove")
+    .description("Handle Claude Code WorktreeRemove hook")
+    .action(async () => {
+      try {
+        const input = await readStdin();
+
+        let context: Record<string, unknown>;
+        try {
+          context = JSON.parse(input);
+        } catch {
+          process.exit(0);
+          return;
+        }
+
+        const sessionId = String(context.session_id ?? "").trim();
+        if (!sessionId) {
+          process.exit(0);
+          return;
+        }
+
+        const cwd = String(context.cwd ?? process.cwd()).trim();
+        const worktreePath = String(context.worktree_path ?? "").trim();
+
+        // Derive a human-friendly name from the path's final segment
+        const worktreeName = worktreePath ? basename(worktreePath) : "";
+
+        const workspace = resolveWorkspace(cwd);
+
+        const payload = {
+          session_id: sessionId,
+          worktree_name: worktreeName,
+        };
+
+        await runEmit("worktree.remove", {
+          data: JSON.stringify(payload),
+          workspaceId: workspace.workspaceId,
+        });
       } catch {
         // Swallow all errors — hooks must never fail
       }
