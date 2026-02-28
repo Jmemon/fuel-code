@@ -21,12 +21,14 @@ import * as path from "node:path";
 import {
   scanForSessions,
   ingestBackfillSessions,
+  waitForPipelineCompletion,
   loadBackfillState,
   saveBackfillState,
   type DiscoveredSession,
   type ScanResult,
   type BackfillProgress,
   type BackfillState,
+  type PipelineWaitProgress,
 } from "@fuel-code/core";
 import { configExists, loadConfig, getConfigDir } from "../lib/config.js";
 
@@ -219,6 +221,57 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
       `  Skipped:   ${result.skipped} (already tracked)`,
     );
     console.log(`  Failed:    ${result.failed}`);
+
+    // Phase 4: Wait for server-side processing (parse + summarize)
+    // Collect all session IDs that were successfully ingested
+    const ingestedIds = scanResult.discovered
+      .filter((s) => !alreadyIngested.has(s.sessionId))
+      .slice(0, result.ingested)
+      .map((s) => s.sessionId);
+
+    if (ingestedIds.length > 0) {
+      console.error("");
+      console.error("Waiting for server-side processing...");
+
+      const pipelineResult = await waitForPipelineCompletion(ingestedIds, {
+        serverUrl: config.backend.url,
+        apiKey: config.backend.api_key,
+        signal: abortController.signal,
+        onProgress: (progress: PipelineWaitProgress) => {
+          const bar = buildProgressBar(progress.completed, progress.total, 30);
+          // Build status breakdown string for non-terminal states
+          const parts: string[] = [];
+          for (const [state, count] of Object.entries(progress.byLifecycle)) {
+            if (count > 0 && state !== "parsed" && state !== "summarized" && state !== "archived" && state !== "failed") {
+              parts.push(`${count} ${state}`);
+            }
+          }
+          const statusStr = parts.length > 0 ? `  ${parts.join(", ")}` : "";
+          process.stderr.write(
+            `\rProcessing:  ${bar} ${progress.completed}/${progress.total}${statusStr}    `,
+          );
+        },
+      });
+
+      // Clear progress line
+      process.stderr.write("\r" + " ".repeat(80) + "\r");
+
+      if (pipelineResult.completed) {
+        console.log("Processing complete!");
+      } else if (pipelineResult.timedOut) {
+        console.log("Processing timed out (server is still working in the background).");
+      } else if (pipelineResult.aborted) {
+        console.log("Processing watch cancelled (server is still working in the background).");
+      }
+
+      // Show processing summary
+      const ps = pipelineResult.summary;
+      if (ps.summarized > 0) console.log(`  Summarized: ${ps.summarized}`);
+      if (ps.parsed > 0)     console.log(`  Parsed:     ${ps.parsed}`);
+      if (ps.archived > 0)   console.log(`  Archived:   ${ps.archived}`);
+      if (ps.failed > 0)     console.log(`  Failed:     ${ps.failed}`);
+      if (ps.pending > 0)    console.log(`  Pending:    ${ps.pending}`);
+    }
 
     if (result.errors.length > 0) {
       console.log("Errors:");
