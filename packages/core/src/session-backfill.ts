@@ -8,7 +8,7 @@
  *   - Directory naming: hyphens replace slashes (e.g., -Users-john-Desktop-repo)
  *   - Files are UUID-named: {uuid}.jsonl
  *   - sessions-index.json provides pre-indexed metadata when available
- *   - Subagent directories ({session_id}/subagents/) should be skipped
+ *   - Subagent directories ({session_id}/subagents/) contain agent-*.jsonl files
  *
  * The scanner has two phases:
  *   1. Discovery: scan directories, collect metadata, resolve workspaces
@@ -59,20 +59,36 @@ export interface DiscoveredSession {
   messageCount: number | null;
 }
 
+/** A sub-agent transcript discovered inside a session's subagents/ directory */
+export interface DiscoveredSubagentTranscript {
+  /** UUID of the parent session (the directory name containing subagents/) */
+  parentSessionId: string;
+  /** Agent ID extracted from the filename (agent-<id>.jsonl → <id>) */
+  agentId: string;
+  /** Absolute path to the sub-agent JSONL transcript file */
+  transcriptPath: string;
+  /** File size in bytes */
+  fileSizeBytes: number;
+}
+
 /** Result from scanning all Claude project directories */
 export interface ScanResult {
   /** Sessions discovered and ready for ingestion */
   discovered: DiscoveredSession[];
+  /** Sub-agent transcripts discovered inside session directories */
+  subagentTranscripts: DiscoveredSubagentTranscript[];
   /** Errors encountered during scanning (non-fatal) */
   errors: Array<{ path: string; error: string }>;
   /** Counts of intentionally skipped items */
   skipped: {
-    /** Subagent transcript directories */
+    /** Non-session subdirectories (tool-results/, etc.) */
     subagents: number;
     /** Non-JSONL files (sessions-index.json, .DS_Store, etc.) */
     nonJsonl: number;
     /** Files modified recently (potentially active sessions) */
     potentiallyActive: number;
+    /** Sub-agent transcripts skipped because they are still active */
+    activeSubagents: number;
   };
 }
 
@@ -326,8 +342,9 @@ export async function scanForSessions(
 
   const result: ScanResult = {
     discovered: [],
+    subagentTranscripts: [],
     errors: [],
-    skipped: { subagents: 0, nonJsonl: 0, potentiallyActive: 0 },
+    skipped: { subagents: 0, nonJsonl: 0, potentiallyActive: 0, activeSubagents: 0 },
   };
 
   // Check if the projects directory exists
@@ -387,9 +404,54 @@ export async function scanForSessions(
     for (const entry of entries) {
       const entryPath = path.join(projectDirPath, entry.name);
 
-      // Skip subdirectories (subagent transcripts live in {sessionId}/subagents/)
+      // Discover sub-agent transcripts inside UUID-named session directories.
+      // Other subdirectories (tool-results/, etc.) are still skipped.
       if (entry.isDirectory()) {
-        result.skipped.subagents++;
+        if (UUID_REGEX.test(entry.name)) {
+          const subagentsDir = path.join(projectDirPath, entry.name, "subagents");
+          if (fs.existsSync(subagentsDir)) {
+            try {
+              const saFiles = fs.readdirSync(subagentsDir);
+              for (const saFile of saFiles) {
+                if (saFile.startsWith("agent-") && saFile.endsWith(".jsonl")) {
+                  const saPath = path.join(subagentsDir, saFile);
+                  const agentId = saFile.replace("agent-", "").replace(".jsonl", "");
+
+                  // Skip active sub-agent transcripts (lsof check)
+                  if (isSessionActive(saPath)) {
+                    result.skipped.activeSubagents++;
+                    continue;
+                  }
+
+                  let saFileStat: fs.Stats;
+                  try {
+                    saFileStat = fs.statSync(saPath);
+                  } catch {
+                    result.errors.push({
+                      path: saPath,
+                      error: "Failed to stat sub-agent transcript file",
+                    });
+                    continue;
+                  }
+
+                  result.subagentTranscripts.push({
+                    parentSessionId: entry.name,
+                    agentId,
+                    transcriptPath: saPath,
+                    fileSizeBytes: saFileStat.size,
+                  });
+                }
+              }
+            } catch (err) {
+              result.errors.push({
+                path: subagentsDir,
+                error: `Failed to read subagents directory: ${err instanceof Error ? err.message : String(err)}`,
+              });
+            }
+          }
+        } else {
+          result.skipped.subagents++;
+        }
         continue;
       }
 
@@ -788,6 +850,204 @@ export async function ingestBackfillSessions(
 
   result.durationMs = Date.now() - startTime;
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// ingestSubagentTranscripts: upload discovered sub-agent transcripts
+// ---------------------------------------------------------------------------
+
+/** Result from sub-agent transcript ingestion */
+export interface SubagentIngestResult {
+  /** Number of sub-agent transcripts successfully uploaded */
+  uploaded: number;
+  /** Number skipped because parent session wasn't ingested */
+  skippedNoParent: number;
+  /** Number that failed to upload */
+  failed: number;
+  /** Per-transcript error details */
+  errors: Array<{ parentSessionId: string; agentId: string; error: string }>;
+  /** Total bytes uploaded */
+  totalSizeBytes: number;
+}
+
+/** Progress callback data for sub-agent transcript ingestion */
+export interface SubagentIngestProgress {
+  /** Total sub-agent transcripts to process */
+  total: number;
+  /** Number completed (uploaded, skipped, or failed) */
+  completed: number;
+  /** Currently processing */
+  currentAgentId: string | null;
+}
+
+/** Dependencies for sub-agent transcript ingestion */
+export interface SubagentIngestDeps {
+  /** Base URL of the fuel-code backend */
+  serverUrl: string;
+  /** API key for authentication */
+  apiKey: string;
+  /** Set of parent session IDs that were successfully ingested */
+  ingestedParentSessionIds: Set<string>;
+  /** Progress callback */
+  onProgress?: (progress: SubagentIngestProgress) => void;
+  /** AbortSignal for clean cancellation */
+  signal?: AbortSignal;
+}
+
+/**
+ * Upload discovered sub-agent transcripts to the backend.
+ *
+ * Only uploads transcripts whose parent session was successfully ingested
+ * (i.e., the session row exists on the server). Uses the transcript upload
+ * endpoint with ?subagent_id query param (Task 14 pattern).
+ *
+ * Processes sequentially to avoid overwhelming the server — sub-agent
+ * transcripts are typically small and secondary to the main session upload.
+ */
+export async function ingestSubagentTranscripts(
+  transcripts: DiscoveredSubagentTranscript[],
+  deps: SubagentIngestDeps,
+): Promise<SubagentIngestResult> {
+  const baseUrl = deps.serverUrl.replace(/\/+$/, "");
+  const result: SubagentIngestResult = {
+    uploaded: 0,
+    skippedNoParent: 0,
+    failed: 0,
+    errors: [],
+    totalSizeBytes: 0,
+  };
+
+  for (let i = 0; i < transcripts.length; i++) {
+    if (deps.signal?.aborted) break;
+
+    const tx = transcripts[i];
+
+    deps.onProgress?.({
+      total: transcripts.length,
+      completed: result.uploaded + result.skippedNoParent + result.failed,
+      currentAgentId: tx.agentId,
+    });
+
+    // Only upload if the parent session was ingested (or already existed)
+    if (!deps.ingestedParentSessionIds.has(tx.parentSessionId)) {
+      result.skippedNoParent++;
+      continue;
+    }
+
+    try {
+      await uploadSubagentTranscriptFile(
+        baseUrl,
+        deps.apiKey,
+        tx.parentSessionId,
+        tx.agentId,
+        tx.transcriptPath,
+        deps.signal,
+      );
+      result.uploaded++;
+      result.totalSizeBytes += tx.fileSizeBytes;
+    } catch (err) {
+      result.failed++;
+      result.errors.push({
+        parentSessionId: tx.parentSessionId,
+        agentId: tx.agentId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // Final progress report
+  deps.onProgress?.({
+    total: transcripts.length,
+    completed: result.uploaded + result.skippedNoParent + result.failed,
+    currentAgentId: null,
+  });
+
+  return result;
+}
+
+/**
+ * Upload a single sub-agent transcript file to the backend.
+ * Uses the transcript upload endpoint with ?subagent_id=<agentId> query param.
+ * Retries on transient errors (404, 429, 503) with exponential backoff.
+ */
+async function uploadSubagentTranscriptFile(
+  baseUrl: string,
+  apiKey: string,
+  sessionId: string,
+  agentId: string,
+  transcriptPath: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const url = `${baseUrl}/api/sessions/${sessionId}/transcript/upload?subagent_id=${encodeURIComponent(agentId)}`;
+
+  let body: BodyInit;
+  try {
+    body = Bun.file(transcriptPath);
+  } catch {
+    body = fs.readFileSync(transcriptPath);
+  }
+
+  // Retry up to 5 times with exponential backoff
+  for (let attempt = 0; attempt <= 5; attempt++) {
+    if (signal?.aborted) throw new Error("Aborted");
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-ndjson",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body,
+        signal: combinedSignal(signal),
+      });
+
+      if (response.ok) return;
+
+      const responseBody = await response.text().catch(() => "<unreadable>");
+      const retryAfter = response.headers.get("Retry-After");
+      const retryInfo = retryAfter ? ` Retry-After: ${retryAfter}` : "";
+      const msg = `Sub-agent transcript upload failed (HTTP ${response.status}): ${responseBody}${retryInfo}`;
+
+      // Retry on transient errors
+      const isRetryable = response.status === 404 || response.status === 429 || response.status === 503;
+      if (isRetryable && attempt < 5) {
+        let waitMs: number;
+        if (response.status === 429 && retryAfter) {
+          waitMs = parseInt(retryAfter, 10) * 1000;
+        } else {
+          waitMs = Math.min(500 * Math.pow(2, attempt), 10_000) + Math.random() * 500;
+        }
+        await abortableSleep(waitMs, signal);
+        // Re-create body for retry (Bun.file() is a lazy reference, readFileSync is re-readable)
+        try {
+          body = Bun.file(transcriptPath);
+        } catch {
+          body = fs.readFileSync(transcriptPath);
+        }
+        continue;
+      }
+
+      throw new Error(msg);
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      // Re-throw non-fetch errors on last attempt
+      if (attempt >= 5) throw err;
+
+      const msg = err instanceof Error ? err.message : String(err);
+      const isTransient = msg.includes("EAGAIN") || msg.includes("ECONNRESET")
+        || msg.includes("ETIMEDOUT") || msg.includes("UND_ERR_CONNECT_TIMEOUT");
+      if (!isTransient) throw err;
+
+      const waitMs = Math.min(500 * Math.pow(2, attempt), 10_000) + Math.random() * 500;
+      await abortableSleep(waitMs, signal);
+      try {
+        body = Bun.file(transcriptPath);
+      } catch {
+        body = fs.readFileSync(transcriptPath);
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

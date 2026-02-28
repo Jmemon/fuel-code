@@ -185,7 +185,7 @@ describe("scanForSessions", () => {
     expect(session.messageCount).toBe(42);
   });
 
-  it("skips subdirectories (subagent transcripts)", async () => {
+  it("discovers sub-agent transcripts inside UUID session directories", async () => {
     const projectDir = createProjectDir("-Users-test-Desktop-repo", [
       {
         id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -193,7 +193,7 @@ describe("scanForSessions", () => {
       },
     ]);
 
-    // Create a subagent directory (should be skipped)
+    // Create a subagent directory with agent transcript
     const subagentDir = path.join(
       projectDir,
       "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -207,9 +207,62 @@ describe("scanForSessions", () => {
 
     const result = await scanForSessions(tmpDir);
 
-    // Only the top-level JSONL should be discovered, not the subagent one
+    // The top-level JSONL should be discovered as a session
     expect(result.discovered.length).toBe(1);
+    // The sub-agent transcript should be discovered separately
+    expect(result.subagentTranscripts.length).toBe(1);
+    expect(result.subagentTranscripts[0].parentSessionId).toBe("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+    expect(result.subagentTranscripts[0].agentId).toBe("abc123");
+    expect(result.subagentTranscripts[0].fileSizeBytes).toBeGreaterThan(0);
+  });
+
+  it("skips non-UUID subdirectories (tool-results, etc.)", async () => {
+    const projectDir = createProjectDir("-Users-test-Desktop-repo-skip", [
+      {
+        id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        mtimeMs: Date.now() - 600_000,
+      },
+    ]);
+
+    // Create a non-UUID subdirectory (should be skipped, counted in subagents)
+    const toolResultsDir = path.join(projectDir, "tool-results");
+    fs.mkdirSync(toolResultsDir, { recursive: true });
+    fs.writeFileSync(path.join(toolResultsDir, "some-file.txt"), "data");
+
+    const result = await scanForSessions(tmpDir);
+
+    expect(result.discovered.length).toBe(1);
+    expect(result.subagentTranscripts.length).toBe(0);
     expect(result.skipped.subagents).toBeGreaterThanOrEqual(1);
+  });
+
+  it("skips active sub-agent transcripts", async () => {
+    const projectDir = createProjectDir("-Users-test-Desktop-repo-active-sa", [
+      {
+        id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        mtimeMs: Date.now() - 600_000,
+      },
+    ]);
+
+    // Create a subagent directory with a transcript that has no /exit
+    // (but since no process has the file open, it will be treated as ended)
+    const subagentDir = path.join(
+      projectDir,
+      "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "subagents",
+    );
+    fs.mkdirSync(subagentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(subagentDir, "agent-def456.jsonl"),
+      '{"type":"user","message":{"role":"user","content":"test"}}\n',
+    );
+
+    const result = await scanForSessions(tmpDir);
+
+    // No process has the file open, so it should be discovered (not skipped as active)
+    expect(result.subagentTranscripts.length).toBe(1);
+    expect(result.subagentTranscripts[0].agentId).toBe("def456");
+    expect(result.skipped.activeSubagents).toBe(0);
   });
 
   it("skips non-JSONL files", async () => {
