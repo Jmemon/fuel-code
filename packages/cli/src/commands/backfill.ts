@@ -232,12 +232,14 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
       .slice(0, result.ingested)
       .map((s) => s.sessionId);
 
-    // Freeze upload bar as "done" for the processing phase
-    const uploadTotal = result.ingested + result.skipped + result.failed;
+    // Freeze upload bar as "done" for the processing phase.
+    // Use scanResult.discovered.length as total to match the ingestion progress bar.
+    const uploadTotal = scanResult.discovered.length;
+    const uploadCompleted = result.ingested + result.skipped + result.failed;
     const uploadDoneStr = result.failed > 0
       ? `done (${result.failed} failed)`
       : "done";
-    const uploadDoneLine = `  Uploading:   ${buildProgressBar(uploadTotal, uploadTotal, 30)} ${uploadTotal}/${uploadTotal}  ${uploadDoneStr}`;
+    const uploadDoneLine = `  Uploading:   ${buildProgressBar(uploadCompleted, uploadTotal, 30)} ${uploadCompleted}/${uploadTotal}  ${uploadDoneStr}`;
 
     if (ingestedIds.length > 0) {
       // Update upload bar to "done", show processing bar starting
