@@ -10,8 +10,9 @@
  *   6. Generate LLM summary (best-effort, non-blocking)
  *   7. Upload parsed backup to S3 (best-effort)
  *
- * Concurrency is managed via a bounded async work queue that limits how many
- * pipelines run in parallel and drops new entries when the queue is full.
+ * Concurrency is managed via an async work queue that limits how many
+ * pipelines run in parallel (the pending queue itself is unbounded since
+ * it only holds lightweight session ID strings).
  */
 
 import type { Sql } from "postgres";
@@ -70,8 +71,6 @@ export interface PipelineResult {
 /** Batch size for INSERT operations to avoid exceeding Postgres parameter limits */
 const BATCH_SIZE = 500;
 
-/** Maximum queue depth before new enqueue requests are dropped */
-const MAX_QUEUE_DEPTH = 50;
 
 // ---------------------------------------------------------------------------
 // Main pipeline function
@@ -454,9 +453,8 @@ async function batchInsertContentBlocks(
 /**
  * Create a bounded async work queue for session pipelines.
  *
- * The queue limits concurrent pipeline executions to `maxConcurrent` and drops
- * new entries when the queue depth exceeds MAX_QUEUE_DEPTH (50). This prevents
- * unbounded memory growth if sessions end faster than they can be processed.
+ * The queue limits concurrent pipeline executions to `maxConcurrent`.
+ * The pending queue is unbounded (session IDs are lightweight strings).
  *
  * Usage:
  *   const queue = createPipelineQueue(3);
@@ -522,21 +520,14 @@ export function createPipelineQueue(maxConcurrent: number): {
   return {
     /**
      * Add a session ID to the processing queue.
-     * Drops the entry with a warning if the queue is full (>50 pending).
+     * Session IDs are lightweight strings — the queue is unbounded since
+     * concurrency is already gated by maxConcurrent.
      */
     enqueue(sessionId: string): void {
       if (stopped) return;
 
       if (!pipelineDeps) {
         // Queue not started yet — silently drop
-        return;
-      }
-
-      if (pending.length >= MAX_QUEUE_DEPTH) {
-        pipelineDeps.logger.warn(
-          { sessionId, queueDepth: pending.length },
-          "Pipeline queue overflow — dropping session",
-        );
         return;
       }
 
