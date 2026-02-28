@@ -6,9 +6,10 @@
  *   2. Download transcript from S3
  *   3. Parse JSONL into structured messages and content blocks
  *   4. Persist parsed data to Postgres (transcript_messages + content_blocks)
- *   5. Advance lifecycle to 'parsed' with computed stats
- *   6. Generate LLM summary (best-effort, non-blocking)
- *   7. Upload parsed backup to S3 (best-effort)
+ *   5. Persist relationships (subagents, teams, skills, worktrees, session metadata)
+ *   6. Advance lifecycle to 'parsed' with computed stats
+ *   7. Generate LLM summary (best-effort, non-blocking)
+ *   8. Upload parsed backup to S3 (best-effort)
  *
  * Concurrency is managed via an async work queue that limits how many
  * pipelines run in parallel (the pending queue itself is unbounded since
@@ -17,8 +18,8 @@
 
 import type { Sql } from "postgres";
 import type { Logger } from "pino";
-import type { TranscriptStats, TranscriptMessage, ParsedContentBlock } from "@fuel-code/shared";
-import { buildParsedBackupKey } from "@fuel-code/shared";
+import type { TranscriptStats, TranscriptMessage, ParsedContentBlock, ParseResult } from "@fuel-code/shared";
+import { buildParsedBackupKey, generateId } from "@fuel-code/shared";
 import { parseTranscript } from "./transcript-parser.js";
 import { generateSummary, extractInitialPrompt, type SummaryConfig } from "./summary-generator.js";
 import { transitionSession, failSession, type SessionLifecycle } from "./session-lifecycle.js";
@@ -200,6 +201,15 @@ export async function runSessionPipeline(
   }
 
   // -------------------------------------------------------------------------
+  // Step 5.5: Persist extracted relationships (subagents, teams, skills, worktrees)
+  //
+  // Non-fatal: if this fails, the pipeline continues. Relationship data can
+  // be re-derived from the transcript on a subsequent reparse.
+  // -------------------------------------------------------------------------
+
+  await persistRelationships(sql, sessionId, parseResult, log);
+
+  // -------------------------------------------------------------------------
   // Step 6: Advance lifecycle to 'parsed' with computed stats
   // -------------------------------------------------------------------------
 
@@ -319,6 +329,111 @@ export async function runSessionPipeline(
     errors: errors.length > 0 ? errors : [],
     stats,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Relationship persistence
+// ---------------------------------------------------------------------------
+
+/**
+ * Persist parser-extracted relationship data to the database tables.
+ *
+ * Writes sub-agents, teams, skills, worktrees, and session metadata that were
+ * extracted during transcript parsing. Uses upsert convergence for subagents
+ * and teams (real-time hooks may have already created rows), and delete-then-
+ * insert for skills and worktrees (idempotent on reparse).
+ *
+ * Non-fatal: the entire function is wrapped in try/catch so that a failure
+ * here does not block the rest of the pipeline.
+ */
+async function persistRelationships(
+  sql: Sql,
+  sessionId: string,
+  parseResult: ParseResult,
+  logger: Logger,
+): Promise<void> {
+  try {
+    // 1. Upsert subagents — hooks may have inserted rows in real-time,
+    //    parser upserts retroactively with COALESCE to fill gaps.
+    for (const sa of parseResult.subagents) {
+      const id = generateId();
+      await sql`
+        INSERT INTO subagents (id, session_id, agent_id, agent_type, agent_name, model,
+          spawning_tool_use_id, team_name, isolation, run_in_background, status, started_at)
+        VALUES (${id}, ${sessionId}, ${sa.agent_id}, ${sa.agent_type}, ${sa.agent_name ?? null},
+          ${sa.model ?? null}, ${sa.spawning_tool_use_id}, ${sa.team_name ?? null},
+          ${sa.isolation ?? null}, ${sa.run_in_background}, ${"completed"}, ${sa.started_at || null})
+        ON CONFLICT (session_id, agent_id) DO UPDATE SET
+          agent_type = COALESCE(EXCLUDED.agent_type, subagents.agent_type),
+          agent_name = COALESCE(EXCLUDED.agent_name, subagents.agent_name),
+          model = COALESCE(EXCLUDED.model, subagents.model),
+          spawning_tool_use_id = COALESCE(EXCLUDED.spawning_tool_use_id, subagents.spawning_tool_use_id),
+          team_name = COALESCE(EXCLUDED.team_name, subagents.team_name),
+          isolation = COALESCE(EXCLUDED.isolation, subagents.isolation)
+      `;
+    }
+
+    // 2. Upsert teams — unique on team_name; merge member_count and metadata
+    for (const team of parseResult.teams) {
+      const id = generateId();
+      const memberCount = parseResult.subagents.filter(s => s.team_name === team.team_name).length;
+      await sql`
+        INSERT INTO teams (id, team_name, description, lead_session_id, created_at, member_count, metadata)
+        VALUES (${id}, ${team.team_name}, ${team.description ?? null}, ${sessionId}, now(),
+          ${memberCount}, ${JSON.stringify({ message_count: team.message_count })})
+        ON CONFLICT (team_name) DO UPDATE SET
+          description = COALESCE(EXCLUDED.description, teams.description),
+          member_count = GREATEST(teams.member_count, EXCLUDED.member_count),
+          metadata = jsonb_set(COALESCE(teams.metadata, '{}'), '{message_count}', ${String(team.message_count)}::jsonb)
+      `;
+    }
+
+    // 3. Insert skills (delete-first for idempotent reparse)
+    await sql`DELETE FROM session_skills WHERE session_id = ${sessionId}`;
+    for (const skill of parseResult.skills) {
+      await sql`
+        INSERT INTO session_skills (id, session_id, skill_name, invoked_at, invoked_by, args)
+        VALUES (${generateId()}, ${sessionId}, ${skill.skill_name},
+          ${skill.invoked_at || new Date().toISOString()},
+          ${skill.invoked_by}, ${skill.args ?? null})
+      `;
+    }
+
+    // 4. Insert worktrees (delete-first for idempotent reparse)
+    await sql`DELETE FROM session_worktrees WHERE session_id = ${sessionId}`;
+    for (const wt of parseResult.worktrees) {
+      await sql`
+        INSERT INTO session_worktrees (id, session_id, worktree_name, created_at)
+        VALUES (${generateId()}, ${sessionId}, ${wt.worktree_name ?? null},
+          ${wt.created_at || new Date().toISOString()})
+      `;
+    }
+
+    // 5. Update session metadata (permission_mode, team info, resume chain)
+    if (parseResult.permission_mode || parseResult.teams.length > 0 || parseResult.resumed_from_session_id) {
+      await sql`
+        UPDATE sessions SET
+          permission_mode = COALESCE(${parseResult.permission_mode ?? null}, permission_mode),
+          team_name = COALESCE(${parseResult.teams[0]?.team_name ?? null}, team_name),
+          team_role = COALESCE(${parseResult.teams.length > 0 ? "lead" : null}, team_role),
+          resumed_from_session_id = COALESCE(${parseResult.resumed_from_session_id ?? null}, resumed_from_session_id)
+        WHERE id = ${sessionId}
+      `;
+    }
+
+    // 6. Update subagent_count on session from actual DB rows
+    if (parseResult.subagents.length > 0) {
+      await sql`
+        UPDATE sessions SET subagent_count = (
+          SELECT COUNT(*) FROM subagents WHERE session_id = ${sessionId}
+        ) WHERE id = ${sessionId}
+      `;
+    }
+
+  } catch (err) {
+    // NON-FATAL: log warning but don't block pipeline
+    logger.warn({ err, sessionId }, "Failed to persist relationships — continuing pipeline");
+  }
 }
 
 // ---------------------------------------------------------------------------
