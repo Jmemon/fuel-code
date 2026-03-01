@@ -294,6 +294,66 @@ describe("handleGitCommit", () => {
 });
 
 // ---------------------------------------------------------------------------
+// handleGitCommit: worktree detection tests (Phase 4-2, Task 5)
+// ---------------------------------------------------------------------------
+
+describe("handleGitCommit: worktree detection", () => {
+  test("commit in worktree: is_worktree=true and worktree_name passed to git_activity", async () => {
+    const event = makeGitCommitEvent({
+      data: {
+        ...makeGitCommitEvent().data,
+        is_worktree: true,
+        worktree_name: "feature-auth",
+      },
+    });
+    const logger = createMockLogger();
+    const { sql, calls } = createMockSql([[], []]);
+
+    await handleGitCommit({ sql, event, workspaceId: "ws-ulid-001", logger });
+
+    // The INSERT call (second call, after correlator)
+    const insertCall = calls[1];
+    // is_worktree and worktree_name are passed in the values
+    expect(insertCall.values).toContain(true); // is_worktree
+    expect(insertCall.values).toContain("feature-auth"); // worktree_name
+  });
+
+  test("commit in main tree: is_worktree=false and worktree_name=null", async () => {
+    const event = makeGitCommitEvent({
+      data: {
+        ...makeGitCommitEvent().data,
+        is_worktree: false,
+        worktree_name: null,
+      },
+    });
+    const logger = createMockLogger();
+    const { sql, calls } = createMockSql([[], []]);
+
+    await handleGitCommit({ sql, event, workspaceId: "ws-ulid-001", logger });
+
+    const insertCall = calls[1];
+    expect(insertCall.values).toContain(false); // is_worktree
+  });
+
+  test("backward compat: old event without is_worktree defaults to false/null", async () => {
+    // Old events don't have is_worktree or worktree_name
+    const event = makeGitCommitEvent();
+    // Verify the default event has no worktree fields
+    expect(event.data.is_worktree).toBeUndefined();
+    expect(event.data.worktree_name).toBeUndefined();
+
+    const logger = createMockLogger();
+    const { sql, calls } = createMockSql([[], []]);
+
+    await handleGitCommit({ sql, event, workspaceId: "ws-ulid-001", logger });
+
+    const insertCall = calls[1];
+    // Handler defaults: is_worktree ?? false, worktree_name ?? null
+    expect(insertCall.values).toContain(false); // is_worktree default
+  });
+});
+
+// ---------------------------------------------------------------------------
 // handleGitPush tests
 // ---------------------------------------------------------------------------
 
@@ -619,10 +679,10 @@ describe("Handler registration includes all git types", () => {
     expect(registry.getHandler("git.merge")).toBe(handleGitMerge);
   });
 
-  test("registry has 6 total handlers (2 session + 4 git)", () => {
+  test("registry has 13 total handlers (2 session + 4 git + 7 CC hook)", () => {
     const registry = createHandlerRegistry();
     const types = registry.listRegisteredTypes();
 
-    expect(types).toHaveLength(6);
+    expect(types).toHaveLength(13);
   });
 });

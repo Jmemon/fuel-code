@@ -238,7 +238,7 @@ describe("createHandlerRegistry", () => {
     expect(types).toContain("git.push");
     expect(types).toContain("git.checkout");
     expect(types).toContain("git.merge");
-    expect(types).toHaveLength(6);
+    expect(types).toHaveLength(13);
   });
 
   test("session.start handler is the handleSessionStart function", () => {
