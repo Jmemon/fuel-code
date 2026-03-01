@@ -389,7 +389,7 @@ describe("scanForSessions", () => {
     expect(result.discovered[0].workspaceCanonicalId).toBe("_unassociated");
   });
 
-  it("calls onProgress callback for each project directory", async () => {
+  it("calls onProgress callback for each session file with current/total", async () => {
     createProjectDir("-Users-test-Desktop-proj1", [
       {
         id: "11111111-aaaa-bbbb-cccc-dddddddddddd",
@@ -403,13 +403,17 @@ describe("scanForSessions", () => {
       },
     ]);
 
-    const progressDirs: string[] = [];
+    const progressUpdates: Array<{ current: number; total: number; currentDir: string }> = [];
     await scanForSessions(tmpDir, {
-
-      onProgress: (dir) => progressDirs.push(dir),
+      onProgress: (progress) => progressUpdates.push({ ...progress }),
     });
 
-    expect(progressDirs.length).toBe(2);
+    expect(progressUpdates.length).toBe(2);
+    // All updates should report the same total (2 session files)
+    expect(progressUpdates[0].total).toBe(2);
+    expect(progressUpdates[1].total).toBe(2);
+    // Last update should have current === total
+    expect(progressUpdates[1].current).toBe(2);
   });
 
   it("skips files that are not valid UUID filenames", async () => {

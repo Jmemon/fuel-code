@@ -105,6 +105,7 @@ export {
   type DiscoveredSession,
   type DiscoveredSubagentTranscript,
   type ScanResult,
+  type ScanProgress,
   type BackfillProgress,
   type IngestDeps,
   type SubagentIngestResult,

@@ -26,6 +26,7 @@ import {
   saveBackfillState,
   type DiscoveredSession,
   type ScanResult,
+  type ScanProgress,
   type BackfillProgress,
   type BackfillState,
   type PipelineWaitProgress,
@@ -118,13 +119,19 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
   }
 
   // Phase 1: Scan for sessions
-  console.error("Scanning ~/.claude/projects/...");
-
   const scanResult = await scanForSessions(undefined, {
-    onProgress: (dir) => {
-      // Progress dots for scanning (stderr to not pollute stdout)
+    onProgress: (progress: ScanProgress) => {
+      const displayDir = progress.currentDir.length > 20
+        ? "..." + progress.currentDir.slice(-17)
+        : progress.currentDir;
+      const bar = buildProgressBar(progress.current, progress.total, 30);
+      process.stderr.write(
+        `\r\x1b[2K  Scanning:    ${bar} ${progress.current}/${progress.total}  ${displayDir}`,
+      );
     },
   });
+  // Clear scanning line and move to next line
+  process.stderr.write("\r\x1b[2K");
 
   if (scanResult.discovered.length === 0) {
     console.log("No historical sessions found.");

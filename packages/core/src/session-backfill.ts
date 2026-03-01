@@ -92,6 +92,13 @@ export interface ScanResult {
   };
 }
 
+/** Progress callback data during scanning phase */
+export interface ScanProgress {
+  current: number;
+  total: number;
+  currentDir: string;
+}
+
 /** Progress callback data during ingestion */
 export interface BackfillProgress {
   /** Total number of sessions to process */
@@ -335,7 +342,7 @@ export function isSessionActive(filePath: string): boolean {
 export async function scanForSessions(
   claudeProjectsDir?: string,
   options?: {
-    onProgress?: (dirScanned: string) => void;
+    onProgress?: (progress: ScanProgress) => void;
   },
 ): Promise<ScanResult> {
   const projectsDir = claudeProjectsDir ?? DEFAULT_CLAUDE_PROJECTS_DIR;
@@ -364,6 +371,28 @@ export async function scanForSessions(
     return result;
   }
 
+  // Pre-count total session files for progress reporting (cheap readdirSync only)
+  let totalSessionFiles = 0;
+  if (options?.onProgress) {
+    for (const pd of projectDirs) {
+      const pdPath = path.join(projectsDir, pd);
+      try {
+        const stat = fs.statSync(pdPath);
+        if (!stat.isDirectory()) continue;
+        const files = fs.readdirSync(pdPath);
+        for (const f of files) {
+          if (f.endsWith(".jsonl") && UUID_REGEX.test(f.replace(/\.jsonl$/, ""))) {
+            totalSessionFiles++;
+          }
+        }
+      } catch {
+        // skip unreadable dirs
+      }
+    }
+  }
+
+  let sessionFilesProcessed = 0;
+
   // Cache workspace resolution per CWD to avoid repeated git invocations
   // (most sessions in the same project dir share one CWD)
   const workspaceCache = new Map<string, string>();
@@ -382,9 +411,6 @@ export async function scanForSessions(
       result.skipped.nonJsonl++;
       continue;
     }
-
-    // Report progress
-    options?.onProgress?.(projectDir);
 
     // Try to load sessions-index.json for this project
     const sessionsIndex = loadSessionsIndex(projectDirPath);
@@ -479,12 +505,16 @@ export async function scanForSessions(
           path: entryPath,
           error: `Failed to stat file: ${err instanceof Error ? err.message : String(err)}`,
         });
+        sessionFilesProcessed++;
+        options?.onProgress?.({ current: sessionFilesProcessed, total: totalSessionFiles, currentDir: projectDir });
         continue;
       }
 
       // Skip active sessions (detected via /exit check + lsof)
       if (isSessionActive(entryPath)) {
         result.skipped.potentiallyActive++;
+        sessionFilesProcessed++;
+        options?.onProgress?.({ current: sessionFilesProcessed, total: totalSessionFiles, currentDir: projectDir });
         continue;
       }
 
@@ -544,6 +574,8 @@ export async function scanForSessions(
       discovered.workspaceCanonicalId = workspaceCache.get(resolvedCwd)!;
 
       result.discovered.push(discovered);
+      sessionFilesProcessed++;
+      options?.onProgress?.({ current: sessionFilesProcessed, total: totalSessionFiles, currentDir: projectDir });
     }
   }
 
