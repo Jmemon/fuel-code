@@ -112,8 +112,16 @@ function waitForServerMessage<T = unknown>(
   });
 }
 
-/** Small delay helper */
-const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Small delay helper — logs so slow tests are obviously intentional, not hangs */
+function delay(ms: number): Promise<void> {
+  console.log(`[ws-client.test] delay(${ms}ms) START`);
+  return new Promise((r) =>
+    setTimeout(() => {
+      console.log(`[ws-client.test] delay(${ms}ms) DONE`);
+      r();
+    }, ms),
+  );
+}
 
 /**
  * Force-close a WS server and HTTP server without waiting for graceful drain.
@@ -136,6 +144,8 @@ async function forceCloseServer(
 }
 
 afterEach(async () => {
+  console.log(`[ws-client.test] afterEach: destroying ${wsClients.length} client(s), closing ${httpServers.length} server(s)`);
+
   // Clean up all WsClients first (this closes their WebSocket connections)
   for (const client of wsClients) {
     try {
@@ -152,6 +162,8 @@ afterEach(async () => {
   }
   httpServers = [];
   wsServers = [];
+
+  console.log("[ws-client.test] afterEach: cleanup complete");
 });
 
 // ---------------------------------------------------------------------------
@@ -463,6 +475,8 @@ describe("WsClient", () => {
 
   // 18. Exponential backoff delays increase
   test("18. exponential backoff delays increase", async () => {
+    // NOTE: This test intentionally waits 5000ms for reconnect delays to accumulate.
+    console.log("[ws-client.test] test 18: start — will delay(5000) intentionally");
     // Use a server that accepts the first connection but immediately closes
     // subsequent ones (simulates server going unhealthy). This avoids slow
     // TCP timeouts from connecting to a fully dead port.
@@ -507,6 +521,8 @@ describe("WsClient", () => {
 
   // 19. Max reconnect attempts emits error and stops
   test("19. max reconnect attempts emits error and stops", async () => {
+    // NOTE: This test intentionally waits 4000ms for reconnect cycle to exhaust.
+    console.log("[ws-client.test] test 19: start — will delay(4000) intentionally");
     // Server accepts first connection, then immediately closes subsequent ones
     // so reconnect failures happen fast (no TCP timeout waiting).
     let connCount = 0;
@@ -545,6 +561,8 @@ describe("WsClient", () => {
 
   // 20. Re-subscribe on reconnect
   test("20. re-subscribe on reconnect: stored subscriptions re-sent", async () => {
+    // NOTE: This test intentionally waits 3000ms for reconnect + re-subscribe cycle.
+    console.log("[ws-client.test] test 20: start — will delay(3000) intentionally");
     const receivedMessages: unknown[] = [];
     let connectionCount = 0;
 

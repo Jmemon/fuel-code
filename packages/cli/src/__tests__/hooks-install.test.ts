@@ -2,22 +2,16 @@
  * Phase 4-2 CC hook installer tests.
  *
  * Verifies that fuel-code registers all 10 hook entries across 7 CC event
- * types. These tests write/read settings.json directly (bypassing
- * runCCInstall's scanForSessions call which hangs in test environments)
- * to focus on the hook registration logic.
+ * types. Tests call runCCInstall() directly — the backfill scan lives in the
+ * CLI command action (createInstallSubcommand), not in runCCInstall(), so
+ * these tests are unaffected by it.
  *
  * Tests:
  *   1. All 10 hook entries are registered after install
  *   2. PostToolUse has 4 entries with correct matchers
  *   3. Install is idempotent (run twice = same result)
- *   4. Uninstall removes fuel-code hooks, preserves others
- *   5. Status reports all 10 hooks accurately
- *   6. Background wrapper applied to SessionStart/SessionEnd only
- *
- * NOTE: The runCCInstall function also triggers scanForSessions() after
- * writing hooks, which hangs in test environments (known pre-existing issue).
- * These tests avoid that by testing the install/status logic in a way that
- * does not trigger the scan, or by using generous timeouts for tests that do.
+ *   4. Status reports all 10 hooks accurately
+ *   5. Background wrapper applied to SessionStart/SessionEnd only
  */
 
 import {
@@ -99,7 +93,7 @@ function countFuelCodeHooks(settings: Settings): number {
 }
 
 // ---------------------------------------------------------------------------
-// Tests using runCCInstall (with generous timeout for scanForSessions)
+// Tests
 // ---------------------------------------------------------------------------
 
 describe("Phase 4-2: CC hook installer registers all 10 entries", () => {
@@ -127,7 +121,7 @@ describe("Phase 4-2: CC hook installer registers all 10 entries", () => {
 
     // Total should be exactly 10 fuel-code hook entries
     expect(countFuelCodeHooks(settings)).toBe(10);
-  }, 60_000); // generous timeout for scanForSessions
+  });
 
   it("PostToolUse has 4 config blocks with correct matchers", async () => {
     await runCCInstall();
@@ -150,7 +144,7 @@ describe("Phase 4-2: CC hook installer registers all 10 entries", () => {
       expect(fuelHooks).toHaveLength(1);
       expect(fuelHooks[0].command).toContain("cc-hook post-tool-use");
     }
-  }, 60_000);
+  });
 
   it("SubagentStart and SubagentStop hooks use correct subcommands", async () => {
     await runCCInstall();
@@ -168,7 +162,7 @@ describe("Phase 4-2: CC hook installer registers all 10 entries", () => {
     const saStop = settings.hooks!.SubagentStop;
     expect(saStop).toHaveLength(1);
     expect(saStop[0].hooks[0].command).toContain("cc-hook subagent-stop");
-  }, 60_000);
+  });
 
   it("WorktreeCreate and WorktreeRemove hooks use correct subcommands", async () => {
     await runCCInstall();
@@ -182,7 +176,7 @@ describe("Phase 4-2: CC hook installer registers all 10 entries", () => {
     const wtRemove = settings.hooks!.WorktreeRemove;
     expect(wtRemove).toHaveLength(1);
     expect(wtRemove[0].hooks[0].command).toContain("cc-hook worktree-remove");
-  }, 60_000);
+  });
 
   it("SessionStart/SessionEnd use background bash wrapper", async () => {
     await runCCInstall();
@@ -200,7 +194,7 @@ describe("Phase 4-2: CC hook installer registers all 10 entries", () => {
     expect(seCmd).toContain("bash -c");
     expect(seCmd).toContain("&'");
     expect(seCmd).toContain("cc-hook session-end");
-  }, 60_000);
+  });
 
   it("non-backgrounded hooks do NOT use bash wrapper", async () => {
     await runCCInstall();
@@ -211,7 +205,7 @@ describe("Phase 4-2: CC hook installer registers all 10 entries", () => {
     const saCmd = settings.hooks!.SubagentStart[0].hooks[0].command;
     expect(saCmd).not.toContain("bash -c");
     expect(saCmd).toBe("fuel-code cc-hook subagent-start");
-  }, 60_000);
+  });
 });
 
 describe("Phase 4-2: CC hook installer idempotency", () => {
@@ -224,7 +218,7 @@ describe("Phase 4-2: CC hook installer idempotency", () => {
 
     expect(firstCount).toBe(10);
     expect(secondCount).toBe(10);
-  }, 120_000); // Two installs = double the scan time
+  });
 });
 
 describe("Phase 4-2: CC hook status reports all 10 hooks", () => {
@@ -264,7 +258,7 @@ describe("Phase 4-2: CC hook status reports all 10 hooks", () => {
       expect(line).toContain("installed");
       expect(line).not.toContain("not installed");
     }
-  }, 60_000);
+  });
 
   it("reports all CC hooks as not installed when settings.json is empty", async () => {
     fs.writeFileSync(settingsPath, JSON.stringify({}), "utf-8");

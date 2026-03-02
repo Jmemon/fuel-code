@@ -129,6 +129,7 @@ function getSettingsPath(): string {
   return settingsPathOverride ?? CLAUDE_SETTINGS_PATH;
 }
 
+
 // ---------------------------------------------------------------------------
 // Command factory
 // ---------------------------------------------------------------------------
@@ -174,6 +175,28 @@ function createInstallSubcommand(): Command {
       // Install CC hooks
       if (installCC) {
         await runCCInstall();
+
+        // Auto-trigger: scan for historical sessions and start background backfill.
+        // This runs only from the CLI action, not from the exported runCCInstall(),
+        // so tests that call runCCInstall() directly aren't affected.
+        try {
+          console.error("Scanning for historical Claude Code sessions...");
+          const scanResult = await scanForSessions();
+          if (scanResult.discovered.length > 0) {
+            console.error(
+              `Found ${scanResult.discovered.length} historical sessions. Starting background backfill...`,
+            );
+            // Spawn detached background process so hooks install doesn't block
+            Bun.spawn(["fuel-code", "backfill"], {
+              stdout: "ignore",
+              stderr: "ignore",
+            });
+          } else {
+            console.error("No historical sessions found.");
+          }
+        } catch {
+          // Backfill scan failure should never block hooks install
+        }
       }
 
       // Install git hooks
@@ -272,25 +295,6 @@ export async function runCCInstall(): Promise<void> {
   }
   console.log(`  Settings${" ".repeat(18)} → ${settingsPath}`);
 
-  // Auto-trigger: scan for historical Claude Code sessions and start background backfill
-  try {
-    console.error("Scanning for historical Claude Code sessions...");
-    const scanResult = await scanForSessions();
-    if (scanResult.discovered.length > 0) {
-      console.error(
-        `Found ${scanResult.discovered.length} historical sessions. Starting background backfill...`,
-      );
-      // Spawn detached background process so hooks install doesn't block
-      Bun.spawn(["fuel-code", "backfill"], {
-        stdout: "ignore",
-        stderr: "ignore",
-      });
-    } else {
-      console.error("No historical sessions found.");
-    }
-  } catch {
-    // Backfill scan failure should never block hooks install
-  }
 }
 
 /**
