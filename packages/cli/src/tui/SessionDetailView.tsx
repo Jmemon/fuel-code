@@ -20,7 +20,7 @@
  */
 
 import React, { useState, useCallback } from "react";
-import { Box, Text, useInput, useApp } from "ink";
+import { Box, Text, useInput, useApp, useStdout } from "ink";
 import * as fs from "node:fs";
 import type { FuelApiClient } from "../lib/api-client.js";
 import type { WsClient } from "../lib/ws-client.js";
@@ -87,6 +87,14 @@ export function SessionDetailView({
   onBack,
 }: SessionDetailViewProps): React.ReactElement {
   const { exit } = useApp();
+  const { stdout } = useStdout();
+  // Constrain the entire view to the terminal height so Ink never renders
+  // more rows than the terminal can show. Without this, the content area
+  // grows unboundedly (TranscriptViewer renders 10+ multi-line messages),
+  // the terminal scrolls down to show the bottom (footer), and the header
+  // is pushed into the scrollback buffer — the "two notions" misalignment bug.
+  const termRows = stdout?.rows ?? 24;
+
   const [activeTab, setActiveTab] = useState<TabType>("transcript");
   const [scrollOffset, setScrollOffset] = useState(0);
 
@@ -217,7 +225,7 @@ export function SessionDetailView({
   }
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height={termRows}>
       {/* Header */}
       <SessionHeader session={session} />
 
@@ -236,8 +244,9 @@ export function SessionDetailView({
         </Text>
       </Box>
 
-      {/* Tab content */}
-      <Box marginTop={1} flexGrow={1}>
+      {/* Tab content — overflow hidden keeps content within yoga-allocated
+          bounds. flexGrow fills the rows left after header, tab bar, footer. */}
+      <Box marginTop={1} flexGrow={1} overflow="hidden">
         {activeTab === "transcript" && (
           <Box>
             {/* Left panel: transcript (~65%) */}
