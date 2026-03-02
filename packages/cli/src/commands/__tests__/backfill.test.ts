@@ -20,7 +20,7 @@ import {
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { runBackfill } from "../backfill.js";
+import { runBackfill, categorizeError, shortenPath, formatErrorBlock } from "../backfill.js";
 import {
   overrideConfigPaths,
   saveConfig,
@@ -193,5 +193,154 @@ describe("fuel-code backfill", () => {
     // For now, this test verifies the code path works end-to-end.
     // Since we can't easily override the scan path from the CLI layer,
     // we'll test the core scanner separately and focus on state/config handling here.
+  });
+});
+
+describe("categorizeError", () => {
+  it("classifies fetch-failed network errors", () => {
+    expect(categorizeError("fetch failed")).toBe("[network]");
+    expect(categorizeError("ECONNREFUSED localhost:3000")).toBe("[network]");
+    expect(categorizeError("socket hang up")).toBe("[network]");
+  });
+
+  it("classifies auth errors", () => {
+    expect(categorizeError("401 Unauthorized")).toBe("[auth]");
+    expect(categorizeError("403 Forbidden")).toBe("[auth]");
+    expect(categorizeError("Unauthorized")).toBe("[auth]");
+  });
+
+  it("classifies payload-too-large errors", () => {
+    expect(categorizeError("413 Payload Too Large")).toBe("[payload]");
+    expect(categorizeError("request entity too large")).toBe("[payload]");
+  });
+
+  it("classifies server errors", () => {
+    expect(categorizeError("500 Internal Server Error")).toBe("[server]");
+    expect(categorizeError("502 Bad Gateway")).toBe("[server]");
+    expect(categorizeError("503 Service Unavailable")).toBe("[server]");
+  });
+
+  it("classifies timeout/abort errors", () => {
+    expect(categorizeError("TimeoutError: operation timed out")).toBe("[timeout]");
+    expect(categorizeError("AbortError: signal aborted")).toBe("[timeout]");
+    expect(categorizeError("request timed out")).toBe("[timeout]");
+    // Socket-mentioning bun/undici abort messages must NOT be caught by the
+    // network check (which now requires the more specific "socket hang up")
+    expect(categorizeError("The socket was closed before the response was received")).toBe("[timeout]");
+  });
+
+  it("classifies file system errors", () => {
+    expect(categorizeError("ENOENT: no such file or directory")).toBe("[file]");
+    expect(categorizeError("EACCES: permission denied")).toBe("[file]");
+    expect(categorizeError("EPERM: operation not permitted")).toBe("[file]");
+  });
+
+  it("classifies parse errors", () => {
+    expect(categorizeError("SyntaxError: Unexpected token")).toBe("[parse]");
+    expect(categorizeError("JSON parse error at line 3")).toBe("[parse]");
+    expect(categorizeError("invalid JSON")).toBe("[parse]");
+  });
+
+  it("falls back to [error] for unrecognized messages", () => {
+    expect(categorizeError("something completely unexpected")).toBe("[error]");
+    expect(categorizeError("")).toBe("[error]");
+    // Auth-flavored "invalid" messages must NOT be misclassified as [parse]
+    expect(categorizeError("invalid api key")).toBe("[error]");
+    expect(categorizeError("invalid request")).toBe("[error]");
+  });
+});
+
+describe("shortenPath", () => {
+  it("replaces the home directory prefix with ~", () => {
+    const home = os.homedir();
+    expect(shortenPath(`${home}/Desktop/my-project/file.jsonl`))
+      .toBe(`~/Desktop/my-project/file.jsonl`);
+  });
+
+  it("leaves paths outside home unchanged", () => {
+    expect(shortenPath("/tmp/some/path.jsonl")).toBe("/tmp/some/path.jsonl");
+  });
+
+  it("handles exact home directory itself", () => {
+    const home = os.homedir();
+    expect(shortenPath(home)).toBe("~");
+  });
+});
+
+describe("formatErrorBlock", () => {
+  const INDENT = " ".repeat(13); // 2 + 9 (padded label) + 2
+
+  it("formats a single network error with path and retry instruction", () => {
+    const errors = [
+      { sessionId: "aaa-111", error: "fetch failed" },
+    ];
+    const pathMap = new Map([
+      ["aaa-111", "/home/user/.claude/projects/-Users-user-Desktop-proj/aaa-111.jsonl"],
+    ]);
+    const result = formatErrorBlock(errors, pathMap);
+
+    expect(result).toContain("Errors (1):");
+    expect(result).toContain("[network]");
+    expect(result).toContain("aaa-111.jsonl");
+    expect(result).toContain(`${INDENT}fetch failed`);
+    expect(result).toContain("To retry failed sessions: fuel-code backfill");
+  });
+
+  it("formats multiple errors with blank lines between entries", () => {
+    const errors = [
+      { sessionId: "aaa-111", error: "fetch failed" },
+      { sessionId: "bbb-222", error: "401 Unauthorized" },
+    ];
+    const pathMap = new Map([
+      ["aaa-111", "/home/user/.claude/projects/proj/aaa-111.jsonl"],
+      ["bbb-222", "/home/user/.claude/projects/proj/bbb-222.jsonl"],
+    ]);
+    const result = formatErrorBlock(errors, pathMap);
+
+    expect(result).toContain("Errors (2):");
+    expect(result).toContain("[network]");
+    expect(result).toContain("[auth]   "); // padded to 9 chars
+    // Blank line between the two entries
+    expect(result).toMatch(/aaa-111\.jsonl[\s\S]*\n\n[\s\S]*bbb-222\.jsonl/);
+  });
+
+  it("pads all category labels to 9 characters", () => {
+    const errors = [
+      { sessionId: "aaa", error: "fetch failed" },         // [network] = 9
+      { sessionId: "bbb", error: "401 Unauthorized" },     // [auth]    = 6 → needs 3 padding
+      { sessionId: "ccc", error: "ENOENT: no such file" }, // [file]    = 6 → needs 3 padding
+    ];
+    const pathMap = new Map([
+      ["aaa", "/tmp/aaa.jsonl"],
+      ["bbb", "/tmp/bbb.jsonl"],
+      ["ccc", "/tmp/ccc.jsonl"],
+    ]);
+    const result = formatErrorBlock(errors, pathMap);
+    expect(result).toContain("[network]  "); // 9 + 2 spaces gap
+    expect(result).toContain("[auth]     "); // 6 + 3 pad + 2 spaces gap = 11 spaces after [auth]
+    expect(result).toContain("[file]     "); // 6 + 3 pad + 2 spaces gap
+  });
+
+  it("shows overflow line when errors exceed limit", () => {
+    const errors = Array.from({ length: 25 }, (_, i) => ({
+      sessionId: `s-${i}`,
+      error: "fetch failed",
+    }));
+    const pathMap = new Map(errors.map(e => [e.sessionId, `/tmp/${e.sessionId}.jsonl`]));
+
+    const result = formatErrorBlock(errors, pathMap, 20);
+    expect(result).toContain("Errors (25):");
+    expect(result).toContain("... and 5 more");
+    expect(result).toContain("To retry failed sessions: fuel-code backfill");
+  });
+
+  it("falls back gracefully when sessionId is not in pathMap", () => {
+    const errors = [{ sessionId: "unknown-xyz", error: "fetch failed" }];
+    const pathMap = new Map<string, string>(); // empty — no path for this session
+
+    const result = formatErrorBlock(errors, pathMap);
+    expect(result).toContain("[network]");
+    expect(result).toContain("unknown-xyz"); // falls back to showing the session ID
+    expect(result).toContain("fetch failed");
   });
 });

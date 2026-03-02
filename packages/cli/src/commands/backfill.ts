@@ -17,6 +17,7 @@
  */
 
 import { Command } from "commander";
+import * as os from "node:os";
 import * as path from "node:path";
 import {
   scanForSessions,
@@ -419,4 +420,91 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024 * 1024)
     return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+/**
+ * Classify a raw exception message into a human-readable error category label.
+ *
+ * Labels are always exactly 9 characters (including brackets) so they can be
+ * padded uniformly in the error block display. Patterns are checked in order;
+ * the first match wins.
+ */
+export function categorizeError(msg: string): string {
+  const m = msg.toLowerCase();
+  if (m.includes("econnrefused") || m.includes("fetch failed") || m.includes("socket hang up") || m.includes("etimedout")) return "[network]";
+  if (m.includes("401") || m.includes("unauthorized") || m.includes("403") || m.includes("forbidden")) return "[auth]";
+  if (m.includes("413") || m.includes("payload too large") || m.includes("request entity too large")) return "[payload]";
+  if (m.includes("500") || m.includes("502") || m.includes("503") || m.includes("504") || m.includes("internal server error")) return "[server]";
+  // "socket was closed" catches bun/undici abort messages like
+  // "The socket was closed before the response was received"
+  if (m.includes("timeouterror") || m.includes("aborterror") || m.includes("timed out") || m.includes("timeout") || m.includes("socket was closed")) return "[timeout]";
+  if (m.includes("enoent") || m.includes("eacces") || m.includes("eperm") || m.includes("no such file")) return "[file]";
+  if (m.includes("syntaxerror") || m.includes("json") || m.includes("parse")) return "[parse]";
+  return "[error]";
+}
+
+/**
+ * Replace the home directory prefix in a path with "~" for compact display.
+ * Paths outside the home directory are returned unchanged.
+ */
+export function shortenPath(p: string): string {
+  const home = os.homedir();
+  if (p === home) return "~";
+  if (p.startsWith(home + path.sep)) return "~" + p.slice(home.length);
+  return p;
+}
+
+/**
+ * Format the full error block displayed at the end of a backfill run.
+ *
+ * Each error entry spans two lines:
+ *   "  [category]  <transcript-path>"
+ *   "             <raw error message>"
+ *
+ * Category labels are padded to 9 characters so path columns align regardless
+ * of which category fired. Blank lines separate consecutive entries for
+ * scannability. A retry instruction is always appended.
+ *
+ * @param errors    - Array of {sessionId, error} from BackfillResult
+ * @param pathMap   - Map from sessionId → transcript file path (built from ScanResult)
+ * @param limit     - Maximum number of errors to display in full (default: 20)
+ */
+export function formatErrorBlock(
+  errors: Array<{ sessionId: string; error: string }>,
+  pathMap: Map<string, string>,
+  limit = 20,
+): string {
+  // 2 spaces + 9-char padded label + 2 spaces = 13 chars before the path/error text
+  const LABEL_WIDTH = 9;
+  const PREFIX = " ".repeat(2);
+  const GAP = " ".repeat(2);
+  const INDENT = " ".repeat(PREFIX.length + LABEL_WIDTH + GAP.length);
+
+  const lines: string[] = [`Errors (${errors.length}):`];
+  const shown = errors.slice(0, limit);
+
+  for (let i = 0; i < shown.length; i++) {
+    const err = shown[i];
+    // Blank line between entries (not before the first)
+    if (i > 0) lines.push("");
+
+    const label = categorizeError(err.error).padEnd(LABEL_WIDTH);
+    const rawPath = pathMap.get(err.sessionId);
+    const displayPath = rawPath
+      ? shortenPath(rawPath)
+      : `(session ${err.sessionId})`;
+
+    lines.push(`${PREFIX}${label}${GAP}${displayPath}`);
+    lines.push(`${INDENT}${err.error}`);
+  }
+
+  if (errors.length > limit) {
+    lines.push("");
+    lines.push(`  ... and ${errors.length - limit} more`);
+  }
+
+  lines.push("");
+  lines.push("To retry failed sessions: fuel-code backfill");
+
+  return lines.join("\n");
 }
