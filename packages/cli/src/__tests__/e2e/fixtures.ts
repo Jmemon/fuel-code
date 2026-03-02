@@ -26,23 +26,25 @@ import { generateId } from "@fuel-code/shared";
 
 export const IDS = {
   // Workspaces  (26-char Crockford Base32: 0-9 A-H J K M N P-T V-Z)
-  ws_fuel_code:    "01E2E0WS0000FC0000000000AA",
-  ws_api_service:  "01E2E0WS0000AP0000000000BB",
-  ws_unassociated: "01E2E0WS0000NA0000000000CC",
+  // Position 5 varies (1/2/3) so each workspace has a unique 8-char prefix.
+  ws_fuel_code:    "01E2E1WS0000FC0000000000AA",
+  ws_api_service:  "01E2E2WS0000AP0000000000BB",
+  ws_unassociated: "01E2E3WS0000NA0000000000CC",
 
-  // Devices
-  dev_macbook: "01E2E0DV0000MB0000000000DD",
-  dev_remote:  "01E2E0DV0000RM0000000000EE",
+  // Devices — position 5 varies (1/2)
+  dev_macbook: "01E2E1DV0000MB0000000000DD",
+  dev_remote:  "01E2E2DV0000RM0000000000EE",
 
-  // Sessions (8 total)
-  sess_1_capturing:  "01E2E0SS0001CA0000000000FF",   // fuel-code, capturing
-  sess_2_summarized: "01E2E0SS0002SM0000000000GG",   // fuel-code, summarized
-  sess_3_summarized: "01E2E0SS0003SM0000000000HH",   // fuel-code, summarized
-  sess_4_failed:     "01E2E0SS0004FA0000000000JJ",   // fuel-code, failed
-  sess_5_parsed:     "01E2E0SS0005PA0000000000KK",   // api-service, parsed
-  sess_6_summarized: "01E2E0SS0006SM0000000000MM",   // api-service, summarized
-  sess_7_summarized: "01E2E0SS0007SM0000000000NN",   // _unassociated, summarized
-  sess_8_summarized: "01E2E0SS0008SM0000000000PP",   // _unassociated, summarized
+  // Sessions (8 total) — position 5 is the session number (1-8),
+  // giving each a unique 8-char prefix (01E2E1SS … 01E2E8SS).
+  sess_1_capturing:  "01E2E1SS0001CA0000000000FF",   // fuel-code, capturing
+  sess_2_summarized: "01E2E2SS0002SM0000000000GG",   // fuel-code, summarized
+  sess_3_summarized: "01E2E3SS0003SM0000000000HH",   // fuel-code, summarized
+  sess_4_failed:     "01E2E4SS0004FA0000000000JJ",   // fuel-code, failed
+  sess_5_parsed:     "01E2E5SS0005PA0000000000KK",   // api-service, parsed
+  sess_6_summarized: "01E2E6SS0006SM0000000000MM",   // api-service, summarized
+  sess_7_summarized: "01E2E7SS0007SM0000000000NN",   // _unassociated, summarized
+  sess_8_summarized: "01E2E8SS0008SM0000000000PP",   // _unassociated, summarized
 
   // Events — IDs generated inline during seeding (unique per run is fine)
 
