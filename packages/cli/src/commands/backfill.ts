@@ -166,6 +166,8 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
     return;
   }
 
+  console.error("Preparing ingestion...");
+
   // Phase 2: Mark as running and persist state
   const updatedState: BackfillState = {
     ...state,
