@@ -274,7 +274,7 @@ export function projectDirToPath(dirName: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Active session detection: check JSONL content + lsof instead of mtime
+// Active session detection: check JSONL content (exit-tag) + process set lookup
 // ---------------------------------------------------------------------------
 
 /**

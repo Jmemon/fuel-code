@@ -665,9 +665,10 @@ describe("isSessionActiveAsync", () => {
     expect(await isSessionActiveAsync(filePath)).toBe(false);
   });
 
-  it("returns false when file has no /exit and no process holds it open", async () => {
+  it("returns false when file has no /exit and no activeSet is provided", async () => {
     const filePath = path.join(tmpDir, "abandoned-async.jsonl");
     fs.writeFileSync(filePath, buildActiveJsonl("22222222-2222-2222-2222-222222222222"));
+    // No activeSet provided → returns false (activity state unknown without process detection)
     expect(await isSessionActiveAsync(filePath)).toBe(false);
   });
 
