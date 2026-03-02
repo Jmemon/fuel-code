@@ -32,6 +32,8 @@ export interface BackfillResult {
   totalSizeBytes: number;
   /** Wall-clock duration of the backfill run */
   durationMs: number;
+  /** Number of currently-live sessions that received a synthetic session.start only */
+  liveStarted?: number;
 }
 
 /** Persisted backfill state for resume and status reporting */

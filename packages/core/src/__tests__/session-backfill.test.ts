@@ -307,6 +307,34 @@ describe("scanForSessions", () => {
     expect(result.skipped.potentiallyActive).toBe(0);
   });
 
+  it("includes live sessions in discovered with isLive=true when _activeSessions is provided", async () => {
+    const liveId = "aaaaaaaa-1111-2222-3333-444444444444";
+    const closedId = "bbbbbbbb-2222-3333-4444-555555555555";
+    createProjectDir("-Users-test-Desktop-liveproj", [
+      { id: liveId, content: buildActiveJsonl(liveId) },
+      { id: closedId }, // has /exit → closed
+    ]);
+
+    const result = await scanForSessions(tmpDir, {
+      _activeSessions: new Set([liveId]),
+    });
+
+    // Both sessions appear in discovered (live sessions are no longer skipped)
+    expect(result.discovered.length).toBe(2);
+
+    const live = result.discovered.find(s => s.sessionId === liveId);
+    const closed = result.discovered.find(s => s.sessionId === closedId);
+
+    expect(live).toBeDefined();
+    expect(live!.isLive).toBe(true);
+
+    expect(closed).toBeDefined();
+    expect(closed!.isLive).toBeUndefined(); // closed sessions have no isLive flag
+
+    // potentiallyActive counter stays at zero — live sessions are not "skipped"
+    expect(result.skipped.potentiallyActive).toBe(0);
+  });
+
   it("handles empty JSONL files (discovered with null metadata)", async () => {
     createProjectDir("-Users-test-Desktop-empty", [
       {

@@ -57,6 +57,8 @@ export interface DiscoveredSession {
   fileSizeBytes: number;
   /** Message count from sessions-index.json (null if unavailable) */
   messageCount: number | null;
+  /** True if the session is currently active — backfill emits session.start only, no session.end */
+  isLive?: boolean;
 }
 
 /** A sub-agent transcript discovered inside a session's subagents/ directory */
@@ -580,6 +582,8 @@ export async function scanForSessions(
     onProgress?: (progress: ScanProgress) => void;
     signal?: AbortSignal;
     concurrency?: number;
+    /** Override active-session detection for testing — skips buildActiveSessions() call */
+    _activeSessions?: Set<string>;
   },
 ): Promise<ScanResult> {
   const projectsDir = claudeProjectsDir ?? DEFAULT_CLAUDE_PROJECTS_DIR;
@@ -723,8 +727,9 @@ export async function scanForSessions(
 
   const totalSessionFiles = pendingSessions.length;
 
-  // Build active session set once before Phase B — O(live_processes), not O(sessions)
-  const activeSessions = await buildActiveSessions(projectsDir);
+  // Build active session set once before Phase B — O(live_processes), not O(sessions).
+  // _activeSessions option is used in tests to inject a known set without spawning processes.
+  const activeSessions = options?._activeSessions ?? await buildActiveSessions(projectsDir);
 
   // ---------- Phase B: Concurrent process (worker pool) ----------
   // Each worker: exit-tag + active-set check → readJsonlMetadata → resolveWorkspaceFromPath
@@ -783,23 +788,19 @@ export async function scanForSessions(
         const item = pendingSessions[sessIdx++];
         if (!item) break;
 
-        // Stage 1: /exit tag → definitely closed, proceed with ingest
-        // Stage 2: session in active set → currently live, skip
-        let sessionIsActive = false;
+        // Stage 1: /exit tag → definitely closed, proceed with full ingest.
+        // Stage 2: session in active set → currently live; still included in
+        //   discovered[] but marked isLive=true so the ingest phase emits only
+        //   session.start (no session.end, no transcript upload).
+        let sessionIsLive = false;
         try {
           const tail = readTailLines(item.entryPath, 4);
           if (!tail.includes("<command-name>/exit</command-name>") &&
               activeSessions.has(item.sessionId)) {
-            sessionIsActive = true;
+            sessionIsLive = true;
           }
         } catch {
           // Can't read tail — proceed with ingest (non-destructive)
-        }
-        if (sessionIsActive) {
-          result.skipped.potentiallyActive++;
-          sessionFilesProcessed++;
-          options?.onProgress?.({ current: sessionFilesProcessed, total: totalSessionFiles, currentDir: item.projectDir });
-          continue;
         }
 
         // Build the discovered session object
@@ -856,6 +857,10 @@ export async function scanForSessions(
           workspaceCache.set(resolvedCwd, resolveWorkspaceFromPath(resolvedCwd));
         }
         discovered.workspaceCanonicalId = workspaceCache.get(resolvedCwd)!;
+
+        if (sessionIsLive) {
+          discovered.isLive = true;
+        }
 
         result.discovered.push(discovered);
         sessionFilesProcessed++;
@@ -918,6 +923,7 @@ export async function ingestBackfillSessions(
     errors: [],
     totalSizeBytes: 0,
     durationMs: 0,
+    liveStarted: 0,
   };
 
   // Shared rate limit state: when any worker hits 429, all workers pause.
@@ -1031,6 +1037,17 @@ export async function ingestBackfillSessions(
       await flushEventBatchWithRateLimit(baseUrl, deps.apiKey, [startEvent], (until) => {
         rateLimitUntil = Math.max(rateLimitUntil, until);
       }, deps.signal);
+
+      // Live sessions stop here: no session.end, no transcript upload.
+      // The session will appear in the TUI as an active session. When Claude
+      // exits normally the session.end hook fires and closes it. We intentionally
+      // do NOT call onSessionIngested so live sessions are not added to
+      // ingestedSessionIds — the next backfill run can treat them normally once
+      // the transcript has a /exit tag.
+      if (session.isLive) {
+        result.liveStarted = (result.liveStarted ?? 0) + 1;
+        return;
+      }
 
       // Step 3: Emit session.end immediately (not batched) so the session
       // reaches "ended" state before we attempt the transcript upload.

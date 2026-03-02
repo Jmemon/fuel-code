@@ -371,6 +371,68 @@ describe("ingestBackfillSessions", () => {
   // Additional edge cases
   // -----------------------------------------------------------------------
 
+  // -----------------------------------------------------------------------
+  // Live session handling (isLive=true): start-only, no end, no transcript
+  // -----------------------------------------------------------------------
+
+  it("live session receives only session.start — no session.end and no transcript upload", async () => {
+    const liveSession = makeSession({ isLive: true });
+
+    const emittedEventTypes: string[] = [];
+    let transcriptUploaded = false;
+    const onSessionIngested = mock((_id: string) => {});
+
+    mockFetch({
+      "GET /api/sessions/": () => notFound(),
+      "POST /api/events/ingest": (_, init) => {
+        const body = JSON.parse(init?.body as string ?? "{}") as { events?: Array<{ type: string }> };
+        for (const event of body.events ?? []) {
+          emittedEventTypes.push(event.type);
+        }
+        return ok();
+      },
+      "POST /api/sessions/": () => {
+        transcriptUploaded = true;
+        return ok();
+      },
+    });
+
+    const result = await ingestBackfillSessions([liveSession], makeDeps({ onSessionIngested }));
+
+    // session.start must be emitted
+    expect(emittedEventTypes).toContain("session.start");
+    // session.end must NOT be emitted — session is still live
+    expect(emittedEventTypes).not.toContain("session.end");
+    // transcript upload must NOT happen — file is still being written to
+    expect(transcriptUploaded).toBe(false);
+    // onSessionIngested must NOT be called — live sessions are NOT tracked in ingestedSessionIds
+    expect(onSessionIngested).not.toHaveBeenCalled();
+    // liveStarted counter reflects exactly one live session started
+    expect(result.liveStarted).toBe(1);
+    // ingested (fully-completed sessions) must be 0
+    expect(result.ingested).toBe(0);
+  });
+
+  it("skips live session without emitting events when it already exists in backend", async () => {
+    const liveSession = makeSession({ isLive: true });
+
+    const emittedEventTypes: string[] = [];
+    mockFetch({
+      "GET /api/sessions/": () => ok({ id: liveSession.sessionId }), // already exists
+      "POST /api/events/ingest": (_, init) => {
+        const body = JSON.parse(init?.body as string ?? "{}") as { events?: Array<{ type: string }> };
+        for (const event of body.events ?? []) emittedEventTypes.push(event.type);
+        return ok();
+      },
+    });
+
+    const result = await ingestBackfillSessions([liveSession], makeDeps());
+
+    expect(result.skipped).toBe(1);
+    expect(result.liveStarted).toBe(0);
+    expect(emittedEventTypes).toHaveLength(0);
+  });
+
   it("returns zero counts for an empty sessions array", async () => {
     mockFetch({});
 

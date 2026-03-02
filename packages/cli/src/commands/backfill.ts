@@ -297,6 +297,9 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
 
       console.log(`  Uploaded:   ${result.ingested} sessions` +
         (result.skipped > 0 ? ` (${result.skipped} skipped)` : ""));
+      if (result.liveStarted && result.liveStarted > 0) {
+        console.log(`  Live:       ${result.liveStarted} session${result.liveStarted === 1 ? "" : "s"} started (no end event — session still running)`);
+      }
       const ps = pipelineResult.summary;
       const processedParts: string[] = [];
       if (ps.summarized > 0) processedParts.push(`${ps.summarized} summarized`);
@@ -310,6 +313,9 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
       console.log("Backfill complete!");
       console.log(`  Uploaded:   ${result.ingested} sessions` +
         (result.skipped > 0 ? ` (${result.skipped} skipped)` : ""));
+      if (result.liveStarted && result.liveStarted > 0) {
+        console.log(`  Live:       ${result.liveStarted} session${result.liveStarted === 1 ? "" : "s"} started (no end event — session still running)`);
+      }
     }
 
     // Show errors at the end with full detail: category, transcript path, error message, retry hint
@@ -376,14 +382,17 @@ function showDryRunSummary(
     );
   }
 
+  const liveCount = scanResult.discovered.filter(s => s.isLive).length;
+  const finishedCount = scanResult.discovered.length - liveCount;
+
   console.log("");
   console.log(
-    `Total: ${scanResult.discovered.length} sessions (${formatBytes(totalSize)})`,
+    `Total: ${finishedCount} finished sessions (${formatBytes(totalSize)})`,
   );
 
-  if (scanResult.skipped.potentiallyActive > 0) {
+  if (liveCount > 0) {
     console.log(
-      `Skipped (potentially active): ${scanResult.skipped.potentiallyActive}`,
+      `Live:  ${liveCount} session${liveCount === 1 ? "" : "s"} (start event only — session.end comes from hook)`,
     );
   }
 }
