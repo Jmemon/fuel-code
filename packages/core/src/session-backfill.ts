@@ -375,6 +375,53 @@ export async function isSessionActiveAsync(filePath: string): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
+// selectBestSession: pure timestamp-matching helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Given candidate JSONLs (with their first-event timestamps and mtimes) and
+ * the process start epoch, return the session ID whose first-event timestamp
+ * is closest to procStart within thresholdSeconds.
+ *
+ * Falls back to the most-recently-modified candidate when procStart is null
+ * (ps failed to provide a start time).
+ *
+ * Exported for unit testing.
+ */
+export function selectBestSession(
+  candidates: Array<{ sessionId: string; firstTimestamp: number | null; mtime: number }>,
+  procStart: number | null,
+  thresholdSeconds = 300,
+): string | null {
+  if (candidates.length === 0) return null;
+
+  if (procStart !== null) {
+    // Timestamp-proximity match: find the candidate closest to procStart within threshold.
+    // Returns null if nothing falls within the window — no mtime fallback in this branch.
+    let best: { sessionId: string; diff: number } | null = null;
+    for (const c of candidates) {
+      if (c.firstTimestamp === null) continue;
+      const diff = Math.abs(c.firstTimestamp - procStart);
+      if (diff <= thresholdSeconds && (best === null || diff < best.diff)) {
+        best = { sessionId: c.sessionId, diff };
+      }
+    }
+    return best ? best.sessionId : null;
+  }
+
+  // Fallback: procStart is null (ps gave no start time) — use most-recently-modified candidate.
+  let bestMtime = -Infinity;
+  let bestId: string | null = null;
+  for (const c of candidates) {
+    if (c.mtime > bestMtime) {
+      bestMtime = c.mtime;
+      bestId = c.sessionId;
+    }
+  }
+  return bestId;
+}
+
+// ---------------------------------------------------------------------------
 // scanForSessions: discover all historical sessions
 // ---------------------------------------------------------------------------
 

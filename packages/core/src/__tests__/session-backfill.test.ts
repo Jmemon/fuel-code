@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { scanForSessions, isSessionActive, isSessionActiveAsync, projectDirToPath } from "../session-backfill.js";
+import { scanForSessions, isSessionActive, isSessionActiveAsync, projectDirToPath, selectBestSession } from "../session-backfill.js";
 import { loadBackfillState, saveBackfillState, type BackfillState } from "../backfill-state.js";
 
 // ---------------------------------------------------------------------------
@@ -673,6 +673,63 @@ describe("isSessionActiveAsync", () => {
 
   it("returns false for nonexistent file", async () => {
     expect(await isSessionActiveAsync(path.join(tmpDir, "nope.jsonl"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: selectBestSession
+// ---------------------------------------------------------------------------
+
+describe("selectBestSession", () => {
+  it("returns the session whose first timestamp is closest to procStart", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const candidates = [
+      { sessionId: "aaa", firstTimestamp: now - 600, mtime: now - 600 },
+      { sessionId: "bbb", firstTimestamp: now - 5,   mtime: now - 5 },   // closest
+      { sessionId: "ccc", firstTimestamp: now - 200, mtime: now - 200 },
+    ];
+    expect(selectBestSession(candidates, now)).toBe("bbb");
+  });
+
+  it("returns null when no candidate falls within the default 300s threshold", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const candidates = [
+      { sessionId: "aaa", firstTimestamp: now - 600, mtime: now - 600 },
+    ];
+    expect(selectBestSession(candidates, now)).toBeNull();
+  });
+
+  it("falls back to most-recently-modified when procStart is null", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const candidates = [
+      { sessionId: "aaa", firstTimestamp: now - 600, mtime: now - 600 },
+      { sessionId: "bbb", firstTimestamp: now - 10,  mtime: now - 10 },  // newest mtime
+    ];
+    expect(selectBestSession(candidates, null)).toBe("bbb");
+  });
+
+  it("returns null for an empty candidates list", () => {
+    expect(selectBestSession([], Date.now() / 1000)).toBeNull();
+  });
+
+  it("skips candidates with null firstTimestamp when procStart is known", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const candidates = [
+      { sessionId: "aaa", firstTimestamp: null,    mtime: now - 10 },
+      { sessionId: "bbb", firstTimestamp: now - 5, mtime: now - 5 },
+    ];
+    expect(selectBestSession(candidates, now)).toBe("bbb");
+  });
+
+  it("accepts a custom threshold", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const candidates = [
+      { sessionId: "aaa", firstTimestamp: now - 20, mtime: now - 20 },
+    ];
+    // diff is 20s; within 30s threshold → match
+    expect(selectBestSession(candidates, now, 30)).toBe("aaa");
+    // diff is 20s; outside 10s threshold → null
+    expect(selectBestSession(candidates, now, 10)).toBeNull();
   });
 });
 
