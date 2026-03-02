@@ -354,6 +354,71 @@ describe("Phase 4-2 API: Session relationships", () => {
   });
 
   // -----------------------------------------------------------------------
+  // Session list includes inline subagent_types, skill_names, worktree_names
+  // -----------------------------------------------------------------------
+
+  test("GET /sessions list includes subagent_types, skill_names, worktree_names arrays", async () => {
+    const res = await fetch(
+      `${baseUrl}/api/sessions?workspace_id=${workspaceId}`,
+      { headers: authHeaders() },
+    );
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+
+    // Find the session that has relationships
+    const sessionWithRels = body.sessions.find(
+      (s: any) => s.id === sessionWithRelId,
+    );
+    expect(sessionWithRels).toBeDefined();
+
+    // subagent_types: should contain the two distinct agent_type values
+    expect(sessionWithRels.subagent_types).toBeDefined();
+    expect(Array.isArray(sessionWithRels.subagent_types)).toBe(true);
+    expect(sessionWithRels.subagent_types).toHaveLength(2);
+    expect(sessionWithRels.subagent_types).toContain("code");
+    expect(sessionWithRels.subagent_types).toContain("researcher");
+
+    // skill_names: should contain the two distinct skill_name values
+    expect(sessionWithRels.skill_names).toBeDefined();
+    expect(Array.isArray(sessionWithRels.skill_names)).toBe(true);
+    expect(sessionWithRels.skill_names).toHaveLength(2);
+    expect(sessionWithRels.skill_names).toContain("commit");
+    expect(sessionWithRels.skill_names).toContain("review-pr");
+
+    // worktree_names: should contain the single worktree_name
+    expect(sessionWithRels.worktree_names).toBeDefined();
+    expect(Array.isArray(sessionWithRels.worktree_names)).toBe(true);
+    expect(sessionWithRels.worktree_names).toHaveLength(1);
+    expect(sessionWithRels.worktree_names).toContain("feature-wt");
+  });
+
+  test("GET /sessions list returns empty arrays for sessions without relationships", async () => {
+    const res = await fetch(
+      `${baseUrl}/api/sessions?workspace_id=${workspaceId}`,
+      { headers: authHeaders() },
+    );
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+
+    // Find the plain session (no relationships)
+    const plainSession = body.sessions.find(
+      (s: any) => s.id === sessionPlainId,
+    );
+    expect(plainSession).toBeDefined();
+
+    expect(plainSession.subagent_types).toBeDefined();
+    expect(plainSession.subagent_types).toHaveLength(0);
+
+    expect(plainSession.skill_names).toBeDefined();
+    expect(plainSession.skill_names).toHaveLength(0);
+
+    expect(plainSession.worktree_names).toBeDefined();
+    expect(plainSession.worktree_names).toHaveLength(0);
+  });
+
+  // -----------------------------------------------------------------------
   // Transcript subagent_id filtering
   // -----------------------------------------------------------------------
 

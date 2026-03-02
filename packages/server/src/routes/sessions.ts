@@ -220,11 +220,29 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
         // Fetch limit + 1 rows to determine if there are more pages
         const fetchLimit = query.limit + 1;
 
+        // Correlated subqueries add subagent_types, skill_names, and worktree_names
+        // arrays inline so the TUI can render rich metadata without per-session detail fetches.
+        // With LIMIT 50 these fire at most 50 times — negligible cost with session_id indexes.
         const rows = await sql`
           SELECT s.*,
                  w.canonical_id AS workspace_canonical_id,
                  w.display_name AS workspace_name,
-                 d.name AS device_name
+                 d.name AS device_name,
+                 COALESCE(
+                   (SELECT array_agg(DISTINCT sa.agent_type)
+                    FROM subagents sa WHERE sa.session_id = s.id),
+                   '{}'
+                 ) AS subagent_types,
+                 COALESCE(
+                   (SELECT array_agg(DISTINCT sk.skill_name)
+                    FROM session_skills sk WHERE sk.session_id = s.id),
+                   '{}'
+                 ) AS skill_names,
+                 COALESCE(
+                   (SELECT array_agg(DISTINCT wt.worktree_name)
+                    FROM session_worktrees wt WHERE wt.session_id = s.id),
+                   '{}'
+                 ) AS worktree_names
           FROM sessions s
           JOIN workspaces w ON s.workspace_id = w.id
           JOIN devices d ON s.device_id = d.id
