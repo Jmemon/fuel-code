@@ -48,6 +48,12 @@ export interface SessionDisplayData extends Session {
   tool_counts?: Record<string, number> | null;
   /** Number of subagents spawned (from DB column) */
   subagent_count?: number | null;
+  /** Distinct agent_type values from subagents table (Phase 4-2 enrichment) */
+  subagent_types?: string[];
+  /** Distinct skill names from session_skills table (Phase 4-2 enrichment) */
+  skill_names?: string[];
+  /** Distinct worktree names from session_worktrees table (Phase 4-2 enrichment) */
+  worktree_names?: string[];
 }
 
 export interface SessionRowProps {
