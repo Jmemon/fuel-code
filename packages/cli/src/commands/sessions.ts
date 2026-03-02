@@ -102,8 +102,21 @@ export function formatSessionsTable(sessions: Session[], hasFilters?: boolean): 
 
   const rows = sessions.map((s) => {
     // Cast to any to access extended fields from the API response
-    // (the server joins workspace_name, device_name, summary, cost_estimate_usd, tags)
+    // (the server joins workspace_name, device_name, summary, cost_estimate_usd, tags,
+    // and Phase 4-2 enrichment: subagent_types, skill_names, worktree_names)
     const ext = s as any;
+
+    // Build compact metadata string from Phase 4-2 enrichment fields
+    const metaParts: string[] = [];
+    if (s.permission_mode) metaParts.push(s.permission_mode);
+    const skills: string[] = ext.skill_names ?? [];
+    if (skills.length > 0) metaParts.push(skills.join(","));
+    const worktrees: string[] = ext.worktree_names ?? [];
+    if (worktrees.length > 0) metaParts.push("\u{1F33F}" + worktrees[0]);
+    const agentTypes: string[] = ext.subagent_types ?? [];
+    if (agentTypes.length > 0) metaParts.push(`${agentTypes.length} agent${agentTypes.length !== 1 ? "s" : ""}`);
+    const meta = metaParts.length > 0 ? pc.dim(metaParts.join(" \u00B7 ")) : "";
+
     return [
       formatLifecycle(s.lifecycle),
       pc.dim(s.id.slice(0, 8)),
@@ -113,6 +126,7 @@ export function formatSessionsTable(sessions: Session[], hasFilters?: boolean): 
       formatTokensCompact(ext.tokens_in ?? null, ext.tokens_out ?? null),
       formatRelativeTime(s.started_at),
       ext.summary ?? ext.initial_prompt ?? pc.dim("(no summary)"),
+      meta,
     ];
   });
 
@@ -126,6 +140,7 @@ export function formatSessionsTable(sessions: Session[], hasFilters?: boolean): 
       { header: "TOKENS", align: "right" },
       { header: "STARTED" },
       { header: "SUMMARY" },
+      { header: "META" },
     ],
     rows,
   });
