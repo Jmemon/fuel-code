@@ -1,7 +1,7 @@
 /**
  * Phase 4 E2E integration tests — TUI smoke tests.
  *
- * Tests 19-21: Verify the Dashboard TUI component renders correctly
+ * Tests 19-21: Verify the WorkspacesView TUI component renders correctly
  * with a REAL ApiClient pointed at the test server (not mocks).
  * Uses ink-testing-library for headless rendering.
  */
@@ -13,7 +13,7 @@ import { EventEmitter } from "events";
 
 import { setupTestServer, type TestServerContext } from "./setup.js";
 import { createTestClient, stripAnsi, wait, waitFor } from "./helpers.js";
-import { Dashboard } from "../../tui/Dashboard.js";
+import { WorkspacesView } from "../../tui/WorkspacesView.js";
 import type { FuelApiClient } from "../../lib/api-client.js";
 
 // ---------------------------------------------------------------------------
@@ -52,10 +52,9 @@ function strip(s: string | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
-// Mock WsClient — same pattern as Dashboard.test.tsx
+// Mock WsClient — minimal mock for TUI components that accept a WsClient.
 // We use a mock WS client because real WS connection in ink-testing-library
 // would add complexity without testing TUI rendering behavior.
-// The real WS is tested separately in phase4-ws.test.ts.
 // ---------------------------------------------------------------------------
 
 class MockWsClient extends EventEmitter {
@@ -82,16 +81,18 @@ class MockWsClient extends EventEmitter {
 }
 
 // ---------------------------------------------------------------------------
-// Tests 19-21
+// Tests 19-21 (updated for drill-down navigation)
 // ---------------------------------------------------------------------------
 
-describe("TUI Dashboard E2E", () => {
-  test("Test 19: Dashboard renders workspace list from real backend", async () => {
+describe("TUI WorkspacesView E2E", () => {
+  test("Test 19: WorkspacesView renders workspace list from real backend", async () => {
     const instance = render(
-      <Dashboard
+      <WorkspacesView
         api={api as any}
         ws={new MockWsClient() as any}
-        onSelectSession={() => {}}
+        onSelectWorkspace={() => {}}
+        onTeams={() => {}}
+        onQuit={() => {}}
       />,
     );
 
@@ -108,64 +109,61 @@ describe("TUI Dashboard E2E", () => {
     expect(output).toContain("api-service");
     expect(output).toContain("_unassociated");
 
-    // Pane headers should be present
+    // Header should be present
     expect(output).toContain("WORKSPACES");
-    expect(output).toContain("SESSIONS");
   }, 15_000);
 
-  test("Test 20: Dashboard renders sessions for selected workspace", async () => {
+  test("Test 20: WorkspacesView shows session count and activity info", async () => {
     const instance = render(
-      <Dashboard
+      <WorkspacesView
         api={api as any}
         ws={new MockWsClient() as any}
-        onSelectSession={() => {}}
+        onSelectWorkspace={() => {}}
+        onTeams={() => {}}
+        onQuit={() => {}}
       />,
     );
 
-    // Poll until session lifecycle indicators appear (data loaded)
+    // Poll until workspace data loads
     await waitFor(() => {
       const output = strip(instance.lastFrame());
-      return output.includes("LIVE") || output.includes("DONE") || output.includes("FAIL");
+      return output.includes("sessions");
     });
 
     const output = strip(instance.lastFrame());
 
-    // The first workspace is selected by default. Sessions for it should show.
-    const hasLifecycleIndicator =
-      output.includes("LIVE") ||
-      output.includes("DONE") ||
-      output.includes("FAIL");
-    expect(hasLifecycleIndicator).toBe(true);
+    // Session count metadata should appear
+    expect(output).toContain("sessions");
   }, 15_000);
 
-  test("Test 21: Enter on session calls onSelectSession with session ID", async () => {
-    let selectedId = "";
+  test("Test 21: Enter on workspace calls onSelectWorkspace", async () => {
+    let selectedWorkspace: any = null;
 
     const instance = render(
-      <Dashboard
+      <WorkspacesView
         api={api as any}
         ws={new MockWsClient() as any}
-        onSelectSession={(id) => {
-          selectedId = id;
+        onSelectWorkspace={(ws) => {
+          selectedWorkspace = ws;
         }}
+        onTeams={() => {}}
+        onQuit={() => {}}
       />,
     );
 
-    // Poll until data loads (sessions visible)
+    // Poll until data loads (workspaces visible)
     await waitFor(() => {
       const output = strip(instance.lastFrame());
-      return output.includes("LIVE") || output.includes("DONE") || output.includes("FAIL");
+      return output.includes("fuel-code");
     });
 
-    // Switch focus to sessions pane (Tab), then press Enter
-    instance.stdin.write("\t");
-    await wait(100);
+    // Press Enter on the first workspace
     instance.stdin.write("\r");
 
-    // Poll until onSelectSession fires
-    await waitFor(() => selectedId.length > 0, 3_000);
+    // Poll until onSelectWorkspace fires
+    await waitFor(() => selectedWorkspace !== null, 3_000);
 
-    expect(selectedId).toBeTruthy();
-    expect(selectedId.length).toBeGreaterThan(0);
+    expect(selectedWorkspace).toBeTruthy();
+    expect(selectedWorkspace.id).toBeTruthy();
   }, 15_000);
 });

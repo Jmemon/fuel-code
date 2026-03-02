@@ -1,5 +1,5 @@
 /**
- * Status bar for the bottom of the Dashboard.
+ * Status bar for the bottom of TUI views.
  *
  * Displays aggregate statistics across all workspaces, WebSocket connection status,
  * and keyboard shortcut hints.
