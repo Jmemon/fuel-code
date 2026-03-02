@@ -15,7 +15,7 @@
  *   2. Ingestion: upload transcripts and emit synthetic session events
  */
 
-import { exec, execSync } from "node:child_process";
+import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -317,61 +317,49 @@ function readTailLines(filePath: string, lineCount: number): string {
 }
 
 /**
- * Check if a JSONL transcript file belongs to an active (currently running) session.
+ * Returns true if the session at filePath appears to be active.
  *
- * Two-stage check:
- *   1. Read the last 4 lines of the file and look for a `/exit` command — if found,
- *      the session was gracefully closed and is definitely not active.
- *   2. If no `/exit` found, run `lsof` to check whether any process has the file
- *      open — if so, the session is still running.
+ * Stage 1: if the transcript tail contains /exit, the session closed
+ *   gracefully — return false immediately.
+ * Stage 2: if activeSet is provided, return whether the session ID
+ *   (derived from the filename) is in it. Without activeSet, returns false
+ *   (activity state is unknown without process detection).
+ *
+ * The former lsof Stage 2 has been removed: Claude closes the transcript
+ * after every event write, so lsof never reports the file as open mid-session.
+ * Callers that need accurate live detection should use buildActiveSessions.
  */
-export function isSessionActive(filePath: string): boolean {
-  // Stage 1: read last 4 lines for /exit command (definitive "session ended")
+export function isSessionActive(
+  filePath: string,
+  activeSet?: Set<string>,
+): boolean {
   try {
     const tail = readTailLines(filePath, 4);
-    if (tail.includes("<command-name>/exit</command-name>")) {
-      return false; // gracefully closed
-    }
+    if (tail.includes("<command-name>/exit</command-name>")) return false;
   } catch {
-    // If we can't read the file, assume not active (let later steps handle errors)
     return false;
   }
-
-  // Stage 2: no /exit found — check if a process has the file open
-  try {
-    execSync(`lsof -- ${JSON.stringify(filePath)}`, {
-      stdio: "pipe",
-      timeout: 5_000,
-    });
-    // lsof exits 0 if file is open → session is active
-    return true;
-  } catch {
-    // lsof exits non-zero if no process has the file open → not active
-    return false;
-  }
+  if (!activeSet) return false;
+  const sessionId = path.basename(filePath, ".jsonl");
+  return activeSet.has(sessionId);
 }
 
 /**
- * Async version of isSessionActive — uses exec() instead of execSync for lsof.
- * This allows concurrent active-session checks when processing many files in parallel.
+ * Async version of isSessionActive. See isSessionActive for full docs.
  */
-export async function isSessionActiveAsync(filePath: string): Promise<boolean> {
-  // Stage 1: read last 4 lines for /exit command (definitive "session ended")
+export async function isSessionActiveAsync(
+  filePath: string,
+  activeSet?: Set<string>,
+): Promise<boolean> {
   try {
     const tail = readTailLines(filePath, 4);
-    if (tail.includes("<command-name>/exit</command-name>")) {
-      return false; // gracefully closed
-    }
+    if (tail.includes("<command-name>/exit</command-name>")) return false;
   } catch {
     return false;
   }
-
-  // Stage 2: async lsof via exec()
-  return new Promise((resolve) => {
-    exec(`lsof -- ${JSON.stringify(filePath)}`, { timeout: 5_000 }, (err) => {
-      resolve(!err); // exit 0 = file open = active
-    });
-  });
+  if (!activeSet) return false;
+  const sessionId = path.basename(filePath, ".jsonl");
+  return activeSet.has(sessionId);
 }
 
 // ---------------------------------------------------------------------------
@@ -430,7 +418,7 @@ export function selectBestSession(
  *
  * Scans each project subdirectory for JSONL transcript files, using
  * sessions-index.json for metadata when available. Skips subagent
- * directories, non-JSONL files, and active sessions (detected via content + lsof).
+ * directories, non-JSONL files, and active sessions (detected via exit-tag check + process set).
  *
  * @param claudeProjectsDir - Path to ~/.claude/projects/ (overridable for tests)
  * @param options.onProgress - Called with directory name as each project dir is scanned

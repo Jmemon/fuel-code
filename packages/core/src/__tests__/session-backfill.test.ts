@@ -6,7 +6,7 @@
  *   - sessions-index.json metadata enrichment
  *   - Subagent directory skipping
  *   - Non-JSONL file skipping
- *   - Active session detection (content-based /exit check + lsof)
+ *   - Active session detection (content-based /exit check + process set lookup)
  *   - projectDirToPath directory name → path conversion
  *   - Workspace resolution (_unassociated fallback)
  *   - Empty JSONL file handling
@@ -121,7 +121,7 @@ describe("isSessionActive", () => {
   it("returns false when file has no /exit and no process holds it open (abandoned)", () => {
     const filePath = path.join(tmpDir, "abandoned-session.jsonl");
     fs.writeFileSync(filePath, buildActiveJsonl("22222222-2222-2222-2222-222222222222"));
-    // No process has this file open, so lsof will exit non-zero → not active
+    // No activeSet provided → returns false (activity state unknown without process detection)
     expect(isSessionActive(filePath)).toBe(false);
   });
 
@@ -302,7 +302,7 @@ describe("scanForSessions", () => {
 
     const result = await scanForSessions(tmpDir);
 
-    // Both discovered: one has /exit (closed), one has no /exit but no lsof match (abandoned)
+    // Both discovered: one has /exit (closed), one has no /exit but no activeSet match (abandoned)
     expect(result.discovered.length).toBe(2);
     expect(result.skipped.potentiallyActive).toBe(0);
   });
