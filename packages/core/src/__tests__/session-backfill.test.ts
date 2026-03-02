@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { scanForSessions, isSessionActive, isSessionActiveAsync, projectDirToPath, selectBestSession } from "../session-backfill.js";
+import { scanForSessions, isSessionActive, isSessionActiveAsync, projectDirToPath, selectBestSession, buildActiveSessions } from "../session-backfill.js";
 import { loadBackfillState, saveBackfillState, type BackfillState } from "../backfill-state.js";
 
 // ---------------------------------------------------------------------------
@@ -731,6 +731,20 @@ describe("selectBestSession", () => {
     expect(selectBestSession(candidates, now, 30)).toBe("aaa");
     // diff is 20s; outside 10s threshold → null
     expect(selectBestSession(candidates, now, 10)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: buildActiveSessions
+// ---------------------------------------------------------------------------
+
+describe("buildActiveSessions", () => {
+  it("returns a Set and does not throw when called with a temp dir", async () => {
+    // tmpDir has no claude project dirs matching any real process CWD, so
+    // the result will be an empty Set regardless of whether any Claude PIDs
+    // are found on this machine.
+    const result = await buildActiveSessions(tmpDir);
+    expect(result).toBeInstanceOf(Set);
   });
 });
 

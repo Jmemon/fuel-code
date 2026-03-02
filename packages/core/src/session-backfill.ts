@@ -15,7 +15,7 @@
  *   2. Ingestion: upload transcripts and emit synthetic session events
  */
 
-import { execSync } from "node:child_process";
+import { exec, execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -407,6 +407,153 @@ export function selectBestSession(
     }
   }
   return bestId;
+}
+
+// ---------------------------------------------------------------------------
+// Live session detection helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Return PIDs of running `claude` processes.
+ * Uses `pgrep -x claude` (exact name match). Returns [] on any failure.
+ */
+async function getClaudePids(): Promise<number[]> {
+  return new Promise((resolve) => {
+    exec("pgrep -x claude", (err, stdout) => {
+      if (err || !stdout.trim()) { resolve([]); return; }
+      const pids = stdout
+        .trim()
+        .split("\n")
+        .map((s) => parseInt(s, 10))
+        .filter((n) => !isNaN(n));
+      resolve(pids);
+    });
+  });
+}
+
+/**
+ * Return the current working directory of a process via lsof.
+ * Parses the `cwd` file descriptor entry; the path is the last whitespace-
+ * delimited token on that line. Returns null on any failure.
+ */
+async function getProcessCwd(pid: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    exec(`lsof -p ${pid} -a -d cwd`, { timeout: 5_000 }, (err, stdout) => {
+      if (err || !stdout) { resolve(null); return; }
+      for (const line of stdout.split("\n")) {
+        if (line.includes(" cwd ")) {
+          const parts = line.trim().split(/\s+/);
+          resolve(parts[parts.length - 1] || null);
+          return;
+        }
+      }
+      resolve(null);
+    });
+  });
+}
+
+/**
+ * Return the process start time as a Unix epoch (seconds) via `ps -o lstart=`.
+ * macOS lstart format: "Mon Jan 19 10:30:00 2026". Returns null on any failure.
+ */
+async function getProcessStartEpoch(pid: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    exec(`ps -p ${pid} -o lstart=`, { timeout: 5_000 }, (err, stdout) => {
+      if (err || !stdout.trim()) { resolve(null); return; }
+      const epoch = new Date(stdout.trim()).getTime();
+      resolve(isNaN(epoch) ? null : epoch / 1000);
+    });
+  });
+}
+
+/**
+ * Read the first line of a JSONL file and parse the `timestamp` field to a
+ * Unix epoch (seconds). Returns null on any parse failure or I/O error.
+ */
+function getJsonlFirstTimestamp(jsonlPath: string): number | null {
+  try {
+    const fd = fs.openSync(jsonlPath, "r");
+    try {
+      const buf = Buffer.alloc(4096);
+      const bytesRead = fs.readSync(fd, buf, 0, 4096, 0);
+      const firstLine = buf.toString("utf-8", 0, bytesRead).split("\n")[0];
+      if (!firstLine) return null;
+      const parsed = JSON.parse(firstLine) as { timestamp?: string };
+      if (!parsed.timestamp) return null;
+      const epoch = new Date(parsed.timestamp).getTime();
+      return isNaN(epoch) ? null : epoch / 1000;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build the set of session IDs that belong to currently-running Claude
+ * processes. Called once before Phase B of scanForSessions.
+ *
+ * Strategy: pgrep → per-PID CWD via lsof → encode CWD to project dir name →
+ * read first-event timestamps of candidate JSONLs → timestamp-correlate to
+ * the running process via selectBestSession.
+ *
+ * On any failure at any stage (pgrep unavailable, lsof error, no timestamp
+ * match) the function returns an empty Set so the scan proceeds normally
+ * without skipping anything (Option A fallback — non-destructive).
+ *
+ * CWD encoding: Claude replaces path separators and dots with hyphens when
+ * naming project directories (e.g. /Users/john.doe/repo → -Users-john-doe-repo).
+ * Additional character substitutions may exist; if the encoded path doesn't
+ * match an existing directory the PID is silently skipped.
+ */
+export async function buildActiveSessions(projectsDir: string): Promise<Set<string>> {
+  const active = new Set<string>();
+
+  const pids = await getClaudePids();
+  if (pids.length === 0) return active;
+
+  await Promise.all(
+    pids.map(async (pid) => {
+      try {
+        const cwd = await getProcessCwd(pid);
+        if (!cwd) return;
+
+        // Encode the CWD to match Claude's project directory naming scheme.
+        // Known substitutions: / → - and . → -
+        const encodedCwd = cwd.replace(/[/.]/g, "-");
+        const projectDir = path.join(projectsDir, encodedCwd);
+        if (!fs.existsSync(projectDir)) return;
+
+        const procStart = await getProcessStartEpoch(pid);
+
+        // Collect top-level JSONL files with valid UUID names
+        const candidates = fs
+          .readdirSync(projectDir)
+          .filter(
+            (f) =>
+              f.endsWith(".jsonl") &&
+              UUID_REGEX.test(f.replace(/\.jsonl$/, "")),
+          )
+          .map((f) => {
+            const fullPath = path.join(projectDir, f);
+            return {
+              sessionId: f.replace(/\.jsonl$/, ""),
+              firstTimestamp: getJsonlFirstTimestamp(fullPath),
+              mtime: fs.statSync(fullPath).mtimeMs / 1000,
+            };
+          });
+
+        const sessionId = selectBestSession(candidates, procStart);
+        if (sessionId) active.add(sessionId);
+      } catch {
+        // Per Option A: silently ignore per-PID failures — the session
+        // will be ingested rather than incorrectly skipped.
+      }
+    }),
+  );
+
+  return active;
 }
 
 // ---------------------------------------------------------------------------
