@@ -243,7 +243,7 @@ describe("formatSessionsTable", () => {
     expect(plain).toContain("DEVICE");
   });
 
-  it("renders DURATION, TOKENS, STARTED, SUMMARY columns", () => {
+  it("renders DURATION, TOKENS, STARTED, ROLE, SUMMARY columns", () => {
     const sessions = [makeSession()] as any;
     const output = formatSessionsTable(sessions);
     const plain = stripAnsi(output);
@@ -251,6 +251,7 @@ describe("formatSessionsTable", () => {
     expect(plain).toContain("DURATION");
     expect(plain).toContain("TOKENS");
     expect(plain).toContain("STARTED");
+    expect(plain).toContain("ROLE");
     expect(plain).toContain("SUMMARY");
   });
 
@@ -350,6 +351,98 @@ describe("formatSessionsTable", () => {
     const plain = stripAnsi(output);
     expect(plain).toContain("First");
     expect(plain).toContain("Second");
+  });
+
+  // -- ROLE column tests --
+
+  it("shows 'parent' role for sessions with subagent_count > 0", () => {
+    const sessions = [makeSession({ subagent_count: 2, subagent_types: ["researcher", "tester"] })] as any;
+    const output = formatSessionsTable(sessions);
+    const plain = stripAnsi(output);
+    expect(plain).toContain("parent");
+  });
+
+  it("shows empty role for standalone sessions", () => {
+    const sessions = [makeSession()] as any;
+    const output = formatSessionsTable(sessions);
+    const plain = stripAnsi(output);
+    // ROLE column header should exist, but the cell should be empty for standalone
+    expect(plain).toContain("ROLE");
+    // The row should NOT contain "parent", "lead", or "member"
+    const lines = plain.split("\n").slice(1); // skip header
+    expect(lines[0]).not.toMatch(/parent|lead|member/);
+  });
+
+  it("shows star lead role for team lead sessions", () => {
+    const sessions = [makeSession({ team_name: "my-team", team_role: "lead" })] as any;
+    const output = formatSessionsTable(sessions);
+    const plain = stripAnsi(output);
+    expect(plain).toContain("lead");
+  });
+
+  it("shows member role for team member sessions", () => {
+    const sessions = [makeSession({ team_name: "my-team", team_role: "member" })] as any;
+    const output = formatSessionsTable(sessions);
+    const plain = stripAnsi(output);
+    expect(plain).toContain("member");
+  });
+
+  // -- Subagent annotation tests --
+
+  it("renders subagent annotation line below parent session", () => {
+    const sessions = [makeSession({ subagent_count: 3, subagent_types: ["researcher", "tester", "coder"] })] as any;
+    const output = formatSessionsTable(sessions);
+    const plain = stripAnsi(output);
+    expect(plain).toContain("3 agents (researcher, tester, coder)");
+  });
+
+  it("does not render subagent annotation when subagent_count is 0", () => {
+    const sessions = [makeSession({ subagent_count: 0, subagent_types: [] })] as any;
+    const output = formatSessionsTable(sessions);
+    const plain = stripAnsi(output);
+    expect(plain).not.toContain("agents");
+  });
+
+  // -- Team grouping tests --
+
+  it("groups team sessions with box-drawing borders", () => {
+    const sessions = [
+      makeSession({ id: "01HZ0000000000000000001", team_name: "deploy-pipeline", team_role: "lead", summary: "Leading deploy" }),
+      makeSession({ id: "01HZ0000000000000000002", team_name: "deploy-pipeline", team_role: "member", summary: "Writing tests" }),
+    ] as any;
+    const output = formatSessionsTable(sessions);
+    const plain = stripAnsi(output);
+    expect(plain).toContain("Team: deploy-pipeline");
+    expect(plain).toContain("Leading deploy");
+    expect(plain).toContain("Writing tests");
+  });
+
+  it("renders team lead before members", () => {
+    const sessions = [
+      makeSession({ id: "01HZ0000000000000000001", team_name: "my-team", team_role: "member", summary: "Member work", started_at: "2025-06-15T11:00:00Z" }),
+      makeSession({ id: "01HZ0000000000000000002", team_name: "my-team", team_role: "lead", summary: "Lead work", started_at: "2025-06-15T10:00:00Z" }),
+    ] as any;
+    const output = formatSessionsTable(sessions);
+    const plain = stripAnsi(output);
+    const leadIdx = plain.indexOf("Lead work");
+    const memberIdx = plain.indexOf("Member work");
+    expect(leadIdx).toBeLessThan(memberIdx);
+  });
+
+  it("interleaves team groups and standalone sessions by time", () => {
+    const sessions = [
+      makeSession({ id: "01HZ0000000000000000001", summary: "Standalone early", started_at: "2025-06-15T08:00:00Z" }),
+      makeSession({ id: "01HZ0000000000000000002", team_name: "team-a", team_role: "lead", summary: "Team work", started_at: "2025-06-15T12:00:00Z" }),
+      makeSession({ id: "01HZ0000000000000000003", summary: "Standalone late", started_at: "2025-06-15T14:00:00Z" }),
+    ] as any;
+    const output = formatSessionsTable(sessions);
+    const plain = stripAnsi(output);
+    // Most recent first: "Standalone late" before "Team work" before "Standalone early"
+    const lateIdx = plain.indexOf("Standalone late");
+    const teamIdx = plain.indexOf("Team work");
+    const earlyIdx = plain.indexOf("Standalone early");
+    expect(lateIdx).toBeLessThan(teamIdx);
+    expect(teamIdx).toBeLessThan(earlyIdx);
   });
 });
 

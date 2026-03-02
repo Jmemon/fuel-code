@@ -29,7 +29,7 @@ export function stripAnsi(str: string): string {
  * Calculate the visible (display) width of a string, ignoring ANSI codes.
  * This is critical for correct table column alignment in terminal output.
  */
-function displayWidth(str: string): number {
+export function displayWidth(str: string): number {
   return stripAnsi(str).length;
 }
 

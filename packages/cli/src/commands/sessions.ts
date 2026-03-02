@@ -18,7 +18,6 @@ import {
   type PaginatedResponse,
 } from "../lib/api-client.js";
 import {
-  renderTable,
   formatDuration,
   formatTokensCompact,
   formatRelativeTime,
@@ -27,6 +26,7 @@ import {
   formatError,
   outputResult,
   truncate,
+  displayWidth,
 } from "../lib/formatters.js";
 import { resolveWorkspaceName, resolveDeviceName } from "../lib/resolvers.js";
 
@@ -82,14 +82,214 @@ export async function fetchSessions(
 }
 
 // ---------------------------------------------------------------------------
-// Presentation Layer
+// Presentation Layer — enriched table with team grouping, subagent
+// annotations, and ROLE column
 // ---------------------------------------------------------------------------
 
+/** Extended session fields returned by the API list endpoint */
+interface SessionExt extends Session {
+  workspace_name?: string;
+  device_name?: string;
+  summary?: string | null;
+  initial_prompt?: string | null;
+  tokens_in?: number | string | null;
+  tokens_out?: number | string | null;
+  subagent_count?: number;
+  subagent_types?: string[];
+}
+
+/** A team group: sessions sharing the same team_name */
+interface TeamGroup {
+  teamName: string;
+  /** Most recent started_at among members (for interleave ordering) */
+  latestStartedAt: string;
+  /** Members sorted: lead first, then by started_at DESC */
+  members: SessionExt[];
+}
+
+/** An item in the ordered render list */
+type RenderItem =
+  | { type: "standalone"; session: SessionExt }
+  | { type: "team"; teamName: string; members: SessionExt[] };
+
+/** Separate sessions into team groups and standalone sessions */
+function groupSessionsByTeam(sessions: SessionExt[]): {
+  teamGroups: TeamGroup[];
+  standalone: SessionExt[];
+} {
+  const teamMap = new Map<string, SessionExt[]>();
+  const standalone: SessionExt[] = [];
+
+  for (const s of sessions) {
+    if (s.team_name) {
+      const list = teamMap.get(s.team_name) ?? [];
+      list.push(s);
+      teamMap.set(s.team_name, list);
+    } else {
+      standalone.push(s);
+    }
+  }
+
+  const teamGroups: TeamGroup[] = [];
+  for (const [teamName, members] of teamMap) {
+    // Sort: lead first, then by started_at DESC
+    members.sort((a, b) => {
+      if (a.team_role === "lead" && b.team_role !== "lead") return -1;
+      if (b.team_role === "lead" && a.team_role !== "lead") return 1;
+      return new Date(b.started_at).getTime() - new Date(a.started_at).getTime();
+    });
+    const latestStartedAt = members.reduce(
+      (latest, m) => (m.started_at > latest ? m.started_at : latest),
+      members[0].started_at,
+    );
+    teamGroups.push({ teamName, latestStartedAt, members });
+  }
+
+  return { teamGroups, standalone };
+}
+
+/** Interleave teams and standalone sessions by most recent timestamp */
+function buildOrderedItems(
+  teamGroups: TeamGroup[],
+  standalone: SessionExt[],
+): RenderItem[] {
+  // Build a flat list with sort keys
+  const items: { sortKey: string; item: RenderItem }[] = [];
+
+  for (const group of teamGroups) {
+    items.push({
+      sortKey: group.latestStartedAt,
+      item: { type: "team", teamName: group.teamName, members: group.members },
+    });
+  }
+
+  for (const s of standalone) {
+    items.push({
+      sortKey: s.started_at,
+      item: { type: "standalone", session: s },
+    });
+  }
+
+  // Sort DESC (most recent first)
+  items.sort((a, b) => (a.sortKey > b.sortKey ? -1 : a.sortKey < b.sortKey ? 1 : 0));
+  return items.map((i) => i.item);
+}
+
+/** Derive the ROLE string for a session */
+function getRole(s: SessionExt): string {
+  if (s.team_role === "lead") return pc.bold("\u2605 lead");
+  if (s.team_role === "member") return "member";
+  if ((s.subagent_count ?? 0) > 0) return "parent";
+  return "";
+}
+
+/** Pad/align a string to a given width (ANSI-aware) */
+function pad(str: string, width: number, align: "left" | "right"): string {
+  const visibleLen = displayWidth(str);
+  if (visibleLen >= width) return str;
+  const padding = " ".repeat(width - visibleLen);
+  return align === "right" ? padding + str : str + padding;
+}
+
+/** Column definition for the enriched table */
+interface EnrichedCol {
+  header: string;
+  align: "left" | "right";
+  /** Extract cell value from a session */
+  cell: (s: SessionExt) => string;
+}
+
+/** Build column definitions */
+function getColumns(): EnrichedCol[] {
+  return [
+    { header: "STATUS", align: "left", cell: (s) => formatLifecycle(s.lifecycle) },
+    { header: "ID", align: "left", cell: (s) => pc.dim(s.id.slice(0, 8)) },
+    { header: "WORKSPACE", align: "left", cell: (s) => s.workspace_name ?? s.workspace_id },
+    { header: "DEVICE", align: "left", cell: (s) => s.device_name ?? s.device_id },
+    { header: "DURATION", align: "right", cell: (s) => formatDuration(s.duration_ms) },
+    { header: "TOKENS", align: "right", cell: (s) => formatTokensCompact(s.tokens_in ?? null, s.tokens_out ?? null) },
+    { header: "STARTED", align: "left", cell: (s) => formatRelativeTime(s.started_at) },
+    { header: "ROLE", align: "left", cell: (s) => getRole(s) },
+    { header: "SUMMARY", align: "left", cell: (s) => s.summary ?? s.initial_prompt ?? pc.dim("(no summary)") },
+  ];
+}
+
+/** Calculate column widths from all sessions (auto-size, respect maxWidth) */
+function calcWidths(columns: EnrichedCol[], allSessions: SessionExt[]): number[] {
+  const gap = 2;
+  const maxWidth = process.stdout.columns || 120;
+
+  const widths = columns.map((col, i) => {
+    const headerLen = col.header.length;
+    const maxCell = allSessions.reduce(
+      (max, s) => Math.max(max, displayWidth(col.cell(s))),
+      0,
+    );
+    return Math.max(headerLen, maxCell);
+  });
+
+  // Shrink widest columns if total exceeds terminal width
+  const totalGaps = (columns.length - 1) * gap;
+  let totalWidth = widths.reduce((a, b) => a + b, 0) + totalGaps;
+  while (totalWidth > maxWidth && widths.some((w) => w > 10)) {
+    const maxIdx = widths.indexOf(Math.max(...widths));
+    widths[maxIdx]--;
+    totalWidth--;
+  }
+
+  return widths;
+}
+
+/** Render a single session row as a string */
+function renderSessionRow(
+  s: SessionExt,
+  columns: EnrichedCol[],
+  widths: number[],
+  opts?: { teamBorder?: boolean },
+): string {
+  const cells = columns.map((col, i) => {
+    const value = col.cell(s);
+    return pad(truncate(value, widths[i]), widths[i], col.align);
+  });
+  const line = cells.join("  ");
+  if (opts?.teamBorder) {
+    return pc.magenta("\u2502") + " " + line;
+  }
+  return line;
+}
+
+/** Render subagent annotation line below a parent session */
+function renderSubagentAnnotation(
+  s: SessionExt,
+  columns: EnrichedCol[],
+  widths: number[],
+  opts?: { teamBorder?: boolean },
+): string {
+  const types = (s.subagent_types ?? []).join(", ");
+  const count = s.subagent_count ?? 0;
+  const annotation = pc.dim(`\u2514\u2500 ${count} agent${count !== 1 ? "s" : ""} (${types})`);
+
+  // Calculate offset: sum of all column widths + gaps up to SUMMARY column
+  // so the annotation aligns under the SUMMARY column
+  const summaryIdx = columns.findIndex((c) => c.header === "SUMMARY");
+  let offset = 0;
+  for (let i = 0; i < summaryIdx; i++) {
+    offset += widths[i] + 2; // column width + gap
+  }
+
+  const line = " ".repeat(offset) + annotation;
+  if (opts?.teamBorder) {
+    return pc.magenta("\u2502") + " " + line;
+  }
+  return line;
+}
+
 /**
- * Format sessions into a table string for terminal output.
+ * Format sessions into an enriched table with team grouping, subagent
+ * annotations, and a ROLE column.
  *
- * Columns: STATUS, ID, WORKSPACE, DEVICE, DURATION, COST, STARTED, SUMMARY
- * ID column shows 8-char prefix in dimmed text.
+ * Team sessions are visually grouped with box-drawing borders.
+ * Parent sessions (with subagents) show an annotation line below.
  */
 export function formatSessionsTable(sessions: Session[], hasFilters?: boolean): string {
   if (sessions.length === 0) {
@@ -100,50 +300,51 @@ export function formatSessionsTable(sessions: Session[], hasFilters?: boolean): 
     return msg;
   }
 
-  const rows = sessions.map((s) => {
-    // Cast to any to access extended fields from the API response
-    // (the server joins workspace_name, device_name, summary, cost_estimate_usd, tags,
-    // and Phase 4-2 enrichment: subagent_types, skill_names, worktree_names)
-    const ext = s as any;
+  const allSessions = sessions as SessionExt[];
+  const columns = getColumns();
+  const widths = calcWidths(columns, allSessions);
+  const gap = 2;
 
-    // Build compact metadata string from Phase 4-2 enrichment fields
-    const metaParts: string[] = [];
-    if (s.permission_mode) metaParts.push(s.permission_mode);
-    const skills: string[] = ext.skill_names ?? [];
-    if (skills.length > 0) metaParts.push(skills.join(","));
-    const worktrees: string[] = ext.worktree_names ?? [];
-    if (worktrees.length > 0) metaParts.push("\u{1F33F}" + worktrees[0]);
-    const agentTypes: string[] = ext.subagent_types ?? [];
-    if (agentTypes.length > 0) metaParts.push(`${agentTypes.length} agent${agentTypes.length !== 1 ? "s" : ""}`);
-    const meta = metaParts.length > 0 ? pc.dim(metaParts.join(" \u00B7 ")) : "";
+  // Total line width for team borders
+  const totalLineWidth = widths.reduce((a, b) => a + b, 0) + (columns.length - 1) * gap;
 
-    return [
-      formatLifecycle(s.lifecycle),
-      pc.dim(s.id.slice(0, 8)),
-      ext.workspace_name ?? s.workspace_id,
-      ext.device_name ?? s.device_id,
-      formatDuration(s.duration_ms),
-      formatTokensCompact(ext.tokens_in ?? null, ext.tokens_out ?? null),
-      formatRelativeTime(s.started_at),
-      ext.summary ?? ext.initial_prompt ?? pc.dim("(no summary)"),
-      meta,
-    ];
-  });
+  // Group and order
+  const { teamGroups, standalone } = groupSessionsByTeam(allSessions);
+  const orderedItems = buildOrderedItems(teamGroups, standalone);
 
-  return renderTable({
-    columns: [
-      { header: "STATUS" },
-      { header: "ID" },
-      { header: "WORKSPACE" },
-      { header: "DEVICE" },
-      { header: "DURATION", align: "right" },
-      { header: "TOKENS", align: "right" },
-      { header: "STARTED" },
-      { header: "SUMMARY" },
-      { header: "META" },
-    ],
-    rows,
-  });
+  const lines: string[] = [];
+
+  // Header row
+  const headerLine = columns
+    .map((col, i) => pc.bold(pad(col.header, widths[i], col.align)))
+    .join("  ");
+  lines.push(headerLine);
+
+  for (const item of orderedItems) {
+    if (item.type === "standalone") {
+      lines.push(renderSessionRow(item.session, columns, widths));
+      if ((item.session.subagent_count ?? 0) > 0 && (item.session.subagent_types?.length ?? 0) > 0) {
+        lines.push(renderSubagentAnnotation(item.session, columns, widths));
+      }
+    } else {
+      // Team header
+      const label = ` Team: ${item.teamName} `;
+      const dashCount = Math.max(0, totalLineWidth - label.length);
+      lines.push(pc.magenta("\u250C\u2500" + label + "\u2500".repeat(dashCount)));
+
+      for (const member of item.members) {
+        lines.push(renderSessionRow(member, columns, widths, { teamBorder: true }));
+        if ((member.subagent_count ?? 0) > 0 && (member.subagent_types?.length ?? 0) > 0) {
+          lines.push(renderSubagentAnnotation(member, columns, widths, { teamBorder: true }));
+        }
+      }
+
+      // Team footer
+      lines.push(pc.magenta("\u2514" + "\u2500".repeat(totalLineWidth + 1)));
+    }
+  }
+
+  return lines.join("\n");
 }
 
 /**
