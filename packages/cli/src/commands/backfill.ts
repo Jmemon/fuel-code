@@ -149,6 +149,11 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
     return;
   }
 
+  // Build a lookup map from sessionId → transcriptPath for error display
+  const sessionPathMap = new Map(
+    scanResult.discovered.map(s => [s.sessionId, s.transcriptPath])
+  );
+
   // Group sessions by project for summary display
   const byProject = groupByProject(scanResult.discovered);
   const totalSize = scanResult.discovered.reduce(
@@ -307,16 +312,10 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
         (result.skipped > 0 ? ` (${result.skipped} skipped)` : ""));
     }
 
-    // Show errors at the end with full detail
+    // Show errors at the end with full detail: category, transcript path, error message, retry hint
     if (result.errors.length > 0) {
       console.log("");
-      console.log(`Errors (${result.errors.length}):`);
-      for (const err of result.errors.slice(0, 20)) {
-        console.log(`  ${err.sessionId.slice(0, 8)}  ${err.error}`);
-      }
-      if (result.errors.length > 20) {
-        console.log(`  ... and ${result.errors.length - 20} more`);
-      }
+      console.log(formatErrorBlock(result.errors, sessionPathMap));
     }
   } finally {
     process.removeListener("SIGINT", onSigint);
