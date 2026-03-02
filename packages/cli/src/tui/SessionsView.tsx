@@ -19,6 +19,7 @@ import { TeamGroupRow, type TeamGroup } from "./components/TeamGroupRow.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { Spinner } from "./components/Spinner.js";
 import { ErrorBanner } from "./components/ErrorBanner.js";
+import { formatDuration } from "../lib/formatters.js";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -87,11 +88,15 @@ function buildGroupedItems(sessions: SessionDisplayData[]): SortableItem[] {
   for (const [teamName, members] of teamMap) {
     const leadSession = members.find((m) => m.team_role === "lead") ?? null;
     const memberSessions = members.filter((m) => m.team_role !== "lead");
+    // Sort so lead appears first in expanded view
+    const sortedMembers = leadSession
+      ? [leadSession, ...memberSessions]
+      : members;
     const group: TeamGroup = {
       teamName,
       leadSession,
       memberSessions,
-      allSessions: members,
+      allSessions: sortedMembers,
     };
     items.push({ kind: "team", group });
   }
@@ -329,12 +334,12 @@ export function SessionsView({
   // -----------------------------------------------------------------------
 
   useInput((input, key) => {
-    // j / down: move cursor down
-    if (input === "j" || key.downArrow) {
+    // j / down: move cursor down (guard against empty list)
+    if ((input === "j" || key.downArrow) && displayList.length > 0) {
       setSelectedIndex((i) => Math.min(i + 1, displayList.length - 1));
     }
     // k / up: move cursor up
-    if (input === "k" || key.upArrow) {
+    if ((input === "k" || key.upArrow) && displayList.length > 0) {
       setSelectedIndex((i) => Math.max(i - 1, 0));
     }
     // Enter: open session or toggle team expansion
@@ -421,7 +426,7 @@ export function SessionsView({
                 <TeamGroupRow
                   key={`team-${item.group.teamName}`}
                   group={item.group}
-                  expanded={false}
+                  expanded={expandedTeams.has(item.group.teamName)}
                   selected={isSelected}
                   selectedMemberIndex={-1}
                 />
@@ -435,7 +440,7 @@ export function SessionsView({
               // Instead, render each member as a standalone SessionRow with indent.
               const display = getLifecycleDisplay(item.session.lifecycle);
               const role = getMemberRole(item.session);
-              const duration = formatDurationCompact(item.session.duration_ms);
+              const duration = formatDuration(item.session.duration_ms);
               const summary =
                 item.session.summary ??
                 (typeof item.session.metadata?.initial_prompt === "string"
@@ -515,12 +520,4 @@ function getMemberRole(member: SessionDisplayData): string {
   return "member";
 }
 
-/** Simple duration formatter for inline team member rows */
-function formatDurationCompact(ms: number | null): string {
-  if (ms == null || ms <= 0) return "--";
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const remaining = minutes % 60;
-  return remaining > 0 ? `${hours}h${remaining}m` : `${hours}h`;
-}
+
