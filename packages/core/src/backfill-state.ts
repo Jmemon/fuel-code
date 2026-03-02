@@ -48,6 +48,12 @@ export interface BackfillState {
   startedAt: string | null;
   /** Session IDs already ingested — for resume after interruption */
   ingestedSessionIds: string[];
+  /**
+   * Session IDs whose transcript upload failed on the last run.
+   * These sessions already have session.start/session.end events in the
+   * backend, so on retry we skip those steps and only re-upload the transcript.
+   */
+  failedSessionIds: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -72,6 +78,7 @@ function createDefaultState(): BackfillState {
     isRunning: false,
     startedAt: null,
     ingestedSessionIds: [],
+    failedSessionIds: [],
   };
 }
 
@@ -107,6 +114,9 @@ export function loadBackfillState(stateDir?: string): BackfillState {
       startedAt: parsed.startedAt ?? null,
       ingestedSessionIds: Array.isArray(parsed.ingestedSessionIds)
         ? parsed.ingestedSessionIds
+        : [],
+      failedSessionIds: Array.isArray(parsed.failedSessionIds)
+        ? parsed.failedSessionIds
         : [],
     };
   } catch {

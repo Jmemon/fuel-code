@@ -184,6 +184,8 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
 
   // Build the set of already-ingested sessions for resume
   const alreadyIngested = new Set(state.ingestedSessionIds);
+  // Sessions whose transcript upload failed last run — bypass server dedup check
+  const retriableSessionIds = new Set(state.failedSessionIds ?? []);
 
   // Phase 3+4: Ingest sessions, then wait for server-side processing.
   // Both progress bars are rendered simultaneously so the user sees the
@@ -222,6 +224,7 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
       deviceType: config.device.type,
       signal: abortController.signal,
       alreadyIngested,
+      retriableSessionIds,
       concurrency,
       onSessionIngested: (id) => ingestedIds.push(id),
       onProgress: (progress: BackfillProgress) => {
@@ -260,7 +263,10 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
 
     const [result, pipelineResult] = await Promise.all([uploadPromise, pipelinePromise]);
 
-    // Save final state
+    // Save final state.
+    // failedSessionIds: sessions that failed this run (need transcript retry next time).
+    // Previously-failed sessions that succeeded this run are removed from the set.
+    const currentRunFailedIds = new Set(result.errors.map(e => e.sessionId));
     const finalState: BackfillState = {
       lastRunAt: new Date().toISOString(),
       lastRunResult: result,
@@ -270,6 +276,7 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
         ...alreadyIngested,
         ...ingestedIds,
       ],
+      failedSessionIds: [...currentRunFailedIds],
     };
     saveBackfillState(finalState, stateDir);
 

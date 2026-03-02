@@ -133,6 +133,12 @@ export interface IngestDeps {
   throttleMs?: number;
   /** Set of session IDs already ingested (for resume) */
   alreadyIngested?: Set<string>;
+  /**
+   * Session IDs whose transcript upload failed on a previous run. These
+   * sessions already have start/end events in the backend, so processSession
+   * skips event emission and jumps straight to transcript re-upload.
+   */
+  retriableSessionIds?: Set<string>;
   /** Number of sessions to process concurrently (default: 10) */
   concurrency?: number;
   /** Device name hint injected into synthetic events so the backend
@@ -987,6 +993,37 @@ export async function ingestBackfillSessions(
     // Skip if already ingested in a previous (interrupted) run
     if (alreadyIngested.has(session.sessionId)) {
       result.skipped++;
+      return;
+    }
+
+    // Sessions whose transcript upload previously failed already have
+    // session.start/session.end events in the backend — only the transcript
+    // upload needs to be retried. Skip the server dedup check (which would
+    // falsely report "exists" and skip the session) and jump to upload.
+    const isRetriable = deps.retriableSessionIds?.has(session.sessionId) ?? false;
+
+    if (isRetriable) {
+      try {
+        if (!(await waitForRateLimit())) return;
+        await uploadTranscriptWithRetry(
+          baseUrl,
+          deps.apiKey,
+          session.sessionId,
+          session.transcriptPath,
+          15,
+          (until) => { rateLimitUntil = Math.max(rateLimitUntil, until); },
+          deps.signal,
+        );
+        result.ingested++;
+        result.totalSizeBytes += session.fileSizeBytes;
+        deps.onSessionIngested?.(session.sessionId);
+      } catch (err) {
+        result.failed++;
+        result.errors.push({
+          sessionId: session.sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       return;
     }
 
