@@ -79,10 +79,11 @@ export function SessionRow({
   const overflowCount = Math.max(0, commitMessages.length - 2);
   const overflowText = overflowCount > 0 ? "... " + overflowCount + " more commits" : "";
 
-  // Badges: subagents, team, resumed-from (dim, subtle, only when data exists)
+  // Phase 4-2 enrichment fields
   const subagentCount = session.subagent_count ?? 0;
-  const hasTeam = !!session.team_name;
-  const hasResumedFrom = !!session.resumed_from_session_id;
+  const subagentTypes = session.subagent_types ?? [];
+  const skillNames = session.skill_names ?? [];
+  const worktreeNames = session.worktree_names ?? [];
 
   return (
     <Box flexDirection="column">
@@ -99,23 +100,11 @@ export function SessionRow({
         <Text>{duration}</Text>
         <Text>{"  "}</Text>
         <Text>{tokens}</Text>
-        {/* Dim badges for subagents, team, and session chain */}
-        {subagentCount > 0 && (
+        {/* Permission mode (only if non-default) */}
+        {session.permission_mode && (
           <>
             <Text>{"  "}</Text>
-            <Text dimColor>[{subagentCount} agent{subagentCount !== 1 ? "s" : ""}]</Text>
-          </>
-        )}
-        {hasTeam && (
-          <>
-            <Text>{"  "}</Text>
-            <Text dimColor>[team]</Text>
-          </>
-        )}
-        {hasResumedFrom && (
-          <>
-            <Text>{"  "}</Text>
-            <Text dimColor>[{"\u2190"}]</Text>
+            <Text dimColor>{session.permission_mode}</Text>
           </>
         )}
       </Box>
@@ -147,6 +136,24 @@ export function SessionRow({
               {overflowText}
             </Text>
           )}
+        </Box>
+      )}
+      {/* Phase 4-2: skills + worktree on one line */}
+      {(skillNames.length > 0 || worktreeNames.length > 0) && (
+        <Box paddingLeft={4}>
+          <Text dimColor>
+            {skillNames.length > 0 && `\u26A1 ${skillNames.join(", ")}`}
+            {skillNames.length > 0 && worktreeNames.length > 0 && "  |  "}
+            {worktreeNames.length > 0 && `\uD83C\uDF3F ${worktreeNames[0]}`}
+          </Text>
+        </Box>
+      )}
+      {/* Phase 4-2: subagent types */}
+      {subagentCount > 0 && subagentTypes.length > 0 && (
+        <Box paddingLeft={4}>
+          <Text dimColor>
+            {"\u2514\u2500"} {subagentCount} agent{subagentCount !== 1 ? "s" : ""} ({subagentTypes.join(", ")})
+          </Text>
         </Box>
       )}
     </Box>
