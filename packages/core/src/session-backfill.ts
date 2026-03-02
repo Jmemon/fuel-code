@@ -732,7 +732,7 @@ export async function scanForSessions(
   const workspaceCache = new Map<string, string>();
   let sessionFilesProcessed = 0;
 
-  // Process subagents concurrently too (they also need lsof checks)
+  // Process subagents concurrently (exit-tag + active-set check before ingest)
   const subagentWorkers: Promise<void>[] = [];
   let saIdx = 0;
   for (let w = 0; w < concurrency; w++) {
