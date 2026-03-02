@@ -97,6 +97,8 @@ export {
 // Session backfill: discover and ingest historical Claude Code sessions
 export {
   scanForSessions,
+  buildActiveSessions,
+  selectBestSession,
   isSessionActive,
   isSessionActiveAsync,
   ingestBackfillSessions,
