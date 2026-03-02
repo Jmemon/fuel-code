@@ -723,6 +723,50 @@ describe("handleSessionEnd", () => {
     expect(logger.warn).toHaveBeenCalled();
   });
 
+  test("overrides backfill-ended session when real session.end arrives", async () => {
+    const event = makeSessionEndEvent();
+    const logger = createMockLogger();
+
+    // SQL sequence:
+    //   1. sql.unsafe UPDATE in transitionSession  -> empty (session is 'ended', not 'detected'/'capturing')
+    //   2. SELECT lifecycle in transitionSession   -> [{ lifecycle: "ended" }]   (diagnose)
+    //   3. SELECT source (our new check)           -> [{ source: "backfill" }]
+    //   4. UPDATE ended_at/end_reason/duration_ms  -> [] (update succeeds)
+    //   5. UPDATE events SET session_id            -> []
+    const emptyTransition: Record<string, unknown>[] = [];
+    const lifecycleResult = [{ lifecycle: "ended" }];
+    const sourceResult = [{ source: "backfill" }];
+    const updateResult: Record<string, unknown>[] = [];
+    const { sql, calls } = createMockSql([
+      emptyTransition,
+      lifecycleResult,
+      sourceResult,
+      updateResult,
+      updateResult,
+    ]);
+
+    await handleSessionEnd({
+      sql,
+      event,
+      workspaceId: "ws-ulid-001",
+      logger,
+    });
+
+    // Should have logged info about the override, not a warning
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ ccSessionId: "cc-sess-001" }),
+      "session.end: overriding backfill-ended session with real end data",
+    );
+
+    // The UPDATE for the override should target the correct session
+    const overrideCall = calls.find(
+      (c) => c.strings.join("").includes("ended_at") && c.strings.join("").includes("end_reason"),
+    );
+    expect(overrideCall).toBeDefined();
+    expect(overrideCall!.values).toContain("cc-sess-001");
+  });
+
   test("does not warn when transition succeeds", async () => {
     const event = makeSessionEndEvent();
     const logger = createMockLogger();

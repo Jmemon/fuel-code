@@ -94,6 +94,39 @@ export async function handleSessionEnd(ctx: EventHandlerContext): Promise<void> 
         )
         ON CONFLICT (id) DO NOTHING
       `;
+    } else if (result.previousLifecycle === "ended") {
+      // Session is already ended — check if it was created as a backfill.
+      // Backfill rows (source='backfill') are inserted speculatively when a
+      // session.end arrives before the session.start; they carry placeholder
+      // data (duration_ms=0, started_at=ended_at). A real session.end arriving
+      // later should override those fields with the authoritative values.
+      const sessionRow = await sql`
+        SELECT source FROM sessions WHERE id = ${ccSessionId}
+      `;
+
+      if (sessionRow[0]?.source === "backfill") {
+        logger.info(
+          { ccSessionId, endReason, durationMs },
+          "session.end: overriding backfill-ended session with real end data",
+        );
+
+        await sql`
+          UPDATE sessions
+          SET ended_at    = ${event.timestamp},
+              end_reason  = ${endReason},
+              duration_ms = ${durationMs},
+              updated_at  = now()
+          WHERE id = ${ccSessionId}
+            AND lifecycle = 'ended'
+            AND source = 'backfill'
+        `;
+      } else {
+        logger.warn(
+          { ccSessionId, reason: result.reason },
+          "session.end: lifecycle transition failed",
+        );
+        return;
+      }
     } else {
       logger.warn(
         { ccSessionId, reason: result.reason },
