@@ -15,7 +15,7 @@
  *   2. Ingestion: upload transcripts and emit synthetic session events
  */
 
-import { execSync } from "node:child_process";
+import { exec, execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -278,33 +278,59 @@ export function projectDirToPath(dirName: string): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * Read the last N lines of a file by reading backward from the end.
+ * Returns the lines as a single string. Reads in 8KB chunks to avoid
+ * loading the whole file for large transcripts.
+ */
+function readTailLines(filePath: string, lineCount: number): string {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const stat = fs.fstatSync(fd);
+    if (stat.size === 0) return "";
+
+    const chunkSize = 8192;
+    let position = stat.size;
+    let collected = "";
+    let linesFound = 0;
+
+    while (position > 0 && linesFound <= lineCount) {
+      const readSize = Math.min(chunkSize, position);
+      position -= readSize;
+      const buf = Buffer.alloc(readSize);
+      fs.readSync(fd, buf, 0, readSize, position);
+      collected = buf.toString("utf-8") + collected;
+      // Count newlines — we need lineCount+1 to get lineCount full lines
+      linesFound = 0;
+      for (let i = collected.length - 1; i >= 0; i--) {
+        if (collected[i] === "\n") linesFound++;
+        if (linesFound > lineCount) {
+          collected = collected.slice(i + 1);
+          break;
+        }
+      }
+    }
+
+    return collected;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
  * Check if a JSONL transcript file belongs to an active (currently running) session.
  *
  * Two-stage check:
- *   1. Read the last ~4KB of the file and look for a `/exit` command — if found,
+ *   1. Read the last 4 lines of the file and look for a `/exit` command — if found,
  *      the session was gracefully closed and is definitely not active.
  *   2. If no `/exit` found, run `lsof` to check whether any process has the file
  *      open — if so, the session is still running.
- *
- * This replaces the old mtime-based heuristic which incorrectly skipped long sessions.
  */
 export function isSessionActive(filePath: string): boolean {
-  // Stage 1: check tail of file for /exit command (definitive "session ended")
+  // Stage 1: read last 4 lines for /exit command (definitive "session ended")
   try {
-    const fd = fs.openSync(filePath, "r");
-    try {
-      const stat = fs.fstatSync(fd);
-      // Read last 4KB — /exit lines are small, this is more than enough
-      const tailSize = Math.min(4096, stat.size);
-      const buf = Buffer.alloc(tailSize);
-      fs.readSync(fd, buf, 0, tailSize, stat.size - tailSize);
-      const tail = buf.toString("utf-8");
-
-      if (tail.includes("<command-name>/exit</command-name>")) {
-        return false; // gracefully closed
-      }
-    } finally {
-      fs.closeSync(fd);
+    const tail = readTailLines(filePath, 4);
+    if (tail.includes("<command-name>/exit</command-name>")) {
+      return false; // gracefully closed
     }
   } catch {
     // If we can't read the file, assume not active (let later steps handle errors)
@@ -325,6 +351,29 @@ export function isSessionActive(filePath: string): boolean {
   }
 }
 
+/**
+ * Async version of isSessionActive — uses exec() instead of execSync for lsof.
+ * This allows concurrent active-session checks when processing many files in parallel.
+ */
+export async function isSessionActiveAsync(filePath: string): Promise<boolean> {
+  // Stage 1: read last 4 lines for /exit command (definitive "session ended")
+  try {
+    const tail = readTailLines(filePath, 4);
+    if (tail.includes("<command-name>/exit</command-name>")) {
+      return false; // gracefully closed
+    }
+  } catch {
+    return false;
+  }
+
+  // Stage 2: async lsof via exec()
+  return new Promise((resolve) => {
+    exec(`lsof -- ${JSON.stringify(filePath)}`, { timeout: 5_000 }, (err) => {
+      resolve(!err); // exit 0 = file open = active
+    });
+  });
+}
+
 // ---------------------------------------------------------------------------
 // scanForSessions: discover all historical sessions
 // ---------------------------------------------------------------------------
@@ -343,9 +392,12 @@ export async function scanForSessions(
   claudeProjectsDir?: string,
   options?: {
     onProgress?: (progress: ScanProgress) => void;
+    signal?: AbortSignal;
+    concurrency?: number;
   },
 ): Promise<ScanResult> {
   const projectsDir = claudeProjectsDir ?? DEFAULT_CLAUDE_PROJECTS_DIR;
+  const concurrency = options?.concurrency ?? 20;
 
   const result: ScanResult = {
     discovered: [],
@@ -360,9 +412,9 @@ export async function scanForSessions(
   }
 
   // List all project directories
-  let projectDirs: string[];
+  let projectDirNames: string[];
   try {
-    projectDirs = fs.readdirSync(projectsDir);
+    projectDirNames = fs.readdirSync(projectsDir);
   } catch (err) {
     result.errors.push({
       path: projectsDir,
@@ -371,33 +423,27 @@ export async function scanForSessions(
     return result;
   }
 
-  // Pre-count total session files for progress reporting (cheap readdirSync only)
-  let totalSessionFiles = 0;
-  if (options?.onProgress) {
-    for (const pd of projectDirs) {
-      const pdPath = path.join(projectsDir, pd);
-      try {
-        const stat = fs.statSync(pdPath);
-        if (!stat.isDirectory()) continue;
-        const files = fs.readdirSync(pdPath);
-        for (const f of files) {
-          if (f.endsWith(".jsonl") && UUID_REGEX.test(f.replace(/\.jsonl$/, ""))) {
-            totalSessionFiles++;
-          }
-        }
-      } catch {
-        // skip unreadable dirs
-      }
-    }
+  // ---------- Phase A: Serial collect (cheap fs reads only, no lsof) ----------
+  // Collects pending session items and handles directories/non-JSONL inline.
+
+  interface PendingSession {
+    sessionId: string;
+    entryPath: string;
+    projectDir: string;
+    sessionsIndex: Map<string, SessionsIndexEntry> | null;
+    fileStat: fs.Stats;
   }
 
-  let sessionFilesProcessed = 0;
+  interface PendingSubagent {
+    parentSessionId: string;
+    agentId: string;
+    saPath: string;
+  }
 
-  // Cache workspace resolution per CWD to avoid repeated git invocations
-  // (most sessions in the same project dir share one CWD)
-  const workspaceCache = new Map<string, string>();
+  const pendingSessions: PendingSession[] = [];
+  const pendingSubagents: PendingSubagent[] = [];
 
-  for (const projectDir of projectDirs) {
+  for (const projectDir of projectDirNames) {
     const projectDirPath = path.join(projectsDir, projectDir);
 
     // Skip non-directories at the top level
@@ -428,8 +474,6 @@ export async function scanForSessions(
     }
 
     for (const entry of entries) {
-      const entryPath = path.join(projectDirPath, entry.name);
-
       // Discover sub-agent transcripts inside UUID-named session directories.
       // Other subdirectories (tool-results/, etc.) are still skipped.
       if (entry.isDirectory()) {
@@ -442,30 +486,7 @@ export async function scanForSessions(
                 if (saFile.startsWith("agent-") && saFile.endsWith(".jsonl")) {
                   const saPath = path.join(subagentsDir, saFile);
                   const agentId = saFile.replace("agent-", "").replace(".jsonl", "");
-
-                  // Skip active sub-agent transcripts (lsof check)
-                  if (isSessionActive(saPath)) {
-                    result.skipped.activeSubagents++;
-                    continue;
-                  }
-
-                  let saFileStat: fs.Stats;
-                  try {
-                    saFileStat = fs.statSync(saPath);
-                  } catch {
-                    result.errors.push({
-                      path: saPath,
-                      error: "Failed to stat sub-agent transcript file",
-                    });
-                    continue;
-                  }
-
-                  result.subagentTranscripts.push({
-                    parentSessionId: entry.name,
-                    agentId,
-                    transcriptPath: saPath,
-                    fileSizeBytes: saFileStat.size,
-                  });
+                  pendingSubagents.push({ parentSessionId: entry.name, agentId, saPath });
                 }
               }
             } catch (err) {
@@ -496,7 +517,9 @@ export async function scanForSessions(
         continue;
       }
 
-      // Check file stats for recency and size
+      const entryPath = path.join(projectDirPath, entry.name);
+
+      // Stat the file (cheap, no subprocess)
       let fileStat: fs.Stats;
       try {
         fileStat = fs.statSync(entryPath);
@@ -505,79 +528,137 @@ export async function scanForSessions(
           path: entryPath,
           error: `Failed to stat file: ${err instanceof Error ? err.message : String(err)}`,
         });
-        sessionFilesProcessed++;
-        options?.onProgress?.({ current: sessionFilesProcessed, total: totalSessionFiles, currentDir: projectDir });
         continue;
       }
 
-      // Skip active sessions (detected via /exit check + lsof)
-      if (isSessionActive(entryPath)) {
-        result.skipped.potentiallyActive++;
-        sessionFilesProcessed++;
-        options?.onProgress?.({ current: sessionFilesProcessed, total: totalSessionFiles, currentDir: projectDir });
-        continue;
-      }
-
-      // Build the discovered session object
-      const discovered: DiscoveredSession = {
-        sessionId,
-        transcriptPath: entryPath,
-        projectDir,
-        resolvedCwd: null,
-        workspaceCanonicalId: "_unassociated",
-        gitBranch: null,
-        firstPrompt: null,
-        firstTimestamp: null,
-        lastTimestamp: null,
-        fileSizeBytes: fileStat.size,
-        messageCount: null,
-      };
-
-      // Try to enrich from sessions-index.json
-      const indexEntry = sessionsIndex?.get(sessionId);
-      if (indexEntry) {
-        discovered.gitBranch = indexEntry.gitBranch || null;
-        discovered.firstPrompt = indexEntry.firstPrompt ?? null;
-        discovered.firstTimestamp = indexEntry.created ?? null;
-        discovered.lastTimestamp = indexEntry.modified ?? null;
-        discovered.messageCount = indexEntry.messageCount ?? null;
-      }
-
-      // Always read JSONL metadata (need cwd + fallback timestamps/branch)
-      let jsonlMetadata: { firstTimestamp: string | null; lastTimestamp: string | null; gitBranch: string | null; cwd: string | null } | null = null;
-      try {
-        jsonlMetadata = await readJsonlMetadata(entryPath);
-        discovered.firstTimestamp =
-          discovered.firstTimestamp ?? jsonlMetadata.firstTimestamp;
-        discovered.lastTimestamp =
-          discovered.lastTimestamp ?? jsonlMetadata.lastTimestamp;
-        discovered.gitBranch =
-          discovered.gitBranch ?? jsonlMetadata.gitBranch;
-      } catch (err) {
-        result.errors.push({
-          path: entryPath,
-          error: `Failed to read JSONL metadata: ${err instanceof Error ? err.message : String(err)}`,
-        });
-      }
-
-      // CWD waterfall: authoritative sources first, projectDirToPath fallback last
-      const resolvedCwd =
-        indexEntry?.projectPath ||
-        jsonlMetadata?.cwd ||
-        projectDirToPath(projectDir);
-      discovered.resolvedCwd = resolvedCwd;
-
-      // Resolve workspace (cached per CWD)
-      if (!workspaceCache.has(resolvedCwd)) {
-        workspaceCache.set(resolvedCwd, resolveWorkspaceFromPath(resolvedCwd));
-      }
-      discovered.workspaceCanonicalId = workspaceCache.get(resolvedCwd)!;
-
-      result.discovered.push(discovered);
-      sessionFilesProcessed++;
-      options?.onProgress?.({ current: sessionFilesProcessed, total: totalSessionFiles, currentDir: projectDir });
+      pendingSessions.push({ sessionId, entryPath, projectDir, sessionsIndex, fileStat });
     }
   }
+
+  const totalSessionFiles = pendingSessions.length;
+
+  // ---------- Phase B: Concurrent process (worker pool) ----------
+  // Each worker: isSessionActiveAsync → readJsonlMetadata → resolveWorkspaceFromPath
+
+  const workspaceCache = new Map<string, string>();
+  let sessionFilesProcessed = 0;
+
+  // Process subagents concurrently too (they also need lsof checks)
+  const subagentWorkers: Promise<void>[] = [];
+  let saIdx = 0;
+  for (let w = 0; w < concurrency; w++) {
+    subagentWorkers.push((async () => {
+      while (saIdx < pendingSubagents.length) {
+        if (options?.signal?.aborted) return;
+        const item = pendingSubagents[saIdx++];
+        if (!item) break;
+
+        if (await isSessionActiveAsync(item.saPath)) {
+          result.skipped.activeSubagents++;
+          continue;
+        }
+
+        let saFileStat: fs.Stats;
+        try {
+          saFileStat = fs.statSync(item.saPath);
+        } catch {
+          result.errors.push({ path: item.saPath, error: "Failed to stat sub-agent transcript file" });
+          continue;
+        }
+
+        result.subagentTranscripts.push({
+          parentSessionId: item.parentSessionId,
+          agentId: item.agentId,
+          transcriptPath: item.saPath,
+          fileSizeBytes: saFileStat.size,
+        });
+      }
+    })());
+  }
+
+  // Process sessions concurrently
+  const sessionWorkers: Promise<void>[] = [];
+  let sessIdx = 0;
+  for (let w = 0; w < concurrency; w++) {
+    sessionWorkers.push((async () => {
+      while (sessIdx < pendingSessions.length) {
+        if (options?.signal?.aborted) break;
+        const item = pendingSessions[sessIdx++];
+        if (!item) break;
+
+        // Check if session is active (async lsof)
+        if (await isSessionActiveAsync(item.entryPath)) {
+          result.skipped.potentiallyActive++;
+          sessionFilesProcessed++;
+          options?.onProgress?.({ current: sessionFilesProcessed, total: totalSessionFiles, currentDir: item.projectDir });
+          continue;
+        }
+
+        // Build the discovered session object
+        const discovered: DiscoveredSession = {
+          sessionId: item.sessionId,
+          transcriptPath: item.entryPath,
+          projectDir: item.projectDir,
+          resolvedCwd: null,
+          workspaceCanonicalId: "_unassociated",
+          gitBranch: null,
+          firstPrompt: null,
+          firstTimestamp: null,
+          lastTimestamp: null,
+          fileSizeBytes: item.fileStat.size,
+          messageCount: null,
+        };
+
+        // Try to enrich from sessions-index.json
+        const indexEntry = item.sessionsIndex?.get(item.sessionId);
+        if (indexEntry) {
+          discovered.gitBranch = indexEntry.gitBranch || null;
+          discovered.firstPrompt = indexEntry.firstPrompt ?? null;
+          discovered.firstTimestamp = indexEntry.created ?? null;
+          discovered.lastTimestamp = indexEntry.modified ?? null;
+          discovered.messageCount = indexEntry.messageCount ?? null;
+        }
+
+        // Always read JSONL metadata (need cwd + fallback timestamps/branch)
+        let jsonlMetadata: { firstTimestamp: string | null; lastTimestamp: string | null; gitBranch: string | null; cwd: string | null } | null = null;
+        try {
+          jsonlMetadata = await readJsonlMetadata(item.entryPath);
+          discovered.firstTimestamp =
+            discovered.firstTimestamp ?? jsonlMetadata.firstTimestamp;
+          discovered.lastTimestamp =
+            discovered.lastTimestamp ?? jsonlMetadata.lastTimestamp;
+          discovered.gitBranch =
+            discovered.gitBranch ?? jsonlMetadata.gitBranch;
+        } catch (err) {
+          result.errors.push({
+            path: item.entryPath,
+            error: `Failed to read JSONL metadata: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+
+        // CWD waterfall: authoritative sources first, projectDirToPath fallback last
+        const resolvedCwd =
+          indexEntry?.projectPath ||
+          jsonlMetadata?.cwd ||
+          projectDirToPath(item.projectDir);
+        discovered.resolvedCwd = resolvedCwd;
+
+        // Resolve workspace (cached per CWD)
+        if (!workspaceCache.has(resolvedCwd)) {
+          workspaceCache.set(resolvedCwd, resolveWorkspaceFromPath(resolvedCwd));
+        }
+        discovered.workspaceCanonicalId = workspaceCache.get(resolvedCwd)!;
+
+        result.discovered.push(discovered);
+        sessionFilesProcessed++;
+        options?.onProgress?.({ current: sessionFilesProcessed, total: totalSessionFiles, currentDir: item.projectDir });
+      }
+    })());
+  }
+
+  await Promise.all([...sessionWorkers, ...subagentWorkers]);
+
+  // ---------- Phase C: Sort + return ----------
 
   // Sort by firstTimestamp ascending (oldest first), nulls last
   result.discovered.sort((a, b) => {

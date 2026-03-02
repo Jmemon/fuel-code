@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { scanForSessions, isSessionActive, projectDirToPath } from "../session-backfill.js";
+import { scanForSessions, isSessionActive, isSessionActiveAsync, projectDirToPath } from "../session-backfill.js";
 import { loadBackfillState, saveBackfillState, type BackfillState } from "../backfill-state.js";
 
 // ---------------------------------------------------------------------------
@@ -623,6 +623,56 @@ describe("scanForSessions", () => {
     expect(result.discovered.length).toBe(1);
     // Should be local:<sha256>, not _unassociated
     expect(result.discovered[0].workspaceCanonicalId).toMatch(/^local:[a-f0-9]{64}$/);
+  });
+
+  it("stops early when abort signal is fired", async () => {
+    // Create enough sessions that the abort has time to take effect
+    const sessions = Array.from({ length: 10 }, (_, i) => ({
+      id: `${String(i).padStart(8, "0")}-1111-2222-3333-444444444444`,
+      mtimeMs: Date.now() - 600_000,
+    }));
+    createProjectDir("-Users-test-Desktop-abort-test", sessions);
+
+    const ac = new AbortController();
+    // Abort immediately
+    ac.abort();
+
+    const result = await scanForSessions(tmpDir, { signal: ac.signal });
+
+    // With immediate abort, we should discover fewer than all 10 sessions
+    expect(result.discovered.length).toBeLessThan(10);
+  });
+
+  it("accepts concurrency option without error", async () => {
+    createProjectDir("-Users-test-Desktop-conc", [
+      { id: "11110000-aaaa-bbbb-cccc-dddddddddddd", mtimeMs: Date.now() - 600_000 },
+      { id: "22220000-aaaa-bbbb-cccc-dddddddddddd", mtimeMs: Date.now() - 600_000 },
+    ]);
+
+    const result = await scanForSessions(tmpDir, { concurrency: 2 });
+    expect(result.discovered.length).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: isSessionActiveAsync
+// ---------------------------------------------------------------------------
+
+describe("isSessionActiveAsync", () => {
+  it("returns false when file contains /exit command", async () => {
+    const filePath = path.join(tmpDir, "closed-async.jsonl");
+    fs.writeFileSync(filePath, buildMinimalJsonl("11111111-1111-1111-1111-111111111111"));
+    expect(await isSessionActiveAsync(filePath)).toBe(false);
+  });
+
+  it("returns false when file has no /exit and no process holds it open", async () => {
+    const filePath = path.join(tmpDir, "abandoned-async.jsonl");
+    fs.writeFileSync(filePath, buildActiveJsonl("22222222-2222-2222-2222-222222222222"));
+    expect(await isSessionActiveAsync(filePath)).toBe(false);
+  });
+
+  it("returns false for nonexistent file", async () => {
+    expect(await isSessionActiveAsync(path.join(tmpDir, "nope.jsonl"))).toBe(false);
   });
 });
 

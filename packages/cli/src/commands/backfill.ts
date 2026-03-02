@@ -118,8 +118,17 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
     return;
   }
 
-  // Phase 1: Scan for sessions
+  // Set up Ctrl-C handling for clean abort (used in both scan and ingest phases)
+  const abortController = new AbortController();
+  const onSigint = () => {
+    console.error("\nBackfill interrupted. Progress saved for resume.");
+    abortController.abort();
+  };
+  process.on("SIGINT", onSigint);
+
+  // Phase 1: Scan for sessions (parallelized with concurrency)
   const scanResult = await scanForSessions(undefined, {
+    signal: abortController.signal,
     onProgress: (progress: ScanProgress) => {
       const displayDir = progress.currentDir.length > 20
         ? "..." + progress.currentDir.slice(-17)
@@ -134,6 +143,7 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
   process.stderr.write("\r\x1b[2K");
 
   if (scanResult.discovered.length === 0) {
+    process.removeListener("SIGINT", onSigint);
     console.log("No historical sessions found.");
     return;
   }
@@ -151,6 +161,7 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
 
   // --dry-run: print summary and exit without ingesting
   if (opts.dryRun) {
+    process.removeListener("SIGINT", onSigint);
     showDryRunSummary(byProject, scanResult, totalSize);
     return;
   }
@@ -170,14 +181,6 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
   // Both progress bars are rendered simultaneously so the user sees the
   // full pipeline at a glance.
   console.error("");
-
-  // Set up Ctrl-C handling for clean abort
-  const abortController = new AbortController();
-  const onSigint = () => {
-    console.error("\nBackfill interrupted. Progress saved for resume.");
-    abortController.abort();
-  };
-  process.on("SIGINT", onSigint);
 
   // Dual-bar rendering state — two lines updated in place via ANSI escapes
   let dualBarInit = false;

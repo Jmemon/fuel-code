@@ -98,6 +98,7 @@ export {
 export {
   scanForSessions,
   isSessionActive,
+  isSessionActiveAsync,
   ingestBackfillSessions,
   ingestSubagentTranscripts,
   waitForPipelineCompletion,
