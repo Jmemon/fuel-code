@@ -2,33 +2,40 @@
  * TUI Shell — top-level Ink application component.
  *
  * Owns the ApiClient and WsClient instances, manages view routing between
- * Dashboard, SessionDetail, TeamsListView, and TeamDetailView. Handles
- * global keybindings (q to quit, b to go back). The WsClient connects on
- * mount and disconnects on unmount; connection failure is non-fatal
- * (dashboard falls back to polling).
+ * WorkspacesView, SessionsView, SessionDetail, TeamsListView, and
+ * TeamDetailView using a drill-down navigation model:
+ *
+ *   WorkspacesView → SessionsView → SessionDetailView
+ *                  → TeamsListView → TeamDetailView → SessionDetailView
+ *
+ * The WsClient connects on mount and disconnects on unmount; connection
+ * failure is non-fatal (views fall back to polling).
  *
  * Launched by `fuel-code` with no subcommand via launchTui().
  */
 
 import React, { useState, useEffect } from "react";
-import { render, useApp, useInput, Box, Text } from "ink";
+import { render, useApp, useInput } from "ink";
 import { FuelApiClient } from "../lib/api-client.js";
+import type { WorkspaceSummary } from "../lib/api-client.js";
 import { WsClient } from "../lib/ws-client.js";
 import { loadConfig } from "../lib/config.js";
-import { Dashboard } from "./Dashboard.js";
+import { WorkspacesView } from "./WorkspacesView.js";
+import { SessionsView } from "./SessionsView.js";
 import { SessionDetailView } from "./SessionDetailView.js";
 import { TeamsListView } from "./TeamsListView.js";
 import { TeamDetailView } from "./TeamDetailView.js";
 
 // ---------------------------------------------------------------------------
-// View routing types
+// View routing types — drill-down navigation hierarchy
 // ---------------------------------------------------------------------------
 
 type View =
-  | { name: "dashboard" }
-  | { name: "session-detail"; sessionId: string }
-  | { name: "teams-list" }
-  | { name: "team-detail"; teamName: string };
+  | { name: "workspaces" }
+  | { name: "sessions"; workspace: WorkspaceSummary }
+  | { name: "session-detail"; sessionId: string; fromView: "sessions" | "team-detail"; workspace?: WorkspaceSummary; teamName?: string }
+  | { name: "teams-list"; fromView: "workspaces" | "sessions"; workspace?: WorkspaceSummary }
+  | { name: "team-detail"; teamName: string; fromView: "workspaces" | "sessions"; workspace?: WorkspaceSummary };
 
 // ---------------------------------------------------------------------------
 // App component
@@ -55,10 +62,10 @@ export function App({ apiClient, wsClient }: AppProps): React.ReactElement {
     return WsClient.fromConfig(loadConfig());
   });
 
-  const [view, setView] = useState<View>({ name: "dashboard" });
+  const [view, setView] = useState<View>({ name: "workspaces" });
 
   // Connect WebSocket on mount, subscribe to all, disconnect on unmount.
-  // Connection failure is non-fatal — dashboard will fall back to polling.
+  // Connection failure is non-fatal — views will fall back to polling.
   useEffect(() => {
     let mounted = true;
 
@@ -69,7 +76,7 @@ export function App({ apiClient, wsClient }: AppProps): React.ReactElement {
         }
       })
       .catch(() => {
-        // WS failure is non-fatal; dashboard will poll instead
+        // WS failure is non-fatal; views will poll instead
       });
 
     return () => {
@@ -78,31 +85,62 @@ export function App({ apiClient, wsClient }: AppProps): React.ReactElement {
     };
   }, [ws]);
 
-  // Global keybindings: q exits, t opens teams from dashboard.
-  // Back navigation ('b') is handled by each view's own onBack callback,
-  // which allows each view to control where 'back' goes in the hierarchy.
-  useInput((input, key) => {
-    if (input === "q") {
+  // Global quit handler — 'q' is handled by each view's onQuit callback
+  // to avoid double-handling. Only catch it here for views that don't
+  // have their own quit handler (session-detail).
+  useInput((input) => {
+    if (input === "q" && (view.name === "session-detail")) {
       ws.disconnect();
       exit();
-      return;
-    }
-
-    // 't' from dashboard navigates to teams list
-    if (input === "t" && view.name === "dashboard") {
-      setView({ name: "teams-list" });
-      return;
     }
   });
 
-  // View routing
+  // View routing — drill-down hierarchy
+  if (view.name === "workspaces") {
+    return (
+      <WorkspacesView
+        api={api}
+        ws={ws}
+        onSelectWorkspace={(workspace) =>
+          setView({ name: "sessions", workspace })
+        }
+        onTeams={() => setView({ name: "teams-list", fromView: "workspaces" })}
+        onQuit={() => { ws.disconnect(); exit(); }}
+      />
+    );
+  }
+
+  if (view.name === "sessions") {
+    return (
+      <SessionsView
+        api={api}
+        ws={ws}
+        workspace={view.workspace}
+        onSelectSession={(sessionId) =>
+          setView({ name: "session-detail", sessionId, fromView: "sessions", workspace: view.workspace })
+        }
+        onBack={() => setView({ name: "workspaces" })}
+        onTeams={() => setView({ name: "teams-list", fromView: "sessions", workspace: view.workspace })}
+        onQuit={() => { ws.disconnect(); exit(); }}
+      />
+    );
+  }
+
   if (view.name === "session-detail") {
     return (
       <SessionDetailView
         apiClient={api}
         wsClient={ws}
         sessionId={view.sessionId}
-        onBack={() => setView({ name: "dashboard" })}
+        onBack={() => {
+          if (view.fromView === "sessions" && view.workspace) {
+            setView({ name: "sessions", workspace: view.workspace });
+          } else if (view.fromView === "team-detail" && view.teamName) {
+            setView({ name: "team-detail", teamName: view.teamName, fromView: view.workspace ? "sessions" : "workspaces", workspace: view.workspace });
+          } else {
+            setView({ name: "workspaces" });
+          }
+        }}
       />
     );
   }
@@ -112,9 +150,15 @@ export function App({ apiClient, wsClient }: AppProps): React.ReactElement {
       <TeamsListView
         apiClient={api}
         onSelectTeam={(teamName) =>
-          setView({ name: "team-detail", teamName })
+          setView({ name: "team-detail", teamName, fromView: view.fromView, workspace: view.workspace })
         }
-        onBack={() => setView({ name: "dashboard" })}
+        onBack={() => {
+          if (view.fromView === "sessions" && view.workspace) {
+            setView({ name: "sessions", workspace: view.workspace });
+          } else {
+            setView({ name: "workspaces" });
+          }
+        }}
       />
     );
   }
@@ -125,20 +169,23 @@ export function App({ apiClient, wsClient }: AppProps): React.ReactElement {
         apiClient={api}
         teamName={view.teamName}
         onSelectSession={(sessionId) =>
-          setView({ name: "session-detail", sessionId })
+          setView({ name: "session-detail", sessionId, fromView: "team-detail", workspace: view.workspace, teamName: view.teamName })
         }
-        onBack={() => setView({ name: "teams-list" })}
+        onBack={() => setView({ name: "teams-list", fromView: view.fromView, workspace: view.workspace })}
       />
     );
   }
 
+  // Fallback (should never reach)
   return (
-    <Dashboard
+    <WorkspacesView
       api={api}
       ws={ws}
-      onSelectSession={(sessionId) =>
-        setView({ name: "session-detail", sessionId })
+      onSelectWorkspace={(workspace) =>
+        setView({ name: "sessions", workspace })
       }
+      onTeams={() => setView({ name: "teams-list", fromView: "workspaces" })}
+      onQuit={() => { ws.disconnect(); exit(); }}
     />
   );
 }
