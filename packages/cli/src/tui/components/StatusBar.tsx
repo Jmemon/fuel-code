@@ -15,12 +15,15 @@ export interface StatusBarProps {
   stats: TodayStats;
   wsState: WsConnectionState;
   queuePending?: number;
+  /** Override default key hints for per-view customization */
+  keyHints?: string;
 }
 
 export function StatusBar({
   stats,
   wsState,
   queuePending = 0,
+  keyHints,
 }: StatusBarProps): React.ReactElement {
   // WS indicator: filled bullet for connected, open circle for disconnected/polling
   const WS_CONNECTED_LABEL = "\u25CF Connected (ws)";
@@ -54,7 +57,7 @@ export function StatusBar({
       </Box>
       <Box>
         <Text dimColor>
-          j/k:navigate  enter:detail  tab:switch  t:teams  r:refresh  q:quit
+          {keyHints ?? "j/k:navigate  enter:detail  tab:switch  t:teams  r:refresh  q:quit"}
         </Text>
       </Box>
     </Box>
