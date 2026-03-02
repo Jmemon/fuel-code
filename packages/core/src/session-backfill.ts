@@ -544,6 +544,10 @@ export async function buildActiveSessions(projectsDir: string): Promise<Set<stri
             };
           });
 
+        // When process start time is unavailable (ps failed), skip rather than
+        // guessing via mtime — consistent with Option A: ingest rather than skip
+        // when we cannot confirm the session is live.
+        if (procStart === null) return;
         const sessionId = selectBestSession(candidates, procStart);
         if (sessionId) active.add(sessionId);
       } catch {
