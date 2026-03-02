@@ -723,8 +723,11 @@ export async function scanForSessions(
 
   const totalSessionFiles = pendingSessions.length;
 
+  // Build active session set once before Phase B — O(live_processes), not O(sessions)
+  const activeSessions = await buildActiveSessions(projectsDir);
+
   // ---------- Phase B: Concurrent process (worker pool) ----------
-  // Each worker: isSessionActiveAsync → readJsonlMetadata → resolveWorkspaceFromPath
+  // Each worker: exit-tag + active-set check → readJsonlMetadata → resolveWorkspaceFromPath
 
   const workspaceCache = new Map<string, string>();
   let sessionFilesProcessed = 0;
@@ -739,9 +742,17 @@ export async function scanForSessions(
         const item = pendingSubagents[saIdx++];
         if (!item) break;
 
-        if (await isSessionActiveAsync(item.saPath)) {
-          result.skipped.activeSubagents++;
-          continue;
+        // Stage 1: /exit tag → definitely closed
+        // Stage 2: parent session in active set → live, skip
+        try {
+          const saTail = readTailLines(item.saPath, 4);
+          if (!saTail.includes("<command-name>/exit</command-name>") &&
+              activeSessions.has(item.parentSessionId)) {
+            result.skipped.activeSubagents++;
+            continue;
+          }
+        } catch {
+          // Can't read tail — proceed with ingest (non-destructive)
         }
 
         let saFileStat: fs.Stats;
@@ -772,8 +783,19 @@ export async function scanForSessions(
         const item = pendingSessions[sessIdx++];
         if (!item) break;
 
-        // Check if session is active (async lsof)
-        if (await isSessionActiveAsync(item.entryPath)) {
+        // Stage 1: /exit tag → definitely closed, proceed with ingest
+        // Stage 2: session in active set → currently live, skip
+        let sessionIsActive = false;
+        try {
+          const tail = readTailLines(item.entryPath, 4);
+          if (!tail.includes("<command-name>/exit</command-name>") &&
+              activeSessions.has(item.sessionId)) {
+            sessionIsActive = true;
+          }
+        } catch {
+          // Can't read tail — proceed with ingest (non-destructive)
+        }
+        if (sessionIsActive) {
           result.skipped.potentiallyActive++;
           sessionFilesProcessed++;
           options?.onProgress?.({ current: sessionFilesProcessed, total: totalSessionFiles, currentDir: item.projectDir });
