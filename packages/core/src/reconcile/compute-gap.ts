@@ -87,16 +87,20 @@ export function computeGap(session: SessionForGap, seed: SessionSeed): SessionGa
   // session.end, or where hooks sent 0 for duration).
 
   // started_at is stale when DB has started_at === ended_at but the seed
-  // has distinct values (backfill discovered the real start time)
+  // has distinct values (backfill discovered the real start time).
+  // Terminal sessions are never stale — their data is final.
   const staleStartedAt =
+    !isTerminal &&
     !!session.ended_at &&
     session.started_at === session.ended_at &&
     !!seed.startedAt &&
     !!seed.endedAt &&
     seed.startedAt !== seed.endedAt;
 
-  // duration_ms is stale when DB has 0 but the seed computed a real duration
+  // duration_ms is stale when DB has 0 but the seed computed a real duration.
+  // Terminal sessions are never stale.
   const staleDurationMs =
+    !isTerminal &&
     (session.duration_ms === 0 || session.duration_ms == null) &&
     !!seed.durationMs &&
     seed.durationMs > 0;
