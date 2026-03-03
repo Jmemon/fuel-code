@@ -18,7 +18,8 @@
 import type { Sql } from "postgres";
 import type { Logger } from "pino";
 import { findStuckSessions, failSession, resetSessionForReparse } from "./session-lifecycle.js";
-import { runSessionPipeline, type PipelineDeps } from "./session-pipeline.js";
+import type { PipelineDeps } from "./session-pipeline.js";
+import { reconcileSession } from "./reconcile/reconcile-session.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -117,14 +118,14 @@ export async function recoverStuckSessions(
         // Session has a transcript — re-trigger the pipeline.
         // The transcript_ready -> parsed optimistic lock handles deduplication.
 
-        // Route through the bounded queue if available, else direct call
+        // Route through the bounded queue if available, else call reconcileSession directly
         if (pipelineDeps.enqueueSession) {
           pipelineDeps.enqueueSession(session.id);
         } else {
-          runSessionPipeline(pipelineDeps, session.id).catch((err) => {
+          reconcileSession(pipelineDeps, session.id).catch((err) => {
             logger.error(
               { sessionId: session.id, error: err instanceof Error ? err.message : String(err) },
-              "Recovery pipeline trigger failed",
+              "Recovery reconcile trigger failed",
             );
           });
         }
@@ -241,14 +242,14 @@ export async function recoverUnsummarizedSessions(
         continue;
       }
 
-      // Re-trigger pipeline via queue or direct call
+      // Re-trigger via queue or direct reconcileSession call
       if (pipelineDeps.enqueueSession) {
         pipelineDeps.enqueueSession(sessionId);
       } else {
-        runSessionPipeline(pipelineDeps, sessionId).catch((err) => {
+        reconcileSession(pipelineDeps, sessionId).catch((err) => {
           logger.error(
             { sessionId, error: err instanceof Error ? err.message : String(err) },
-            "Summary retry pipeline trigger failed",
+            "Summary retry reconcile trigger failed",
           );
         });
       }
