@@ -1,13 +1,13 @@
 /**
  * Teams API endpoints for fuel-code.
  *
- * Provides REST endpoints for querying agent teams:
- *   - GET /teams       — List all teams with cursor-based pagination and lead session info
- *   - GET /teams/:name — Team detail with sub-agent members
+ * Provides REST endpoints for querying session-scoped agent teams:
+ *   - GET /teams       — List all teams with cursor-based pagination and session info
+ *   - GET /teams/:name — Team detail with teammate members (by team_name)
  *
- * All endpoints are read-only queries over the teams and subagents tables
- * (created by migration 005_session_relationships). Auth is enforced by the
- * upstream auth middleware on /api/*.
+ * Teams are session-scoped: each team is tied to a specific session and its
+ * members are tracked via the teammates table (not subagents). Auth is enforced
+ * by the upstream auth middleware on /api/*.
  *
  * Cursor-based pagination uses base64-encoded { c: created_at, i: id } cursors
  * for stable, keyset-based page traversal ordered by created_at DESC.
@@ -86,6 +86,10 @@ export function createTeamsRouter(deps: TeamsRouterDeps): Router {
 
   // =========================================================================
   // GET /teams — List all teams with cursor-based pagination
+  //
+  // Teams are session-scoped: each row in teams is tied to a session_id.
+  // The response includes inline session info and a computed member_count
+  // from the teammates table.
   // =========================================================================
   router.get(
     "/teams",
@@ -126,24 +130,21 @@ export function createTeamsRouter(deps: TeamsRouterDeps): Router {
         // Fetch limit + 1 to determine if there are more pages
         const fetchLimit = limit + 1;
 
-        // Join teams with sessions on lead_session_id to include lead session info.
-        // LEFT JOIN because lead_session_id can be NULL if the team hasn't
-        // been fully initialized yet.
+        // Join teams with sessions to include session context and compute
+        // member_count from the teammates table via a correlated subquery.
         const rows = await sql`
           SELECT t.id,
                  t.team_name,
                  t.description,
-                 t.lead_session_id,
+                 t.session_id,
                  t.created_at,
-                 t.ended_at,
-                 t.member_count,
                  t.metadata,
-                 ls.id AS lead_session_db_id,
-                 ls.initial_prompt AS lead_session_initial_prompt,
-                 ls.started_at AS lead_session_started_at,
-                 ls.lifecycle AS lead_session_lifecycle
+                 s.initial_prompt AS session_initial_prompt,
+                 s.started_at AS session_started_at,
+                 s.lifecycle AS session_lifecycle,
+                 (SELECT COUNT(*)::int FROM teammates tm WHERE tm.team_id = t.id) AS member_count
           FROM teams t
-          LEFT JOIN sessions ls ON t.lead_session_id = ls.id
+          JOIN sessions s ON t.session_id = s.id
           ${whereClause}
           ORDER BY t.created_at DESC, t.id DESC
           LIMIT ${fetchLimit}
@@ -162,22 +163,19 @@ export function createTeamsRouter(deps: TeamsRouterDeps): Router {
               )
             : null;
 
-        // Shape the response to nest lead_session as an object
+        // Shape the response to nest session info as an object
         const shaped = teams.map((row) => ({
           id: row.id,
           team_name: row.team_name,
           description: row.description,
-          lead_session_id: row.lead_session_id,
-          lead_session: row.lead_session_db_id
-            ? {
-                id: row.lead_session_db_id,
-                initial_prompt: row.lead_session_initial_prompt,
-                started_at: row.lead_session_started_at,
-                lifecycle: row.lead_session_lifecycle,
-              }
-            : null,
+          session_id: row.session_id,
+          session: {
+            id: row.session_id,
+            initial_prompt: row.session_initial_prompt,
+            started_at: row.session_started_at,
+            lifecycle: row.session_lifecycle,
+          },
           created_at: row.created_at,
-          ended_at: row.ended_at,
           member_count: row.member_count,
           metadata: row.metadata,
         }));
@@ -194,7 +192,11 @@ export function createTeamsRouter(deps: TeamsRouterDeps): Router {
   );
 
   // =========================================================================
-  // GET /teams/:name — Team detail with sub-agent members
+  // GET /teams/:name — Team detail with teammate members
+  //
+  // Looks up teams by team_name. Since teams are now session-scoped, the same
+  // team_name can exist across multiple sessions. This endpoint returns the
+  // first match and its teammate members (not subagents).
   // =========================================================================
   router.get(
     "/teams/:name",
@@ -202,23 +204,22 @@ export function createTeamsRouter(deps: TeamsRouterDeps): Router {
       try {
         const { name } = req.params;
 
-        // --- Fetch team by team_name with lead session join ---
+        // Fetch team by team_name with session join
         const teamRows = await sql`
           SELECT t.id,
                  t.team_name,
                  t.description,
-                 t.lead_session_id,
+                 t.session_id,
                  t.created_at,
-                 t.ended_at,
-                 t.member_count,
                  t.metadata,
-                 ls.id AS lead_session_db_id,
-                 ls.initial_prompt AS lead_session_initial_prompt,
-                 ls.started_at AS lead_session_started_at,
-                 ls.lifecycle AS lead_session_lifecycle
+                 s.initial_prompt AS session_initial_prompt,
+                 s.started_at AS session_started_at,
+                 s.lifecycle AS session_lifecycle
           FROM teams t
-          LEFT JOIN sessions ls ON t.lead_session_id = ls.id
+          JOIN sessions s ON t.session_id = s.id
           WHERE t.team_name = ${name}
+          ORDER BY t.created_at DESC
+          LIMIT 1
         `;
 
         if (teamRows.length === 0) {
@@ -228,39 +229,35 @@ export function createTeamsRouter(deps: TeamsRouterDeps): Router {
 
         const row = teamRows[0];
 
-        // --- Fetch sub-agent members for this team ---
+        // Fetch teammate members for this team (not subagents)
         const members = await sql`
           SELECT id,
-                 agent_id,
-                 agent_type,
-                 agent_name,
-                 model,
-                 status,
-                 started_at,
-                 ended_at,
-                 session_id
-          FROM subagents
-          WHERE team_name = ${name}
-          ORDER BY started_at
+                 role,
+                 entity_type,
+                 entity_name,
+                 summary,
+                 created_at,
+                 session_id,
+                 metadata
+          FROM teammates
+          WHERE team_id = ${row.id}
+          ORDER BY created_at
         `;
 
-        // Shape response with nested lead_session
+        // Shape response with nested session info and members
         const team = {
           id: row.id,
           team_name: row.team_name,
           description: row.description,
-          lead_session_id: row.lead_session_id,
-          lead_session: row.lead_session_db_id
-            ? {
-                id: row.lead_session_db_id,
-                initial_prompt: row.lead_session_initial_prompt,
-                started_at: row.lead_session_started_at,
-                lifecycle: row.lead_session_lifecycle,
-              }
-            : null,
+          session_id: row.session_id,
+          session: {
+            id: row.session_id,
+            initial_prompt: row.session_initial_prompt,
+            started_at: row.session_started_at,
+            lifecycle: row.session_lifecycle,
+          },
           created_at: row.created_at,
-          ended_at: row.ended_at,
-          member_count: row.member_count,
+          member_count: members.length,
           metadata: row.metadata,
           members,
         };

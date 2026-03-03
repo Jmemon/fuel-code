@@ -132,7 +132,7 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
           if (!lifecycleValues) {
             res.status(400).json({
               error: "Invalid lifecycle value",
-              details: `Valid values: detected, capturing, ended, parsed, summarized, archived, failed`,
+              details: `Valid values: detected, ended, transcript_ready, parsed, summarized, complete, failed`,
             });
             return;
           }
@@ -189,17 +189,14 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
           conditions.push(sql`s.tags @> ARRAY[${query.tag}]::text[]`);
         }
 
-        // Phase 4-2 filters: team name, has_subagents, has_team
-        if (query.team) {
-          conditions.push(sql`s.team_name = ${query.team}`);
-        }
-
+        // Phase 4-2 filters: has_subagents, has_team
         if (query.has_subagents === "true") {
           conditions.push(sql`s.subagent_count > 0`);
         }
 
+        // has_team uses an EXISTS subquery on the session-scoped teams table
         if (query.has_team === "true") {
-          conditions.push(sql`s.team_name IS NOT NULL`);
+          conditions.push(sql`EXISTS (SELECT 1 FROM teams WHERE session_id = s.id)`);
         }
 
         if (cursor) {
@@ -220,9 +217,10 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
         // Fetch limit + 1 rows to determine if there are more pages
         const fetchLimit = query.limit + 1;
 
-        // Correlated subqueries add subagent_types, skill_names, and worktree_names
-        // arrays inline so the TUI can render rich metadata without per-session detail fetches.
-        // With LIMIT 50 these fire at most 50 times — negligible cost with session_id indexes.
+        // Correlated subqueries add subagent_types, skill_names, worktree_names,
+        // and num_teammates inline so the TUI can render rich metadata without
+        // per-session detail fetches. With LIMIT 50 these fire at most 50 times —
+        // negligible cost with session_id indexes.
         const rows = await sql`
           SELECT s.*,
                  w.canonical_id AS workspace_canonical_id,
@@ -242,7 +240,8 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
                    (SELECT array_agg(DISTINCT wt.worktree_name)
                     FROM session_worktrees wt WHERE wt.session_id = s.id),
                    '{}'
-                 ) AS worktree_names
+                 ) AS worktree_names,
+                 (SELECT COUNT(*)::int FROM teammates tm WHERE tm.session_id = s.id) AS num_teammates
           FROM sessions s
           JOIN workspaces w ON s.workspace_id = w.id
           JOIN devices d ON s.device_id = d.id
@@ -277,7 +276,7 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
 
   // =========================================================================
   // GET /sessions/:id — Session detail with workspace/device names and
-  // inline relationship data (subagents, skills, worktrees, team, resume chain)
+  // inline relationship data (subagents, skills, worktrees, teammates)
   // =========================================================================
   router.get(
     "/sessions/:id",
@@ -303,30 +302,26 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
 
         const session = rows[0];
 
-        // Fetch all relationship data in parallel for performance
-        const [subagents, skills, worktrees, teamRows, resumedFromRows, resumedByRows] =
+        // Fetch all relationship data in parallel for performance.
+        // Teammates are joined through the session-scoped teams table.
+        const [subagents, skills, worktrees, teammates] =
           await Promise.all([
             sql`SELECT * FROM subagents WHERE session_id = ${id} ORDER BY started_at`,
             sql`SELECT * FROM session_skills WHERE session_id = ${id} ORDER BY invoked_at`,
             sql`SELECT * FROM session_worktrees WHERE session_id = ${id} ORDER BY created_at`,
-            // Only query teams table if session has a team_name
-            session.team_name
-              ? sql`SELECT * FROM teams WHERE team_name = ${session.team_name}`
-              : Promise.resolve([]),
-            // Only query resumed_from if session has a resumed_from_session_id
-            session.resumed_from_session_id
-              ? sql`SELECT id, started_at, initial_prompt FROM sessions WHERE id = ${session.resumed_from_session_id}`
-              : Promise.resolve([]),
-            // Find sessions that resumed from this one
-            sql`SELECT id, started_at, initial_prompt FROM sessions WHERE resumed_from_session_id = ${id}`,
+            sql`
+              SELECT tm.*, t.team_name
+              FROM teammates tm
+              JOIN teams t ON tm.team_id = t.id
+              WHERE tm.session_id = ${id}
+              ORDER BY tm.created_at
+            `,
           ]);
 
         session.subagents = subagents;
         session.skills = skills;
         session.worktrees = worktrees;
-        session.team = teamRows.length > 0 ? teamRows[0] : null;
-        session.resumed_from = resumedFromRows.length > 0 ? resumedFromRows[0] : null;
-        session.resumed_by = resumedByRows;
+        session.teammates = teammates;
 
         res.json({ session });
       } catch (err) {
@@ -462,7 +457,7 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
         const session = sessionRows[0];
 
         // Transcript is only available once the session has been fully processed
-        const transcriptReadyStates = new Set(["complete", "parsed", "summarized", "archived"]);
+        const transcriptReadyStates = new Set(["complete", "parsed", "summarized"]);
         if (!transcriptReadyStates.has(session.lifecycle as string)) {
           res.status(404).json({
             error: "Transcript not yet available",

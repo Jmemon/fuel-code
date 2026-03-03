@@ -40,8 +40,7 @@ const SESSION_PARSED = {
   workspace_id: "ws-01",
   device_id: "dev-01",
   lifecycle: "parsed",
-  parse_status: "completed",
-  parse_error: null,
+  last_error: null,
   started_at: "2025-01-15T10:00:00.000Z",
   ended_at: "2025-01-15T11:00:00.000Z",
   transcript_s3_key: "transcripts/ws-01/sess-01/raw.jsonl",
@@ -61,8 +60,7 @@ const SESSION_UNPARSED = {
   workspace_id: "ws-01",
   device_id: "dev-01",
   lifecycle: "ended",
-  parse_status: "pending",
-  parse_error: null,
+  last_error: null,
   started_at: "2025-01-15T12:00:00.000Z",
   ended_at: "2025-01-15T13:00:00.000Z",
   transcript_s3_key: null,
@@ -74,13 +72,12 @@ const SESSION_UNPARSED = {
   device_name: "macbook-pro",
 };
 
-const SESSION_SUMMARIZED = {
+const SESSION_COMPLETE = {
   id: "sess-03",
   workspace_id: "ws-01",
   device_id: "dev-01",
-  lifecycle: "summarized",
-  parse_status: "completed",
-  parse_error: null,
+  lifecycle: "complete",
+  last_error: null,
   started_at: "2025-01-15T14:00:00.000Z",
   ended_at: "2025-01-15T15:00:00.000Z",
   transcript_s3_key: "transcripts/ws-01/sess-03/raw.jsonl",
@@ -93,7 +90,7 @@ const SESSION_SUMMARIZED = {
   device_name: "macbook-pro",
 };
 
-const ALL_SESSIONS = [SESSION_PARSED, SESSION_UNPARSED, SESSION_SUMMARIZED];
+const ALL_SESSIONS = [SESSION_PARSED, SESSION_UNPARSED, SESSION_COMPLETE];
 
 const TRANSCRIPT_MESSAGES = [
   {
@@ -261,10 +258,9 @@ function defaultQueryHandler(queryText: string, values: unknown[]): unknown[] {
     return session ? [session] : [];
   }
 
-  // Batch status: SELECT id, lifecycle, parse_status FROM sessions WHERE id IN (...)
-  // Matches parse_status + WHERE id IN (no workspace join, no single-id WHERE =)
+  // Batch status: SELECT id, lifecycle FROM sessions WHERE id IN (...)
   if (
-    queryText.includes("parse_status") &&
+    queryText.includes("lifecycle") &&
     queryText.includes("WHERE id IN")
   ) {
     // values[0] is the array of session IDs passed via sql(session_ids)
@@ -273,13 +269,6 @@ function defaultQueryHandler(queryText: string, values: unknown[]): unknown[] {
       return ALL_SESSIONS.filter((s) => ids.includes(s.id));
     }
     return [];
-  }
-
-  // Session parse_status check: SELECT id, parse_status ... FROM sessions WHERE id =
-  if (queryText.includes("parse_status") && queryText.includes("FROM sessions")) {
-    const id = values.find((v) => typeof v === "string");
-    const session = ALL_SESSIONS.find((s) => s.id === id);
-    return session ? [session] : [];
   }
 
   // Session transcript_s3_key check
@@ -300,6 +289,11 @@ function defaultQueryHandler(queryText: string, values: unknown[]): unknown[] {
   if (queryText.includes("FROM transcript_messages")) {
     const sessionId = values.find((v) => typeof v === "string");
     return TRANSCRIPT_MESSAGES.filter((m) => m.session_id === sessionId);
+  }
+
+  // Teammates: FROM teammates tm JOIN teams t
+  if (queryText.includes("FROM teammates") && queryText.includes("JOIN teams")) {
+    return [];
   }
 
   // Events: FROM events
@@ -519,13 +513,12 @@ describe("GET /api/sessions/:id/transcript", () => {
     expect(body.messages.length).toBe(2);
   });
 
-  test("returns 404 with parse info for unparsed session", async () => {
+  test("returns 404 with lifecycle info for unparsed session", async () => {
     const res = await get("/api/sessions/sess-02/transcript");
     expect(res.status).toBe(404);
 
     const body = await res.json();
     expect(body.error).toBe("Transcript not yet available");
-    expect(body.parse_status).toBe("pending");
     expect(body.lifecycle).toBe("ended");
   });
 
@@ -758,7 +751,7 @@ describe("Auth", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST /api/sessions/batch-status", () => {
-  test("returns lifecycle and parse_status for requested session IDs", async () => {
+  test("returns lifecycle for requested session IDs", async () => {
     const res = await post("/api/sessions/batch-status", {
       session_ids: ["sess-01", "sess-02", "sess-03"],
     });
@@ -768,18 +761,15 @@ describe("POST /api/sessions/batch-status", () => {
     expect(body.statuses).toBeDefined();
     expect(body.not_found).toEqual([]);
 
-    // Verify each session's status fields
+    // Verify each session returns only { lifecycle } — no parse_status
     expect(body.statuses["sess-01"]).toEqual({
       lifecycle: "parsed",
-      parse_status: "completed",
     });
     expect(body.statuses["sess-02"]).toEqual({
       lifecycle: "ended",
-      parse_status: "pending",
     });
     expect(body.statuses["sess-03"]).toEqual({
-      lifecycle: "summarized",
-      parse_status: "completed",
+      lifecycle: "complete",
     });
   });
 

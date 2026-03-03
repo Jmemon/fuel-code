@@ -21,11 +21,11 @@ import { z } from "zod";
  */
 const VALID_LIFECYCLES = [
   "detected",
-  "capturing",
   "ended",
+  "transcript_ready",
   "parsed",
   "summarized",
-  "archived",
+  "complete",
   "failed",
 ] as const;
 
@@ -53,11 +53,9 @@ export const sessionListQuerySchema = z.object({
   ended_before: z.string().datetime().optional(),
   /** Filter sessions containing this tag */
   tag: z.string().optional(),
-  /** Filter sessions by team_name */
-  team: z.string().optional(),
   /** Filter sessions that have subagent_count > 0 ("true" to enable) */
   has_subagents: z.enum(["true", "false"]).optional(),
-  /** Filter sessions that have team_name IS NOT NULL ("true" to enable) */
+  /** Filter sessions that have at least one team (EXISTS subquery on teams table) */
   has_team: z.enum(["true", "false"]).optional(),
   /** Number of results per page (default 50, max 250) */
   limit: z.coerce.number().int().min(1).max(250).default(50),
