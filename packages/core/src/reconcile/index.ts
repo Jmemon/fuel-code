@@ -20,5 +20,12 @@ export {
   type ReconcileS3Client,
 } from "./reconcile-session.js";
 
+export {
+  extractTeamIntervals,
+  persistTeams,
+  type TeamInterval,
+  type PersistedTeam,
+} from "./team-detection.js";
+
 // Re-export reconcile types from the types directory for convenience
 export type { SessionSeed, SessionGap } from "../types/reconcile.js";
