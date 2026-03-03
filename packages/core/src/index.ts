@@ -111,6 +111,7 @@ export {
   type ScanProgress,
   type BackfillProgress,
   type IngestDeps,
+  type BackfillS3Client,
   type SubagentIngestResult,
   type SubagentIngestProgress,
   type SubagentIngestDeps,

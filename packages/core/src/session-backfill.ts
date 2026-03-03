@@ -12,7 +12,7 @@
  *
  * The scanner has two phases:
  *   1. Discovery: scan directories, collect metadata, resolve workspaces
- *   2. Ingestion: upload transcripts and emit synthetic session events
+ *   2. Ingestion: write sessions directly to DB and upload transcripts to S3
  */
 
 import { exec, execSync } from "node:child_process";
@@ -21,13 +21,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import {
+  buildTranscriptKey,
   deriveWorkspaceCanonicalId,
-  generateId,
-  normalizeGitRemote,
-  type Event,
-  type EventType,
 } from "@fuel-code/shared";
+import type { Sql } from "postgres";
 import type { BackfillResult } from "./backfill-state.js";
+import { buildSeedFromFilesystem } from "./reconcile/session-seed.js";
+import type { SessionSeed } from "./types/reconcile.js";
+import { resolveOrCreateWorkspace } from "./workspace-resolver.js";
+import { resolveOrCreateDevice } from "./device-resolver.js";
+import { transitionSession } from "./session-lifecycle.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -115,39 +118,35 @@ export interface BackfillProgress {
   currentSession: string | null;
 }
 
-/** Dependencies injected into the ingestion function */
+/** Minimal S3 client interface used by backfill ingestion */
+export interface BackfillS3Client {
+  upload(key: string, body: Buffer | string, contentType?: string): Promise<{ key: string; size: number }>;
+}
+
+/** Dependencies injected into the ingestion function — writes directly to DB+S3 */
 export interface IngestDeps {
-  /** Base URL of the fuel-code backend (e.g., "http://localhost:3000") */
-  serverUrl: string;
-  /** API key for authentication */
-  apiKey: string;
-  /** Device ID to stamp on synthetic events */
+  /** Postgres client for direct DB writes */
+  sql: Sql;
+  /** S3 client for transcript uploads */
+  s3: BackfillS3Client;
+  /** Device ID to stamp on session rows */
   deviceId: string;
   /** Progress callback fired after each session */
   onProgress?: (progress: BackfillProgress) => void;
   /** AbortSignal for clean cancellation (Ctrl-C) */
   signal?: AbortSignal;
-  /** Number of events per ingest POST (default: 50) */
-  batchSize?: number;
-  /** Milliseconds to wait between batches (default: 100) */
-  throttleMs?: number;
   /** Set of session IDs already ingested (for resume) */
   alreadyIngested?: Set<string>;
-  /**
-   * Session IDs whose transcript upload failed on a previous run. These
-   * sessions already have start/end events in the backend, so processSession
-   * skips event emission and jumps straight to transcript re-upload.
-   */
-  retriableSessionIds?: Set<string>;
   /** Number of sessions to process concurrently (default: 10) */
   concurrency?: number;
-  /** Device name hint injected into synthetic events so the backend
-   *  can resolve a real device record instead of creating "unknown-device" */
+  /** Device name hint for resolveOrCreateDevice */
   deviceName?: string;
   /** Device type hint ("local", "remote", etc.) — defaults to "local" */
   deviceType?: string;
-  /** Callback fired when a session is successfully ingested (events + transcript uploaded) */
+  /** Callback fired when a session is successfully ingested (DB row + transcript uploaded) */
   onSessionIngested?: (sessionId: string) => void;
+  /** Optional callback to enqueue a session for reconcile (parsing/summary) */
+  enqueueReconcile?: (sessionId: string) => void;
 }
 
 /** Entry from a sessions-index.json file */
@@ -895,31 +894,27 @@ export async function scanForSessions(
 // ---------------------------------------------------------------------------
 
 /**
- * Ingest discovered sessions into the fuel-code backend.
+ * Ingest discovered sessions directly into Postgres and S3.
  *
- * Processes sessions concurrently (configurable via deps.concurrency, default 10).
- * For each session:
- *   1. Check if already ingested (dedup via GET /api/sessions/:id)
- *   2. Emit synthetic session.start event and wait for the row to exist
- *   3. Upload transcript file (POST /api/sessions/:id/transcript/upload)
- *   4. Emit synthetic session.end event
- *   5. Report progress
- *
- * Handles rate limiting (429) with shared backoff across all workers.
- * Session.end events are batched and flushed periodically.
+ * Replaces the old HTTP-based ingestion path. For each session:
+ *   1. Direct DB dedup check (SELECT id FROM sessions WHERE id = $1)
+ *   2. ensureSessionRow() — INSERT ... ON CONFLICT DO NOTHING
+ *   3. For non-live sessions:
+ *      a. endSession() — transition to 'ended' with timestamps
+ *      b. uploadMainTranscript() — S3 upload + UPDATE transcript_s3_key
+ *      c. Transition to 'transcript_ready'
+ *      d. Enqueue for reconcile (parsing/summary)
+ *   4. For live sessions: just ensure the row exists at 'detected'
  *
  * @param sessions - Array of discovered sessions to ingest
- * @param deps - Injected dependencies (API client, config, callbacks)
+ * @param deps - Injected dependencies (sql, s3, callbacks)
  */
 export async function ingestBackfillSessions(
   sessions: DiscoveredSession[],
   deps: IngestDeps,
 ): Promise<BackfillResult> {
   const startTime = Date.now();
-  const batchSize = deps.batchSize ?? 50;
-  const throttleMs = deps.throttleMs ?? 100;
   const alreadyIngested = deps.alreadyIngested ?? new Set<string>();
-  const baseUrl = deps.serverUrl.replace(/\/+$/, "");
   const concurrency = deps.concurrency ?? 10;
 
   const result: BackfillResult = {
@@ -932,62 +927,20 @@ export async function ingestBackfillSessions(
     liveStarted: 0,
   };
 
-  // Shared rate limit state: when any worker hits 429, all workers pause.
-  // rateLimitUntil is a timestamp (ms) until which workers should wait.
-  let rateLimitUntil = 0;
-
-  // Collect session.end events for batched ingestion. JS is single-threaded
-  // so concurrent pushes are safe; flushing is coordinated below.
-  let eventBatch: Event[] = [];
-  let flushInProgress = false;
-
-  /**
-   * Flush the accumulated session.end event batch to the backend.
-   * Prevents concurrent flushes via a simple flag (JS is single-threaded).
-   */
-  async function tryFlushBatch(force = false): Promise<void> {
-    if (flushInProgress) return;
-    if (!force && eventBatch.length < batchSize) return;
-    if (eventBatch.length === 0) return;
-
-    flushInProgress = true;
-    const batch = eventBatch;
-    eventBatch = [];
-
-    try {
-      await flushEventBatch(baseUrl, deps.apiKey, batch);
-      if (throttleMs > 0) await sleep(throttleMs);
-    } catch {
-      // If batch flush fails, the transcripts are already uploaded.
-      // Session.end events will be re-emitted on next backfill run.
-    } finally {
-      flushInProgress = false;
-    }
-  }
+  // Ensure the device row exists before inserting any sessions (FK target)
+  await resolveOrCreateDevice(deps.sql, deps.deviceId, {
+    name: deps.deviceName,
+    type: (deps.deviceType as "local" | "remote") ?? "local",
+    hostname: os.hostname(),
+    os: process.platform,
+    arch: process.arch,
+  });
 
   /**
-   * Wait if a rate limit is active. Returns false if the signal was aborted
-   * during the wait.
-   */
-  async function waitForRateLimit(): Promise<boolean> {
-    const now = Date.now();
-    if (rateLimitUntil > now) {
-      const waitMs = rateLimitUntil - now;
-      try {
-        await abortableSleep(waitMs, deps.signal);
-      } catch {
-        return false;
-      }
-    }
-    return !deps.signal?.aborted;
-  }
-
-  /**
-   * Process a single session: emit events, upload transcript, handle errors.
+   * Process a single session: write directly to DB+S3 without HTTP.
    * Called concurrently by the worker pool.
    */
   async function processSession(session: DiscoveredSession): Promise<void> {
-    // Check for cancellation
     if (deps.signal?.aborted) return;
 
     // Skip if already ingested in a previous (interrupted) run
@@ -996,146 +949,40 @@ export async function ingestBackfillSessions(
       return;
     }
 
-    // Sessions whose transcript upload previously failed already have
-    // session.start/session.end events in the backend — only the transcript
-    // upload needs to be retried. Skip the server dedup check (which would
-    // falsely report "exists" and skip the session) and jump to upload.
-    const isRetriable = deps.retriableSessionIds?.has(session.sessionId) ?? false;
-
-    if (isRetriable) {
-      try {
-        if (!(await waitForRateLimit())) return;
-        await uploadTranscriptWithRetry(
-          baseUrl,
-          deps.apiKey,
-          session.sessionId,
-          session.transcriptPath,
-          15,
-          (until) => { rateLimitUntil = Math.max(rateLimitUntil, until); },
-          deps.signal,
-        );
-        result.ingested++;
-        result.totalSizeBytes += session.fileSizeBytes;
-        deps.onSessionIngested?.(session.sessionId);
-      } catch (err) {
-        result.failed++;
-        result.errors.push({
-          sessionId: session.sessionId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-      return;
-    }
-
     try {
-      // Wait if rate-limited
-      if (!(await waitForRateLimit())) return;
-
-      // Step 1: Dedup check — does this session already exist in the backend?
-      const exists = await checkSessionExists(
-        baseUrl,
-        deps.apiKey,
-        session.sessionId,
-        deps.signal,
-      );
-      if (exists) {
+      // Step 1: Direct DB dedup check — does this session already exist?
+      const existing = await deps.sql`
+        SELECT id FROM sessions WHERE id = ${session.sessionId}
+      `;
+      if (existing.length > 0) {
         result.skipped++;
         return;
       }
 
-      // Step 2: Emit synthetic session.start event so the session row is created.
-      const now = new Date().toISOString();
+      // Build a SessionSeed from the discovered session for metadata
+      const seed = buildSeedFromFilesystem(session, deps.deviceId);
 
-      // session_id must be null on session.start — the session row doesn't exist
-      // yet (the handler creates it). The events table has a FK constraint
-      // on session_id, so setting it here would violate the FK.
-      const startEvent: Event = {
-        id: generateId(),
-        type: "session.start" as EventType,
-        timestamp: session.firstTimestamp ?? now,
-        device_id: deps.deviceId,
-        workspace_id: session.workspaceCanonicalId,
-        session_id: null,
-        data: {
-          cc_session_id: session.sessionId,
-          cwd: session.resolvedCwd,
-          git_branch: session.gitBranch,
-          git_remote: null,
-          cc_version: null,
-          model: null,
-          source: "backfill",
-          transcript_path: session.transcriptPath,
-          ...(deps.deviceName ? { _device_name: deps.deviceName, _device_type: deps.deviceType ?? "local" } : {}),
-        },
-        ingested_at: null,
-        blob_refs: [],
-      };
+      // Step 2: ensureSessionRow — create session row at 'detected' state
+      await ensureSessionRow(deps.sql, seed);
 
-      await flushEventBatchWithRateLimit(baseUrl, deps.apiKey, [startEvent], (until) => {
-        rateLimitUntil = Math.max(rateLimitUntil, until);
-      }, deps.signal);
-
-      // Live sessions stop here: no session.end, no transcript upload.
-      // The session will appear in the TUI as an active session. When Claude
-      // exits normally the session.end hook fires and closes it. We intentionally
-      // do NOT call onSessionIngested so live sessions are not added to
-      // ingestedSessionIds — the next backfill run can treat them normally once
-      // the transcript has a /exit tag.
+      // Live sessions stop here: only a 'detected' row is created.
+      // The session.end hook will close it when Claude exits.
       if (session.isLive) {
         result.liveStarted = (result.liveStarted ?? 0) + 1;
         return;
       }
 
-      // Step 3: Emit session.end immediately (not batched) so the session
-      // reaches "ended" state before we attempt the transcript upload.
-      // If the upload fails, the session is cleanly "ended" and retryable,
-      // rather than stuck at "detected" as a zombie row.
-      let durationMs = 0;
-      if (session.firstTimestamp && session.lastTimestamp) {
-        durationMs = Math.max(
-          0,
-          new Date(session.lastTimestamp).getTime() -
-            new Date(session.firstTimestamp).getTime(),
-        );
-      }
+      // Step 3a: endSession — transition to 'ended' with timestamps
+      await endSession(deps.sql, seed);
 
-      const endEvent: Event = {
-        id: generateId(),
-        type: "session.end" as EventType,
-        timestamp: session.lastTimestamp ?? now,
-        device_id: deps.deviceId,
-        workspace_id: session.workspaceCanonicalId,
-        session_id: session.sessionId,
-        data: {
-          cc_session_id: session.sessionId,
-          duration_ms: durationMs,
-          end_reason: "exit",
-          transcript_path: session.transcriptPath,
-          ...(deps.deviceName ? { _device_name: deps.deviceName, _device_type: deps.deviceType ?? "local" } : {}),
-        },
-        ingested_at: null,
-        blob_refs: [],
-      };
+      // Step 3b: uploadMainTranscript — S3 upload + UPDATE transcript_s3_key
+      await uploadMainTranscript(deps.s3, deps.sql, seed);
 
-      if (!(await waitForRateLimit())) return;
-      await flushEventBatchWithRateLimit(baseUrl, deps.apiKey, [endEvent], (until) => {
-        rateLimitUntil = Math.max(rateLimitUntil, until);
-      }, deps.signal);
+      // Step 3c: Transition to 'transcript_ready'
+      await transitionSession(deps.sql, seed.ccSessionId, "ended", "transcript_ready");
 
-      // Step 4: Upload the transcript. The session is already "ended", so
-      // the upload route will trigger the pipeline. If this fails, the
-      // session is still cleanly ended and can be retried later.
-      if (!(await waitForRateLimit())) return;
-
-      await uploadTranscriptWithRetry(
-        baseUrl,
-        deps.apiKey,
-        session.sessionId,
-        session.transcriptPath,
-        15,   // maxRetries — generous to handle consumer backlog
-        (until) => { rateLimitUntil = Math.max(rateLimitUntil, until); },
-        deps.signal,
-      );
+      // Step 3d: Enqueue for reconcile (parsing, summary, etc.)
+      deps.enqueueReconcile?.(seed.ccSessionId);
 
       result.ingested++;
       result.totalSizeBytes += session.fileSizeBytes;
@@ -1150,15 +997,10 @@ export async function ingestBackfillSessions(
   }
 
   // --- Concurrent worker pool ---
-  // Process sessions with bounded concurrency. A simple approach: maintain
-  // an array of in-flight promises, starting new work as slots open up.
-  // The abort signal is raced so Ctrl-C breaks out immediately.
   const inFlight = new Set<Promise<void>>();
   let sessionIndex = 0;
   let lastReportedSession: string | null = null;
 
-  // A promise that rejects when the abort signal fires, used to race against
-  // in-flight work so the pool loop exits immediately on Ctrl-C.
   const abortPromise = deps.signal
     ? new Promise<void>((_, reject) => {
         if (deps.signal!.aborted) { reject(new Error("Aborted")); return; }
@@ -1180,13 +1022,11 @@ export async function ingestBackfillSessions(
     while (sessionIndex < sessions.length) {
       if (deps.signal?.aborted) break;
 
-      // Fill up to concurrency limit
       while (inFlight.size < concurrency && sessionIndex < sessions.length) {
         if (deps.signal?.aborted) break;
 
         const session = sessions[sessionIndex++];
 
-        // Report progress as each session is launched
         lastReportedSession = session.sessionId;
         reportProgress(session.sessionId);
 
@@ -1197,7 +1037,6 @@ export async function ingestBackfillSessions(
         inFlight.add(p);
       }
 
-      // Wait for at least one to complete, or abort signal
       if (inFlight.size >= concurrency) {
         const raceTargets: Promise<void>[] = [...inFlight];
         if (abortPromise) raceTargets.push(abortPromise);
@@ -1205,26 +1044,93 @@ export async function ingestBackfillSessions(
       }
     }
 
-    // Wait for remaining in-flight sessions (they'll exit fast if aborted
-    // since all their fetches use the combined signal)
     if (inFlight.size > 0) {
       await Promise.allSettled(inFlight);
     }
   } catch {
-    // AbortError from the race — wait for in-flight to drain
     if (inFlight.size > 0) {
       await Promise.allSettled(inFlight);
     }
   }
-
-  // Flush any remaining session.end events
-  await tryFlushBatch(true);
 
   // Final progress report
   reportProgress(null);
 
   result.durationMs = Date.now() - startTime;
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Direct DB+S3 helpers for backfill session ingestion
+// ---------------------------------------------------------------------------
+
+/**
+ * Insert a session row at 'detected' state. Uses ON CONFLICT DO NOTHING
+ * for idempotency — re-running backfill for an existing session is a no-op.
+ *
+ * Ensures the workspace FK target exists before inserting the session.
+ */
+async function ensureSessionRow(sql: Sql, seed: SessionSeed): Promise<void> {
+  // Ensure workspace exists (FK target for sessions.workspace_id)
+  const workspaceId = await resolveOrCreateWorkspace(sql, seed.workspaceCanonicalId);
+
+  await sql`
+    INSERT INTO sessions (
+      id, workspace_id, device_id, lifecycle, started_at,
+      cwd, git_branch, git_remote, model, source
+    ) VALUES (
+      ${seed.ccSessionId}, ${workspaceId}, ${seed.deviceId}, 'detected',
+      ${seed.startedAt}, ${seed.cwd}, ${seed.gitBranch}, ${seed.gitRemote},
+      ${seed.model}, ${seed.source}
+    )
+    ON CONFLICT (id) DO NOTHING
+  `;
+}
+
+/**
+ * Transition a session from 'detected' to 'ended', setting ended_at,
+ * end_reason, and duration_ms from the seed's metadata.
+ */
+async function endSession(sql: Sql, seed: SessionSeed): Promise<void> {
+  await transitionSession(sql, seed.ccSessionId, ["detected"], "ended", {
+    ended_at: seed.endedAt ?? undefined,
+    end_reason: seed.endReason ?? "exit",
+    duration_ms: seed.durationMs ?? undefined,
+  });
+}
+
+/**
+ * Upload the raw transcript JSONL to S3 and update the session row with
+ * the S3 key. Uses Bun.file() for efficient streaming when available.
+ */
+async function uploadMainTranscript(
+  s3: BackfillS3Client,
+  sql: Sql,
+  seed: SessionSeed,
+): Promise<void> {
+  if (!seed.transcriptRef || seed.transcriptRef.type !== "disk") {
+    throw new Error(`No disk transcript reference for session ${seed.ccSessionId}`);
+  }
+
+  const transcriptPath = seed.transcriptRef.path;
+  const s3Key = buildTranscriptKey(seed.workspaceCanonicalId, seed.ccSessionId);
+
+  // Read transcript content and upload to S3
+  let content: Buffer;
+  try {
+    content = fs.readFileSync(transcriptPath) as Buffer;
+  } catch (err) {
+    throw new Error(`Failed to read transcript at ${transcriptPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  await s3.upload(s3Key, content, "application/x-ndjson");
+
+  // Update session row with S3 key
+  await sql`
+    UPDATE sessions
+    SET transcript_s3_key = ${s3Key}, updated_at = now()
+    WHERE id = ${seed.ccSessionId}
+  `;
 }
 
 // ---------------------------------------------------------------------------
@@ -1674,200 +1580,6 @@ function resolveWorkspaceFromPath(resolvedPath: string): string {
   } catch {
     return "_unassociated";
   }
-}
-
-/**
- * Check if a session already exists in the backend.
- * Returns true if GET /api/sessions/:id returns 200, false on 404 or error.
- */
-async function checkSessionExists(
-  baseUrl: string,
-  apiKey: string,
-  sessionId: string,
-  signal?: AbortSignal,
-): Promise<boolean> {
-  try {
-    const response = await fetch(
-      `${baseUrl}/api/sessions/${sessionId}`,
-      {
-        method: "GET",
-        headers: { Authorization: `Bearer ${apiKey}` },
-        signal: combinedSignal(signal),
-      },
-    );
-    return response.ok;
-  } catch (err) {
-    // If aborted by user, rethrow so processSession exits immediately
-    if (signal?.aborted) throw err;
-    // Network error or timeout — treat as "not exists" to allow ingestion
-    return false;
-  }
-}
-
-/**
- * Upload a transcript with retry logic to handle:
- * 1. Race condition: session.start event hasn't been processed yet (404)
- * 2. Rate limiting: server returns 429 with Retry-After
- * 3. Transient errors: EAGAIN, connection resets, timeouts
- *
- * Uses exponential backoff with jitter, capped at 10s per retry.
- * With 15 retries the total max wait is ~90s, enough for any consumer backlog.
- */
-async function uploadTranscriptWithRetry(
-  baseUrl: string,
-  apiKey: string,
-  sessionId: string,
-  transcriptPath: string,
-  maxRetries = 15,
-  onRateLimit?: (until: number) => void,
-  signal?: AbortSignal,
-): Promise<void> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    if (signal?.aborted) throw new Error("Aborted");
-    try {
-      await uploadTranscript(baseUrl, apiKey, sessionId, transcriptPath, signal);
-      return;
-    } catch (err) {
-      // If user cancelled, bail immediately — no retries
-      if (signal?.aborted) throw err;
-
-      const msg = err instanceof Error ? err.message : String(err);
-      const is404 = msg.includes("404");
-      const is429 = msg.includes("429");
-      // S3/storage failures surface as 503 via the server error handler
-      const is503 = msg.includes("503");
-      const isTransient = msg.includes("EAGAIN") || msg.includes("ECONNRESET")
-        || msg.includes("ETIMEDOUT") || msg.includes("UND_ERR_CONNECT_TIMEOUT");
-
-      if ((is404 || is429 || is503 || isTransient) && attempt < maxRetries) {
-        let waitMs: number;
-
-        if (is429) {
-          const retryMatch = msg.match(/Retry-After:\s*(\d+)/i);
-          waitMs = retryMatch ? parseInt(retryMatch[1], 10) * 1000 : 10_000;
-          if (onRateLimit) onRateLimit(Date.now() + waitMs);
-        } else {
-          const base = Math.min(500 * Math.pow(2, attempt), 10_000);
-          waitMs = base + Math.random() * 500;
-        }
-
-        await abortableSleep(waitMs, signal);
-        continue;
-      }
-      throw err;
-    }
-  }
-}
-
-/**
- * Upload a transcript JSONL file to the backend for a specific session.
- *
- * Uses streaming for large files to avoid loading entire transcripts into memory.
- * Throws on failure so the caller can record the error. Includes rate limit
- * headers in error messages so the retry logic can parse them.
- */
-async function uploadTranscript(
-  baseUrl: string,
-  apiKey: string,
-  sessionId: string,
-  transcriptPath: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  const url = `${baseUrl}/api/sessions/${sessionId}/transcript/upload`;
-
-  // Use Bun.file() for efficient streaming if available, fall back to readFileSync
-  let body: BodyInit;
-  try {
-    // Bun.file returns a lazy reference that streams on read
-    body = Bun.file(transcriptPath);
-  } catch {
-    body = fs.readFileSync(transcriptPath);
-  }
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-ndjson",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body,
-    signal: combinedSignal(signal),
-  });
-
-  if (!response.ok) {
-    const responseBody = await response.text().catch(() => "<unreadable>");
-    // Include Retry-After header in error message so retry logic can parse it
-    const retryAfter = response.headers.get("Retry-After");
-    const retryInfo = retryAfter ? ` Retry-After: ${retryAfter}` : "";
-    throw new Error(
-      `Transcript upload failed (HTTP ${response.status}): ${responseBody}${retryInfo}`,
-    );
-  }
-}
-
-/**
- * Flush a batch of events to the backend ingest endpoint.
- */
-async function flushEventBatch(
-  baseUrl: string,
-  apiKey: string,
-  events: Event[],
-  signal?: AbortSignal,
-): Promise<void> {
-  const url = `${baseUrl}/api/events/ingest`;
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({ events }),
-    signal: combinedSignal(signal),
-  });
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => "<unreadable>");
-    const retryAfter = response.headers.get("Retry-After");
-    const retryInfo = retryAfter ? ` Retry-After: ${retryAfter}` : "";
-    throw new Error(`Event ingest failed (HTTP ${response.status}): ${body}${retryInfo}`);
-  }
-}
-
-/**
- * Flush events with rate limit detection and retry.
- * On 429, waits and retries once. Calls onRateLimit so other workers can pause.
- */
-async function flushEventBatchWithRateLimit(
-  baseUrl: string,
-  apiKey: string,
-  events: Event[],
-  onRateLimit: (until: number) => void,
-  signal?: AbortSignal,
-): Promise<void> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (signal?.aborted) throw new Error("Aborted");
-    try {
-      await flushEventBatch(baseUrl, apiKey, events, signal);
-      return;
-    } catch (err) {
-      if (signal?.aborted) throw err;
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("429") && attempt < 2) {
-        const retryMatch = msg.match(/Retry-After:\s*(\d+)/i);
-        const waitMs = retryMatch ? parseInt(retryMatch[1], 10) * 1000 : 10_000;
-        onRateLimit(Date.now() + waitMs);
-        await abortableSleep(waitMs, signal);
-        continue;
-      }
-      throw err;
-    }
-  }
-}
-
-/** Simple sleep utility for throttling between batches */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ---------------------------------------------------------------------------
