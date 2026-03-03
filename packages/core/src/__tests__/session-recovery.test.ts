@@ -5,9 +5,9 @@
  * on Postgres. Uses a mock S3 client to avoid real AWS calls.
  *
  * Test coverage:
- *   1. Stuck session found and retried (pipeline re-triggered)
+ *   1. Stuck session (transcript_ready) with transcript_s3_key is retried
  *   2. Session below threshold: NOT recovered
- *   3. Session in 'parsed' lifecycle with completed parse_status: NOT recovered
+ *   3. Session in 'parsed' lifecycle is NOT recovered by stuck-session recovery
  *   4. dryRun = true: reports without modifying
  *   5. Session without S3 key: transitions to 'failed'
  */
@@ -60,25 +60,24 @@ describe.skipIf(!DATABASE_URL)("session-recovery (database)", () => {
 
   /**
    * Helper: insert a test session row with configurable state.
+   * No parse_status column — lifecycle fully encodes pipeline progress.
    */
   async function insertSession(
     lifecycle: SessionLifecycle,
     overrides?: {
-      parse_status?: string;
       transcript_s3_key?: string | null;
       updated_at?: string;
     },
   ): Promise<string> {
     const id = nextSessionId();
     await sql`
-      INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, parse_status, transcript_s3_key, updated_at)
+      INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, transcript_s3_key, updated_at)
       VALUES (
         ${id},
         ${workspaceId},
         ${deviceId},
         ${lifecycle},
         ${new Date().toISOString()},
-        ${overrides?.parse_status ?? "pending"},
         ${overrides?.transcript_s3_key ?? null},
         ${overrides?.updated_at ? new Date(overrides.updated_at) : sql`now()`}
       )
@@ -128,10 +127,9 @@ describe.skipIf(!DATABASE_URL)("session-recovery (database)", () => {
   // Test cases
   // -----------------------------------------------------------------------
 
-  test("stuck session with transcript_s3_key is retried", async () => {
-    // Insert a session stuck in 'ended' with pending parse_status and old updated_at
-    const sessionId = await insertSession("ended", {
-      parse_status: "pending",
+  test("stuck session (transcript_ready) with transcript_s3_key is retried", async () => {
+    // Insert a session stuck in 'transcript_ready' with an old updated_at
+    const sessionId = await insertSession("transcript_ready", {
       transcript_s3_key: "transcripts/test/raw.jsonl",
       updated_at: "2020-01-01T00:00:00Z",
     });
@@ -150,15 +148,12 @@ describe.skipIf(!DATABASE_URL)("session-recovery (database)", () => {
     // Since our mock S3 returns empty string, the pipeline will likely fail
     // or parse an empty transcript. Either way, the session state changed.
     const state = await getSessionState(sql, sessionId);
-    // Session should no longer be in stuck 'ended'/'pending' state
-    // (pipeline either advanced it or failed it)
     expect(state).not.toBeNull();
   });
 
   test("session below threshold is NOT recovered", async () => {
     // Insert a session that was just updated (not stuck)
-    const sessionId = await insertSession("ended", {
-      parse_status: "pending",
+    const sessionId = await insertSession("transcript_ready", {
       transcript_s3_key: "transcripts/test/raw.jsonl",
       // updated_at defaults to now() — well within any threshold
     });
@@ -169,18 +164,15 @@ describe.skipIf(!DATABASE_URL)("session-recovery (database)", () => {
 
     // The session we just inserted should NOT have been found
     // (it was updated moments ago, threshold is 24h)
-    // Note: other test sessions from prior tests with old dates may show up
     // We verify by checking the DB state is unchanged
     const state = await getSessionState(sql, sessionId);
-    expect(state?.lifecycle).toBe("ended");
-    expect(state?.parse_status).toBe("pending");
+    expect(state?.lifecycle).toBe("transcript_ready");
   });
 
-  test("session in 'parsed' with completed parse_status is NOT recovered", async () => {
-    // A 'parsed' session with 'completed' parse_status is NOT stuck.
-    // findStuckSessions only returns sessions with pending/parsing parse_status.
+  test("session in 'parsed' lifecycle is NOT recovered by stuck-session recovery", async () => {
+    // A 'parsed' session is past the transcript_ready stage — findStuckSessions
+    // only looks for lifecycle = 'transcript_ready', so 'parsed' is not matched.
     const sessionId = await insertSession("parsed", {
-      parse_status: "completed",
       transcript_s3_key: "transcripts/test/raw.jsonl",
       updated_at: "2020-01-01T00:00:00Z",
     });
@@ -192,13 +184,11 @@ describe.skipIf(!DATABASE_URL)("session-recovery (database)", () => {
     // Verify this specific session was not touched
     const state = await getSessionState(sql, sessionId);
     expect(state?.lifecycle).toBe("parsed");
-    expect(state?.parse_status).toBe("completed");
   });
 
   test("dryRun = true: reports without modifying", async () => {
-    // Insert a stuck session
-    const sessionId = await insertSession("ended", {
-      parse_status: "pending",
+    // Insert a stuck session at transcript_ready
+    const sessionId = await insertSession("transcript_ready", {
       transcript_s3_key: "transcripts/test/raw.jsonl",
       updated_at: "2020-01-01T00:00:00Z",
     });
@@ -213,14 +203,12 @@ describe.skipIf(!DATABASE_URL)("session-recovery (database)", () => {
 
     // Session should be UNCHANGED — dry run does not modify anything
     const state = await getSessionState(sql, sessionId);
-    expect(state?.lifecycle).toBe("ended");
-    expect(state?.parse_status).toBe("pending");
+    expect(state?.lifecycle).toBe("transcript_ready");
   });
 
   test("session without S3 key transitions to 'failed'", async () => {
-    // Insert a stuck session with NO transcript_s3_key
-    const sessionId = await insertSession("ended", {
-      parse_status: "pending",
+    // Insert a stuck session at transcript_ready with NO transcript_s3_key
+    const sessionId = await insertSession("transcript_ready", {
       transcript_s3_key: null,
       updated_at: "2020-01-01T00:00:00Z",
     });
@@ -235,6 +223,6 @@ describe.skipIf(!DATABASE_URL)("session-recovery (database)", () => {
     // Session should have been failed — no transcript to reprocess
     const state = await getSessionState(sql, sessionId);
     expect(state?.lifecycle).toBe("failed");
-    expect(state?.parse_error).toContain("no transcript_s3_key");
+    expect(state?.last_error).toContain("no transcript_s3_key");
   });
 });

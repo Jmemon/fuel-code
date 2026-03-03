@@ -201,7 +201,7 @@ async function main(): Promise<void> {
     try {
       const { recoverStuckSessions, recoverUnsummarizedSessions } = await import("@fuel-code/core");
 
-      // Recover sessions stuck in intermediate parsing states
+      // Recover sessions stuck at transcript_ready (pipeline crashed/timed out)
       const stuckResult = await recoverStuckSessions(sql, pipelineDeps);
       if (stuckResult.found > 0) {
         logger.info(stuckResult, "Stuck session recovery completed on startup");

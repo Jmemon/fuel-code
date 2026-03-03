@@ -42,8 +42,8 @@ export interface RecoveryResult {
  * Find and recover sessions stuck in intermediate pipeline states.
  *
  * Called on server startup (after a short delay) and optionally on a
- * periodic schedule. For each stuck session:
- *   - If it has a transcript_s3_key: reset to 'ended' and re-trigger pipeline
+ * periodic schedule. For each stuck session (lifecycle='transcript_ready'):
+ *   - If it has a transcript_s3_key: enqueue for pipeline re-processing
  *   - If it has no transcript_s3_key: transition to 'failed'
  *
  * @param sql          - postgres.js tagged template client
@@ -179,10 +179,12 @@ export interface SummaryRetryResult {
  * Find sessions stuck at lifecycle='parsed' with no summary, and re-trigger
  * the pipeline to retry summary generation.
  *
- * These sessions completed parsing but failed summary generation (LLM timeout,
- * rate limit, API key issue) and have no automatic retry mechanism. This function
- * resets them back to 'ended' and re-runs the full pipeline (re-parse is fast,
- * summary generation is the expensive step that needs retrying).
+ * These sessions completed transcript parsing but failed summary generation
+ * (LLM timeout, rate limit, API key issue) and have no automatic retry
+ * mechanism. This function resets them back to 'ended' via
+ * resetSessionForReparse (clears parsed data) and re-runs the full pipeline.
+ * Re-parsing is fast (pure JS, no network); the summary step is the expensive
+ * part that needs retrying.
  *
  * @param sql          - postgres.js tagged template client
  * @param pipelineDeps - Pipeline dependencies for re-triggering
