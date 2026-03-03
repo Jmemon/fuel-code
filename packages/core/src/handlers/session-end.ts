@@ -1,15 +1,15 @@
 /**
  * Handler for "session.end" events.
  *
- * When a Claude Code session terminates, this handler:
- *   1. Uses transitionSession (with optimistic locking) to move the session
- *      from detected -> ended, setting ended_at, end_reason, duration_ms.
- *   2. If pipelineDeps are available AND the session already has a transcript_s3_key
- *      (backfill path), triggers the post-processing pipeline asynchronously.
+ * Simplified lifecycle handler (Phase C):
+ *   1. transitionSession(detected -> ended) with ended_at, end_reason, duration_ms
+ *   2. On success: if transcript_s3_key already present, advance to transcript_ready
+ *      and enqueue reconcile so the full pipeline runs automatically
+ *   3. On "Session not found": create synthetic session at 'ended' (out-of-order arrival)
+ *   4. On other failures: log and return
  *
- * The WHERE clause (via transitionSession) restricts updates to sessions in
- * the "detected" state -- sessions that have already ended or progressed
- * further won't be regressed.
+ * No parse_status, no capturing state. The lifecycle itself encodes all
+ * pipeline progress.
  */
 
 import type { EventHandlerContext } from "../event-processor.js";
@@ -17,7 +17,7 @@ import { transitionSession } from "../session-lifecycle.js";
 
 /**
  * Handle a session.end event by transitioning the session lifecycle and
- * optionally triggering the post-processing pipeline.
+ * conditionally enqueuing reconcile if transcript is already present.
  *
  * Extracts from event.data:
  *   - cc_session_id: identifies which session to update
@@ -50,8 +50,8 @@ export async function handleSessionEnd(ctx: EventHandlerContext): Promise<void> 
 
   logger.info({ ccSessionId, endReason, durationMs }, "Ending session");
 
-  // Use transitionSession with optimistic locking instead of raw SQL.
-  // Only "detected" is a valid source state (no more "capturing" state).
+  // Transition detected -> ended with optimistic locking.
+  // Only "detected" is a valid source state.
   const result = await transitionSession(
     sql,
     ccSessionId,
@@ -65,11 +65,11 @@ export async function handleSessionEnd(ctx: EventHandlerContext): Promise<void> 
   );
 
   if (!result.success) {
-    // If the session row doesn't exist, the start event was missed.
-    // Create the session directly in 'ended' state using fields from the
-    // enriched session.end payload so transcript upload and pipeline proceed.
     if (result.reason === "Session not found") {
-      logger.warn({ ccSessionId }, "session.end: session not found, creating backfill row");
+      // Out-of-order: session.end arrived before session.start.
+      // Create a synthetic session directly at 'ended' so that transcript
+      // upload and reconcile can proceed once the transcript arrives.
+      logger.warn({ ccSessionId }, "session.end: session not found, creating synthetic row at ended");
 
       const gitBranch = (event.data.git_branch as string | null) ?? null;
       const model = (event.data.model as string | null) ?? null;
@@ -94,40 +94,8 @@ export async function handleSessionEnd(ctx: EventHandlerContext): Promise<void> 
         )
         ON CONFLICT (id) DO NOTHING
       `;
-    } else if (result.previousLifecycle === "ended") {
-      // Session is already ended — check if it was created as a backfill.
-      // Backfill rows (source='backfill') are inserted speculatively when a
-      // session.end arrives before the session.start; they carry placeholder
-      // data (duration_ms=0, started_at=ended_at). A real session.end arriving
-      // later should override those fields with the authoritative values.
-      const sessionRow = await sql`
-        SELECT source FROM sessions WHERE id = ${ccSessionId}
-      `;
-
-      if (sessionRow[0]?.source === "backfill") {
-        logger.info(
-          { ccSessionId, endReason, durationMs },
-          "session.end: overriding backfill-ended session with real end data",
-        );
-
-        await sql`
-          UPDATE sessions
-          SET ended_at    = ${event.timestamp},
-              end_reason  = ${endReason},
-              duration_ms = ${durationMs},
-              updated_at  = now()
-          WHERE id = ${ccSessionId}
-            AND lifecycle = 'ended'
-            AND source = 'backfill'
-        `;
-      } else {
-        logger.warn(
-          { ccSessionId, reason: result.reason },
-          "session.end: lifecycle transition failed",
-        );
-        return;
-      }
     } else {
+      // Any other failure (already ended, already further along, etc.) — log and bail.
       logger.warn(
         { ccSessionId, reason: result.reason },
         "session.end: lifecycle transition failed",
@@ -142,24 +110,38 @@ export async function handleSessionEnd(ctx: EventHandlerContext): Promise<void> 
     UPDATE events SET session_id = ${ccSessionId} WHERE id = ${event.id}
   `;
 
-  // Phase 2: If pipeline deps are available, check if transcript_s3_key is
-  // already set (backfill path — transcript was uploaded before session ended).
-  // If so, trigger the pipeline via the bounded queue (or direct fallback).
+  // If transcript_s3_key is already present (e.g. backfill uploaded the
+  // transcript before the session ended), advance to transcript_ready and
+  // enqueue reconcile so the full pipeline kicks off automatically.
   if (ctx.pipelineDeps) {
     const session = await sql`
       SELECT transcript_s3_key FROM sessions WHERE id = ${ccSessionId}
     `;
 
     if (session[0]?.transcript_s3_key) {
+      // Advance ended -> transcript_ready before enqueuing reconcile.
+      // This lets reconcileSession skip the transcript_ready transition
+      // and proceed directly to parsing.
+      const trResult = await transitionSession(sql, ccSessionId, "ended", "transcript_ready");
+      if (trResult.success) {
+        logger.info({ ccSessionId }, "session.end: transcript already present, advanced to transcript_ready");
+      } else {
+        // Non-fatal: reconcileSession will handle the transition itself
+        logger.debug(
+          { ccSessionId, reason: trResult.reason },
+          "session.end: transcript_ready transition skipped (reconcile will handle)",
+        );
+      }
+
+      // Enqueue reconcile via the bounded queue (or direct fallback for tests)
       if (ctx.pipelineDeps.enqueueSession) {
         ctx.pipelineDeps.enqueueSession(ccSessionId);
       } else {
-        // Fallback for tests without queue: dynamic import to avoid circular dep
         const { runSessionPipeline } = await import("../session-pipeline.js");
         runSessionPipeline(ctx.pipelineDeps, ccSessionId).catch((err) => {
           logger.error(
             { sessionId: ccSessionId, error: err instanceof Error ? err.message : String(err) },
-            "session.end: pipeline trigger failed",
+            "session.end: reconcile trigger failed",
           );
         });
       }

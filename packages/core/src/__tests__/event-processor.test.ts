@@ -372,7 +372,7 @@ describe("processEvent", () => {
     // Verify values: $1=newLifecycle, $2=sessionId, $3=fromStates, $4+=updates
     expect(unsafeCall.values[0]).toBe("ended");                           // new lifecycle
     expect(unsafeCall.values[1]).toBe("cc-sess-001");                     // session id
-    expect(unsafeCall.values[2]).toEqual(["detected", "capturing"]);      // from states
+    expect(unsafeCall.values[2]).toEqual(["detected"]);                   // from states
     expect(unsafeCall.values[3]).toBe(event.timestamp);                   // ended_at
     expect(unsafeCall.values[4]).toBe("exit");                            // end_reason
     expect(unsafeCall.values[5]).toBe(5400000);                           // duration_ms
@@ -693,10 +693,10 @@ describe("handleSessionEnd", () => {
     expect(call.query).toContain("lifecycle");
 
     // Values for transitionSession: [newLifecycle, sessionId, fromStates, ...updates]
-    // $1 = "ended", $2 = "cc-sess-001", $3 = ["detected", "capturing"], $4+ = updates
+    // $1 = "ended", $2 = "cc-sess-001", $3 = ["detected"], $4+ = updates
     expect(call.values[0]).toBe("ended");                          // new lifecycle
     expect(call.values[1]).toBe("cc-sess-001");                    // session id
-    expect(call.values[2]).toEqual(["detected", "capturing"]);     // from states
+    expect(call.values[2]).toEqual(["detected"]);                  // from states
     expect(call.values[3]).toBe("2024-06-15T11:30:00.000Z");      // ended_at
     expect(call.values[4]).toBe("exit");                           // end_reason
     expect(call.values[5]).toBe(5400000);                          // duration_ms
@@ -723,26 +723,20 @@ describe("handleSessionEnd", () => {
     expect(logger.warn).toHaveBeenCalled();
   });
 
-  test("overrides backfill-ended session when real session.end arrives", async () => {
+  test("warns and returns when session is already ended (no backfill override)", async () => {
     const event = makeSessionEndEvent();
     const logger = createMockLogger();
 
+    // Simplified handler: when transition fails and reason is not "Session not found",
+    // we just warn and return. No more backfill-override branch.
     // SQL sequence:
-    //   1. sql.unsafe UPDATE in transitionSession  -> empty (session is 'ended', not 'detected'/'capturing')
-    //   2. SELECT lifecycle in transitionSession   -> [{ lifecycle: "ended" }]   (diagnose)
-    //   3. SELECT source (our new check)           -> [{ source: "backfill" }]
-    //   4. UPDATE ended_at/end_reason/duration_ms  -> [] (update succeeds)
-    //   5. UPDATE events SET session_id            -> []
+    //   1. sql.unsafe UPDATE in transitionSession -> empty (session is 'ended', not 'detected')
+    //   2. SELECT lifecycle in transitionSession  -> [{ lifecycle: "ended" }] (diagnose)
     const emptyTransition: Record<string, unknown>[] = [];
     const lifecycleResult = [{ lifecycle: "ended" }];
-    const sourceResult = [{ source: "backfill" }];
-    const updateResult: Record<string, unknown>[] = [];
     const { sql, calls } = createMockSql([
       emptyTransition,
       lifecycleResult,
-      sourceResult,
-      updateResult,
-      updateResult,
     ]);
 
     await handleSessionEnd({
@@ -752,19 +746,17 @@ describe("handleSessionEnd", () => {
       logger,
     });
 
-    // Should have logged info about the override, not a warning
-    expect(logger.warn).not.toHaveBeenCalled();
-    expect(logger.info).toHaveBeenCalledWith(
+    // Should have logged a warning about the failed transition and returned early
+    expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ ccSessionId: "cc-sess-001" }),
-      "session.end: overriding backfill-ended session with real end data",
+      "session.end: lifecycle transition failed",
     );
 
-    // The UPDATE for the override should target the correct session
-    const overrideCall = calls.find(
-      (c) => c.strings.join("").includes("ended_at") && c.strings.join("").includes("end_reason"),
+    // Should NOT have proceeded to the UPDATE events backfill (early return)
+    const eventsUpdateCall = calls.find(
+      (c) => c.strings.join("").includes("UPDATE events"),
     );
-    expect(overrideCall).toBeDefined();
-    expect(overrideCall!.values).toContain("cc-sess-001");
+    expect(eventsUpdateCall).toBeUndefined();
   });
 
   test("does not warn when transition succeeds", async () => {
