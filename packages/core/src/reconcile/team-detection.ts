@@ -36,6 +36,32 @@ export interface PersistedTeam {
   created_at: string;
 }
 
+/**
+ * A teammate extracted from Agent tool_use blocks that reference a team_name.
+ *
+ * Aligns with the `teammates` table schema from migration 006:
+ *   - role: 'lead' | 'member'
+ *   - entity_type: 'human' | 'agent' | 'subagent'
+ *   - entity_name: the agent's display name
+ */
+export interface ParsedTeammate {
+  teamName: string;
+  entityName: string;
+  entityType: "human" | "agent" | "subagent";
+  role: "lead" | "member";
+}
+
+/** A persisted teammate row returned from the database after insertion. */
+export interface PersistedTeammate {
+  id: string;
+  team_id: string;
+  session_id: string;
+  role: string;
+  entity_type: string;
+  entity_name: string | null;
+  created_at: string;
+}
+
 // ---------------------------------------------------------------------------
 // Pure extraction
 // ---------------------------------------------------------------------------
@@ -142,6 +168,79 @@ export function extractTeamIntervals(
 }
 
 // ---------------------------------------------------------------------------
+// Teammate extraction
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract teammates from Agent tool_use blocks that specify a `team_name`.
+ *
+ * When the lead session spawns subagents via the `Agent` tool with a `team_name`
+ * parameter, each spawn represents a teammate joining a team. This function
+ * scans content blocks for such Agent calls and builds a deduplicated list of
+ * teammates, keyed by (entityName, teamName).
+ *
+ * Additionally, for each team that has teammates, an implicit "lead" teammate
+ * is added representing the session owner (the orchestrating agent).
+ *
+ * @param contentBlocks - All parsed content blocks for the session
+ * @param teams         - Persisted team rows (needed to map teamName -> team_id)
+ * @returns Deduplicated list of parsed teammates
+ */
+export function extractTeammates(
+  contentBlocks: ParsedContentBlock[],
+  teams: PersistedTeam[],
+): ParsedTeammate[] {
+  // Build a set of known team names so we only extract teammates for teams
+  // that were actually persisted (avoids orphan references).
+  const knownTeamNames = new Set(teams.map(t => t.team_name));
+
+  // Scan Agent tool_use blocks for team-affiliated spawns
+  const teammates: ParsedTeammate[] = [];
+  const seen = new Set<string>(); // dedup key: "teamName::entityName"
+
+  for (const block of contentBlocks) {
+    if (block.block_type !== "tool_use" || block.tool_name !== "Agent") continue;
+
+    const input = block.tool_input as Record<string, unknown> | null;
+    if (!input?.team_name) continue;
+
+    const teamName = input.team_name as string;
+    if (!knownTeamNames.has(teamName)) continue;
+
+    const entityName = (input.name as string) ?? (input.description as string) ?? "unnamed";
+    const dedupKey = `${teamName}::${entityName}`;
+
+    if (seen.has(dedupKey)) continue;
+    seen.add(dedupKey);
+
+    teammates.push({
+      teamName,
+      entityName,
+      entityType: "agent",
+      role: "member",
+    });
+  }
+
+  // For each team that has at least one extracted teammate, add an implicit
+  // "lead" entry representing the session owner (the orchestrating agent).
+  const teamsWithMembers = new Set(teammates.map(t => t.teamName));
+  for (const teamName of teamsWithMembers) {
+    const leadKey = `${teamName}::lead`;
+    if (!seen.has(leadKey)) {
+      seen.add(leadKey);
+      teammates.push({
+        teamName,
+        entityName: "lead",
+        entityType: "human",
+        role: "lead",
+      });
+    }
+  }
+
+  return teammates;
+}
+
+// ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------
 
@@ -211,6 +310,80 @@ export async function persistTeams(
           created_at: String(existing[0].created_at),
         });
       }
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Persist extracted teammates to the `teammates` table.
+ *
+ * Uses delete-then-insert within a transaction for idempotent reparse: all
+ * teammates for this session are wiped and re-created from the current parse.
+ * This avoids complex upsert logic for teammates whose names or roles may
+ * change across reparses.
+ *
+ * @param sql       - Postgres connection
+ * @param sessionId - The session these teammates belong to
+ * @param teammates - Parsed teammates from extractTeammates()
+ * @param teams     - Persisted teams (for resolving teamName -> team_id)
+ * @returns The persisted teammate rows
+ */
+export async function persistTeammates(
+  sql: Sql,
+  sessionId: string,
+  teammates: ParsedTeammate[],
+  teams: PersistedTeam[],
+): Promise<PersistedTeammate[]> {
+  if (teammates.length === 0) return [];
+
+  // Build teamName -> team_id lookup. If multiple team rows share the same
+  // team_name (create/delete/re-create cycles), pick the first one — teammates
+  // are associated with the team as a named concept, not a specific interval.
+  const teamIdByName = new Map<string, string>();
+  for (const team of teams) {
+    if (!teamIdByName.has(team.team_name)) {
+      teamIdByName.set(team.team_name, team.id);
+    }
+  }
+
+  // Delete existing teammates for this session (idempotent reparse)
+  await sql`DELETE FROM teammates WHERE session_id = ${sessionId}`;
+
+  const results: PersistedTeammate[] = [];
+
+  for (const mate of teammates) {
+    const teamId = teamIdByName.get(mate.teamName);
+    if (!teamId) continue; // No matching team — skip
+
+    const id = generateId();
+
+    const rows = await sql`
+      INSERT INTO teammates (id, team_id, session_id, role, entity_type, entity_name, created_at, metadata)
+      VALUES (
+        ${id},
+        ${teamId},
+        ${sessionId},
+        ${mate.role},
+        ${mate.entityType},
+        ${mate.entityName},
+        now(),
+        '{}'
+      )
+      RETURNING id, team_id, session_id, role, entity_type, entity_name, created_at
+    `;
+
+    if (rows.length > 0) {
+      results.push({
+        id: rows[0].id as string,
+        team_id: rows[0].team_id as string,
+        session_id: rows[0].session_id as string,
+        role: rows[0].role as string,
+        entity_type: rows[0].entity_type as string,
+        entity_name: rows[0].entity_name as string | null,
+        created_at: String(rows[0].created_at),
+      });
     }
   }
 

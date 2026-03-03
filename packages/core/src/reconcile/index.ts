@@ -22,9 +22,13 @@ export {
 
 export {
   extractTeamIntervals,
+  extractTeammates,
   persistTeams,
+  persistTeammates,
   type TeamInterval,
   type PersistedTeam,
+  type ParsedTeammate,
+  type PersistedTeammate,
 } from "./team-detection.js";
 
 // Re-export reconcile types from the types directory for convenience

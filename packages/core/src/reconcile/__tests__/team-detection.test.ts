@@ -18,7 +18,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { extractTeamIntervals } from "../team-detection.js";
+import { extractTeamIntervals, extractTeammates } from "../team-detection.js";
+import type { PersistedTeam } from "../team-detection.js";
 import type { ParsedContentBlock, TranscriptMessage } from "@fuel-code/shared";
 
 // ---------------------------------------------------------------------------
@@ -534,5 +535,316 @@ describe("extractTeamIntervals", () => {
     expect(result).toHaveLength(1);
     expect(result[0].teamName).toBe("name-field-team");
     expect(result[0].description).toBe("Via name field");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Helpers for extractTeammates tests
+// ---------------------------------------------------------------------------
+
+/** Create a minimal ParsedContentBlock for an Agent tool_use call with team affiliation. */
+function makeAgentBlock(
+  messageId: string,
+  opts: {
+    name?: string;
+    team_name?: string;
+    subagent_type?: string;
+    description?: string;
+    blockOrder?: number;
+  },
+): ParsedContentBlock {
+  blockOrderCounter++;
+  return {
+    id: `block-agent-${blockOrderCounter}`,
+    message_id: messageId,
+    session_id: "sess-1",
+    teammate_id: null,
+    block_order: opts.blockOrder ?? blockOrderCounter,
+    block_type: "tool_use",
+    content_text: null,
+    thinking_text: null,
+    tool_name: "Agent",
+    tool_use_id: `tu-agent-${blockOrderCounter}`,
+    tool_input: {
+      ...(opts.name !== undefined ? { name: opts.name } : {}),
+      ...(opts.team_name !== undefined ? { team_name: opts.team_name } : {}),
+      ...(opts.subagent_type !== undefined ? { subagent_type: opts.subagent_type } : {}),
+      ...(opts.description !== undefined ? { description: opts.description } : {}),
+      prompt: "do something",
+    },
+    tool_result_id: null,
+    is_error: false,
+    result_text: null,
+    result_s3_key: null,
+    metadata: {},
+  };
+}
+
+/** Create a minimal PersistedTeam for testing teammate extraction. */
+function makePersistedTeam(teamName: string, id?: string): PersistedTeam {
+  return {
+    id: id ?? `team-${teamName}`,
+    session_id: "sess-1",
+    team_name: teamName,
+    description: null,
+    created_at: "2026-03-03T10:00:00Z",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// extractTeammates tests
+// ---------------------------------------------------------------------------
+
+describe("extractTeammates", () => {
+  test("returns empty array when no content blocks", () => {
+    resetCounter();
+    const result = extractTeammates([], []);
+    expect(result).toEqual([]);
+  });
+
+  test("returns empty array when no Agent blocks with team_name", () => {
+    resetCounter();
+    const blocks = [
+      makeOtherBlock("msg-1", "Bash"),
+      makeOtherBlock("msg-1", "Read"),
+    ];
+    const teams = [makePersistedTeam("alpha")];
+
+    const result = extractTeammates(blocks, teams);
+    expect(result).toEqual([]);
+  });
+
+  test("returns empty array when Agent blocks lack team_name", () => {
+    resetCounter();
+    // Agent block without team_name — not a team-affiliated spawn
+    const blocks = [
+      makeAgentBlock("msg-1", { name: "researcher" }),
+    ];
+    const teams = [makePersistedTeam("alpha")];
+
+    const result = extractTeammates(blocks, teams);
+    expect(result).toEqual([]);
+  });
+
+  test("extracts a single teammate from an Agent block with team_name", () => {
+    resetCounter();
+    const blocks = [
+      makeAgentBlock("msg-1", { name: "alice", team_name: "backend-team" }),
+    ];
+    const teams = [makePersistedTeam("backend-team")];
+
+    const result = extractTeammates(blocks, teams);
+
+    // Should have 2 entries: the teammate "alice" + the implicit "lead"
+    expect(result).toHaveLength(2);
+
+    const alice = result.find(t => t.entityName === "alice");
+    expect(alice).toBeDefined();
+    expect(alice!.teamName).toBe("backend-team");
+    expect(alice!.entityType).toBe("agent");
+    expect(alice!.role).toBe("member");
+
+    const lead = result.find(t => t.role === "lead");
+    expect(lead).toBeDefined();
+    expect(lead!.entityName).toBe("lead");
+    expect(lead!.entityType).toBe("human");
+    expect(lead!.teamName).toBe("backend-team");
+  });
+
+  test("deduplicates teammates with same name and team", () => {
+    resetCounter();
+    // Same agent spawned twice for the same team
+    const blocks = [
+      makeAgentBlock("msg-1", { name: "alice", team_name: "ops", blockOrder: 1 }),
+      makeAgentBlock("msg-2", { name: "alice", team_name: "ops", blockOrder: 2 }),
+    ];
+    const teams = [makePersistedTeam("ops")];
+
+    const result = extractTeammates(blocks, teams);
+
+    // "alice" (member) + "lead" = 2 entries, not 3
+    expect(result).toHaveLength(2);
+    const members = result.filter(t => t.role === "member");
+    expect(members).toHaveLength(1);
+    expect(members[0].entityName).toBe("alice");
+  });
+
+  test("extracts multiple teammates from different Agent blocks", () => {
+    resetCounter();
+    const blocks = [
+      makeAgentBlock("msg-1", { name: "alice", team_name: "research", blockOrder: 1 }),
+      makeAgentBlock("msg-2", { name: "bob", team_name: "research", blockOrder: 2 }),
+      makeAgentBlock("msg-3", { name: "carol", team_name: "research", blockOrder: 3 }),
+    ];
+    const teams = [makePersistedTeam("research")];
+
+    const result = extractTeammates(blocks, teams);
+
+    // 3 members + 1 lead = 4
+    expect(result).toHaveLength(4);
+    const memberNames = result.filter(t => t.role === "member").map(t => t.entityName).sort();
+    expect(memberNames).toEqual(["alice", "bob", "carol"]);
+  });
+
+  test("handles teammates across multiple teams", () => {
+    resetCounter();
+    const blocks = [
+      makeAgentBlock("msg-1", { name: "alice", team_name: "frontend", blockOrder: 1 }),
+      makeAgentBlock("msg-2", { name: "bob", team_name: "backend", blockOrder: 2 }),
+    ];
+    const teams = [
+      makePersistedTeam("frontend", "team-fe"),
+      makePersistedTeam("backend", "team-be"),
+    ];
+
+    const result = extractTeammates(blocks, teams);
+
+    // Each team: 1 member + 1 lead = 2, total 4
+    expect(result).toHaveLength(4);
+
+    const frontendTeammates = result.filter(t => t.teamName === "frontend");
+    expect(frontendTeammates).toHaveLength(2);
+    expect(frontendTeammates.map(t => t.role).sort()).toEqual(["lead", "member"]);
+
+    const backendTeammates = result.filter(t => t.teamName === "backend");
+    expect(backendTeammates).toHaveLength(2);
+    expect(backendTeammates.map(t => t.role).sort()).toEqual(["lead", "member"]);
+  });
+
+  test("ignores Agent blocks referencing unknown teams (not in persisted teams)", () => {
+    resetCounter();
+    const blocks = [
+      makeAgentBlock("msg-1", { name: "alice", team_name: "unknown-team" }),
+    ];
+    // No teams persisted
+    const teams: PersistedTeam[] = [];
+
+    const result = extractTeammates(blocks, teams);
+    expect(result).toEqual([]);
+  });
+
+  test("uses description as fallback when name is missing", () => {
+    resetCounter();
+    const blocks = [
+      makeAgentBlock("msg-1", { team_name: "ops", description: "the-researcher" }),
+    ];
+    const teams = [makePersistedTeam("ops")];
+
+    const result = extractTeammates(blocks, teams);
+
+    const member = result.find(t => t.role === "member");
+    expect(member).toBeDefined();
+    expect(member!.entityName).toBe("the-researcher");
+  });
+
+  test("uses 'unnamed' when both name and description are missing", () => {
+    resetCounter();
+    const blocks = [
+      makeAgentBlock("msg-1", { team_name: "ops" }),
+    ];
+    const teams = [makePersistedTeam("ops")];
+
+    const result = extractTeammates(blocks, teams);
+
+    const member = result.find(t => t.role === "member");
+    expect(member).toBeDefined();
+    expect(member!.entityName).toBe("unnamed");
+  });
+
+  test("non-Agent tool_use blocks are ignored", () => {
+    resetCounter();
+    // TeamCreate block has team_name but isn't an "Agent" tool call
+    const blocks = [
+      makeTeamCreateBlock("msg-1", "ops", { description: "Test", blockOrder: 1 }),
+    ];
+    const teams = [makePersistedTeam("ops")];
+
+    const result = extractTeammates(blocks, teams);
+    expect(result).toEqual([]);
+  });
+
+  test("text blocks are ignored even with tool_input-like content", () => {
+    resetCounter();
+    const textBlock: ParsedContentBlock = {
+      id: "block-text-agent",
+      message_id: "msg-1",
+      session_id: "sess-1",
+      teammate_id: null,
+      block_order: 1,
+      block_type: "text",
+      content_text: "Agent with team_name mentioned in text",
+      thinking_text: null,
+      tool_name: null,
+      tool_use_id: null,
+      tool_input: null,
+      tool_result_id: null,
+      is_error: false,
+      result_text: null,
+      result_s3_key: null,
+      metadata: {},
+    };
+    const teams = [makePersistedTeam("ops")];
+
+    const result = extractTeammates([textBlock], teams);
+    expect(result).toEqual([]);
+  });
+
+  test("same agent in different teams produces separate teammate entries", () => {
+    resetCounter();
+    const blocks = [
+      makeAgentBlock("msg-1", { name: "alice", team_name: "team-a", blockOrder: 1 }),
+      makeAgentBlock("msg-2", { name: "alice", team_name: "team-b", blockOrder: 2 }),
+    ];
+    const teams = [
+      makePersistedTeam("team-a"),
+      makePersistedTeam("team-b"),
+    ];
+
+    const result = extractTeammates(blocks, teams);
+
+    // alice in team-a, alice in team-b, lead in team-a, lead in team-b = 4
+    const alices = result.filter(t => t.entityName === "alice");
+    expect(alices).toHaveLength(2);
+    expect(alices.map(t => t.teamName).sort()).toEqual(["team-a", "team-b"]);
+  });
+
+  test("Agent block with null tool_input is skipped", () => {
+    resetCounter();
+    const block: ParsedContentBlock = {
+      id: "block-null",
+      message_id: "msg-1",
+      session_id: "sess-1",
+      teammate_id: null,
+      block_order: 1,
+      block_type: "tool_use",
+      content_text: null,
+      thinking_text: null,
+      tool_name: "Agent",
+      tool_use_id: "tu-null",
+      tool_input: null,
+      tool_result_id: null,
+      is_error: false,
+      result_text: null,
+      result_s3_key: null,
+      metadata: {},
+    };
+    const teams = [makePersistedTeam("ops")];
+
+    const result = extractTeammates([block], teams);
+    expect(result).toEqual([]);
+  });
+
+  test("no implicit lead is added when no members exist for a team", () => {
+    resetCounter();
+    // Agent block references an unknown team, so no members are extracted
+    const blocks = [
+      makeAgentBlock("msg-1", { name: "alice", team_name: "phantom" }),
+    ];
+    const teams = [makePersistedTeam("real-team")];
+
+    const result = extractTeammates(blocks, teams);
+
+    // "phantom" not in teams, so alice is skipped, no lead either
+    expect(result).toEqual([]);
   });
 });
