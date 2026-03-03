@@ -24,6 +24,7 @@ import { buildParsedBackupKey, generateId } from "@fuel-code/shared";
 import { parseTranscript } from "./transcript-parser.js";
 import { generateSummary, extractInitialPrompt, type SummaryConfig } from "./summary-generator.js";
 import { transitionSession, failSession, type SessionLifecycle } from "./session-lifecycle.js";
+import { reconcileSession } from "./reconcile/reconcile-session.js";
 
 // ---------------------------------------------------------------------------
 // S3 client interface (minimal subset of FuelCodeS3Client from server)
@@ -79,6 +80,10 @@ const BATCH_SIZE = 500;
 // ---------------------------------------------------------------------------
 
 /**
+ * @deprecated Use `reconcileSession` from `./reconcile/reconcile-session.js` instead.
+ * This function is kept for backwards compatibility. `createPipelineQueue` now
+ * calls `reconcileSession` directly.
+ *
  * Run the full post-processing pipeline for a single session.
  *
  * This is the core orchestration function. It downloads the transcript from S3,
@@ -728,8 +733,8 @@ export function createPipelineQueue(maxConcurrent: number): {
       const sessionId = pending.shift()!;
       active++;
 
-      // Fire-and-forget: run pipeline and handle completion
-      runSessionPipeline(pipelineDeps!, sessionId)
+      // Fire-and-forget: run reconcile pipeline and handle completion
+      reconcileSession(pipelineDeps!, sessionId)
         .catch((err) => {
           pipelineDeps!.logger.error(
             { sessionId, error: err instanceof Error ? err.message : String(err) },
