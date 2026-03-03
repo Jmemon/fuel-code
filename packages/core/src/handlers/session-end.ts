@@ -137,8 +137,8 @@ export async function handleSessionEnd(ctx: EventHandlerContext): Promise<void> 
       if (ctx.pipelineDeps.enqueueSession) {
         ctx.pipelineDeps.enqueueSession(ccSessionId);
       } else {
-        const { runSessionPipeline } = await import("../session-pipeline.js");
-        runSessionPipeline(ctx.pipelineDeps, ccSessionId).catch((err) => {
+        const { reconcileSession } = await import("../reconcile/reconcile-session.js");
+        reconcileSession(ctx.pipelineDeps, ccSessionId).catch((err) => {
           logger.error(
             { sessionId: ccSessionId, error: err instanceof Error ? err.message : String(err) },
             "session.end: reconcile trigger failed",

@@ -21,7 +21,7 @@ import type { Logger } from "pino";
 import { buildTranscriptKey, buildSubagentTranscriptKey } from "@fuel-code/shared";
 import type { FuelCodeS3Client } from "../aws/s3.js";
 import type { PipelineDeps } from "@fuel-code/core";
-import { runSessionPipeline, transitionSession } from "@fuel-code/core";
+import { reconcileSession, transitionSession } from "@fuel-code/core";
 
 /** Maximum upload size: 200MB (large transcripts from long CC sessions) */
 const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
@@ -34,10 +34,10 @@ function triggerPipeline(pipelineDeps: PipelineDeps, sessionId: string, logger: 
   if (pipelineDeps.enqueueSession) {
     pipelineDeps.enqueueSession(sessionId);
   } else {
-    runSessionPipeline(pipelineDeps, sessionId).catch((err: unknown) => {
+    reconcileSession(pipelineDeps, sessionId).catch((err: unknown) => {
       logger.error(
         { sessionId, error: err instanceof Error ? err.message : String(err) },
-        "Pipeline trigger failed (direct)",
+        "Reconcile trigger failed (direct)",
       );
     });
   }
