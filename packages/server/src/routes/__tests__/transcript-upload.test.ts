@@ -7,8 +7,8 @@
  * Test coverage:
  *   1. Upload for non-existent session: 404
  *   2. Upload when transcript already exists: 200 "already_uploaded"
- *   3. Upload for a "detected" session: stores in S3, does NOT trigger pipeline
- *   4. Upload for an "ended" session: stores in S3, triggers pipeline
+ *   3. Upload for a "detected" session: stores in S3, enqueues reconcile
+ *   4. Upload for an "ended" session: stores in S3, enqueues reconcile
  *   5. No auth header: 401
  *   6. Empty body: 400
  */
@@ -111,7 +111,24 @@ function createMockSql() {
     return Promise.resolve([{ "?column?": 1 }]);
   };
 
-  // Make it work as both a tagged template and a function
+  // sql.unsafe(query, values) — used by transitionSession for dynamic queries.
+  // Inspects the query to decide what result to return.
+  const unsafeFn = (query: string, values?: unknown[]) => {
+    // transitionSession UPDATE: UPDATE sessions SET lifecycle = $1 ... WHERE id = $2 AND lifecycle = ANY($3)
+    if (query.includes("UPDATE sessions") && query.includes("lifecycle = $1")) {
+      const sessionId = values ? String(values[1]) : "";
+      const fromStates = values ? (values[2] as string[]) : [];
+      const session = SESSION_DB[sessionId];
+      // Simulate: if the session's current lifecycle is in fromStates, transition succeeds
+      if (session && fromStates.includes(String(session.lifecycle))) {
+        return Promise.resolve([{ lifecycle: values ? String(values[0]) : "" }]);
+      }
+      return Promise.resolve([]);
+    }
+    return Promise.resolve([]);
+  };
+
+  // Make it work as both a tagged template and a function, with .unsafe support
   const proxy = new Proxy(sqlFn, {
     apply: (_target, _thisArg, args) => {
       if (Array.isArray(args[0]) && "raw" in args[0]) {
@@ -120,6 +137,10 @@ function createMockSql() {
       }
       // Direct function call (health check)
       return Promise.resolve([{ "?column?": 1 }]);
+    },
+    get: (_target, prop) => {
+      if (prop === "unsafe") return unsafeFn;
+      return undefined;
     },
   });
 
@@ -277,7 +298,7 @@ describe("POST /api/sessions/:id/transcript/upload", () => {
     expect(body.s3_key).toContain("raw.jsonl");
   });
 
-  test("upload for detected session: stores in S3, pipeline NOT triggered", async () => {
+  test("upload for detected session: stores in S3, reconcile enqueued", async () => {
     const transcriptData = '{"role":"human","content":"hello"}\n{"role":"assistant","content":"hi"}\n';
 
     const res = await uploadTranscript(SESSION_ID_DETECTED, Buffer.from(transcriptData));
@@ -286,7 +307,8 @@ describe("POST /api/sessions/:id/transcript/upload", () => {
     const body = await res.json();
     expect(body.status).toBe("uploaded");
     expect(body.s3_key).toContain("raw.jsonl");
-    expect(body.pipeline_triggered).toBe(false);
+    // Reconcile is always enqueued after upload (idempotent)
+    expect(body.reconcile_enqueued).toBe(true);
 
     // Verify S3 upload was called
     expect(mockS3Result.uploads.length).toBeGreaterThan(0);
@@ -300,7 +322,7 @@ describe("POST /api/sessions/:id/transcript/upload", () => {
     expect(lastUpdate.s3Key).toContain("raw.jsonl");
   });
 
-  test("upload for ended session: stores in S3, pipeline IS triggered", async () => {
+  test("upload for ended session: stores in S3, reconcile enqueued", async () => {
     const transcriptData = '{"role":"human","content":"test"}\n';
 
     const res = await uploadTranscript(SESSION_ID_ENDED, Buffer.from(transcriptData));
@@ -308,7 +330,7 @@ describe("POST /api/sessions/:id/transcript/upload", () => {
 
     const body = await res.json();
     expect(body.status).toBe("uploaded");
-    expect(body.pipeline_triggered).toBe(true);
+    expect(body.reconcile_enqueued).toBe(true);
   });
 
   test("no auth header returns 401", async () => {

@@ -184,23 +184,23 @@ export function createTranscriptUploadRouter(deps: {
 
           // Attempt to advance to transcript_ready — succeeds if session is
           // in 'ended' or 'detected' (transcript arrived before session.end).
-          const transitionResult = await transitionSession(
+          // If the session is already past transcript_ready, the transition
+          // fails gracefully but we still enqueue reconciliation (idempotent).
+          await transitionSession(
             sql,
             sessionId,
             ["ended", "detected"],
             "transcript_ready" as any,
           );
 
-          const pipelineTriggered = transitionResult.success;
-
-          if (pipelineTriggered) {
-            triggerPipeline(pipelineDeps, sessionId, logger);
-          }
+          // Always enqueue reconciliation — idempotent even if the session
+          // is already at transcript_ready or beyond.
+          triggerPipeline(pipelineDeps, sessionId, logger);
 
           res.status(202).json({
             status: "uploaded",
             s3_key: s3Key,
-            pipeline_triggered: pipelineTriggered,
+            reconcile_enqueued: true,
           });
         }
       } catch (err) {
