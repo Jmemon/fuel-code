@@ -126,3 +126,14 @@ export {
   type BackfillState,
   type BackfillResult,
 } from "./backfill-state.js";
+
+// Reconcile: SessionSeed builders and gap computation
+export {
+  buildSeedFromHook,
+  buildSeedFromFilesystem,
+  buildSeedFromRecovery,
+  computeGap,
+  type SessionForGap,
+  type SessionSeed,
+  type SessionGap,
+} from "./reconcile/index.js";
