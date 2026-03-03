@@ -8,8 +8,7 @@
  * Precondition checks:
  *   - Session must exist (404 otherwise)
  *   - Session must have a transcript_s3_key (409 if missing)
- *   - Session must not be currently parsing (409 if parse_status = 'parsing')
- *   - Session must have ended (409 if lifecycle is 'detected' or 'capturing')
+ *   - Session must have ended (409 if lifecycle is 'detected')
  *   - resetSessionForReparse must succeed (409 if session can't be reset)
  */
 
@@ -75,7 +74,7 @@ export function createSessionActionsRouter(deps: {
 
         // --- Step 1: Fetch session details for validation ---
         const sessionRows = await sql`
-          SELECT id, lifecycle, parse_status, transcript_s3_key
+          SELECT id, lifecycle, transcript_s3_key
           FROM sessions
           WHERE id = ${sessionId}
         `;
@@ -94,34 +93,29 @@ export function createSessionActionsRouter(deps: {
           return;
         }
 
-        // --- Step 4: Currently being processed ---
-        if (session.parse_status === "parsing") {
-          res.status(409).json({ error: "Session is currently being processed. Try again later." });
-          return;
-        }
-
-        // --- Step 5: Session hasn't ended yet ---
+        // --- Step 4: Session hasn't ended yet ---
         const lifecycle = session.lifecycle as string;
-        if (lifecycle === "detected" || lifecycle === "capturing") {
+        if (lifecycle === "detected") {
           res.status(409).json({ error: "Session has not ended yet." });
           return;
         }
 
-        // --- Step 6: Reset session for reparse ---
+        // --- Step 5: Reset session for reparse ---
         // Deletes transcript_messages + content_blocks, clears derived stats,
-        // and sets lifecycle back to 'ended' with parse_status = 'pending'.
+        // and sets lifecycle back to 'ended' so transcript upload can
+        // re-transition it to transcript_ready.
         const resetResult = await resetSessionForReparse(sql, sessionId);
 
-        // --- Step 7: Reset failed (session in unexpected state) ---
+        // --- Step 6: Reset failed (session in unexpected state) ---
         if (!resetResult.reset) {
           res.status(409).json({ error: "Session cannot be reparsed from current state" });
           return;
         }
 
-        // --- Step 8: Trigger pipeline asynchronously via bounded queue ---
+        // --- Step 7: Trigger pipeline asynchronously via bounded queue ---
         triggerPipeline(pipelineDeps, sessionId, logger);
 
-        // --- Step 9: Return 202 — reparse initiated ---
+        // --- Step 8: Return 202 — reparse initiated ---
         res.status(202).json({
           message: "Reparse initiated",
           session_id: sessionId,

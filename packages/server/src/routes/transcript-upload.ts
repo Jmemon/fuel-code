@@ -8,9 +8,9 @@
  *
  * Key behaviors:
  *   - Idempotent: if transcript_s3_key is already set, returns 200 (no re-upload)
- *   - Accepts uploads for sessions in any lifecycle state (detected, capturing, ended)
- *   - Triggers the post-processing pipeline if the session lifecycle is 'ended'
- *   - Streams req body directly to S3 (no express.raw() buffering)
+ *   - Accepts uploads for sessions in any lifecycle state (detected, ended)
+ *   - After upload, transitions session to 'transcript_ready' and triggers pipeline
+ *   - Buffers req body then uploads to S3
  *   - Body limit: 200MB enforced via Content-Length check
  */
 
@@ -21,7 +21,7 @@ import type { Logger } from "pino";
 import { buildTranscriptKey, buildSubagentTranscriptKey } from "@fuel-code/shared";
 import type { FuelCodeS3Client } from "../aws/s3.js";
 import type { PipelineDeps } from "@fuel-code/core";
-import { runSessionPipeline } from "@fuel-code/core";
+import { runSessionPipeline, transitionSession } from "@fuel-code/core";
 
 /** Maximum upload size: 200MB (large transcripts from long CC sessions) */
 const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
@@ -173,18 +173,25 @@ export function createTranscriptUploadRouter(deps: {
             pipeline_triggered: false,
           });
         } else {
-          // Main transcript: update session and conditionally trigger pipeline.
-          // RETURNING lifecycle gives us the row's actual state after the write,
-          // avoiding a stale-read race with the session.end event handler.
-          const [updatedSession] = await sql`
+          // Main transcript: update session with S3 key, then attempt lifecycle
+          // transition to 'transcript_ready'. If the session is in 'ended' or
+          // 'detected' state, the transition fires and the pipeline is triggered.
+          await sql`
             UPDATE sessions
             SET transcript_s3_key = ${s3Key}, updated_at = now()
             WHERE id = ${sessionId}
-            RETURNING lifecycle
           `;
 
-          const lifecycle = updatedSession.lifecycle as string;
-          const pipelineTriggered = lifecycle === "ended";
+          // Attempt to advance to transcript_ready — succeeds if session is
+          // in 'ended' or 'detected' (transcript arrived before session.end).
+          const transitionResult = await transitionSession(
+            sql,
+            sessionId,
+            ["ended", "detected"],
+            "transcript_ready" as any,
+          );
+
+          const pipelineTriggered = transitionResult.success;
 
           if (pipelineTriggered) {
             triggerPipeline(pipelineDeps, sessionId, logger);

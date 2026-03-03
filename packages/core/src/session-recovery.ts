@@ -3,9 +3,8 @@
  *
  * On server startup (and optionally on a periodic schedule), this module
  * scans for sessions that are stuck in intermediate pipeline states —
- * lifecycle 'ended' or 'parsed' with parse_status 'pending' or 'parsing'
- * and no recent update. These sessions likely had their pipeline worker
- * crash or time out.
+ * lifecycle 'transcript_ready' with no recent update. These sessions likely
+ * had their pipeline worker crash or time out.
  *
  * Recovery strategy:
  *   - Sessions WITH a transcript_s3_key: re-trigger the pipeline
@@ -116,12 +115,7 @@ export async function recoverStuckSessions(
 
       if (hasTranscript) {
         // Session has a transcript — re-trigger the pipeline.
-        // First reset parse_status back to 'pending' so the pipeline can claim it.
-        await sql`
-          UPDATE sessions
-          SET parse_status = 'pending', updated_at = now()
-          WHERE id = ${session.id}
-        `;
+        // The transcript_ready -> parsed optimistic lock handles deduplication.
 
         // Route through the bounded queue if available, else direct call
         if (pipelineDeps.enqueueSession) {
@@ -209,11 +203,10 @@ export async function recoverUnsummarizedSessions(
   const maxRetries = options?.maxRetries ?? 10;
   const intervalMs = `${stuckThresholdMs} milliseconds`;
 
-  // Find sessions at parsed with completed parsing but no summary
+  // Find sessions at parsed with no summary that have been stuck past the threshold
   const unsummarized = await sql`
     SELECT id FROM sessions
     WHERE lifecycle = 'parsed'
-      AND parse_status = 'completed'
       AND summary IS NULL
       AND updated_at < now() - ${intervalMs}::interval
     ORDER BY updated_at ASC

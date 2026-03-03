@@ -1,15 +1,16 @@
 /**
  * Session post-processing pipeline orchestrator.
  *
- * Runs after a session ends, executing the following steps:
- *   1. Validate session is in 'ended' state with a transcript_s3_key
+ * Runs after a session reaches 'transcript_ready', executing the following steps:
+ *   1. Validate session is in 'transcript_ready' state with a transcript_s3_key
  *   2. Download transcript from S3
  *   3. Parse JSONL into structured messages and content blocks
  *   4. Persist parsed data to Postgres (transcript_messages + content_blocks)
  *   5. Persist relationships (subagents, teams, skills, worktrees, session metadata)
  *   6. Advance lifecycle to 'parsed' with computed stats
  *   7. Generate LLM summary (best-effort, non-blocking)
- *   8. Upload parsed backup to S3 (best-effort)
+ *   8. Advance lifecycle to 'complete' (terminal state)
+ *   9. Upload parsed backup to S3 (best-effort)
  *
  * Concurrency is managed via an async work queue that limits how many
  * pipelines run in parallel (the pending queue itself is unbounded since
@@ -118,27 +119,19 @@ export async function runSessionPipeline(
     return { sessionId, parseSuccess: false, summarySuccess: false, errors: ["No transcript in S3"] };
   }
 
-  if (session.lifecycle !== "ended") {
+  if (session.lifecycle !== "transcript_ready") {
     return {
       sessionId,
       parseSuccess: false,
       summarySuccess: false,
-      errors: [`Session not in 'ended' state (currently '${session.lifecycle}')`],
+      errors: [`Session not in 'transcript_ready' state (currently '${session.lifecycle}')`],
     };
   }
 
   // -------------------------------------------------------------------------
-  // Step 2: Mark parse_status as 'parsing' so other workers know we claimed it
-  // -------------------------------------------------------------------------
-
-  await sql`
-    UPDATE sessions
-    SET parse_status = 'parsing', updated_at = now()
-    WHERE id = ${sessionId}
-  `;
-
-  // -------------------------------------------------------------------------
-  // Step 3: Download transcript from S3
+  // Step 2: Download transcript from S3
+  // (No soft-claim needed — the transcript_ready -> parsed optimistic lock
+  // in step 6 prevents duplicate processing.)
   // -------------------------------------------------------------------------
 
   let transcriptContent: string;
@@ -152,7 +145,7 @@ export async function runSessionPipeline(
   }
 
   // -------------------------------------------------------------------------
-  // Step 4: Parse transcript JSONL into structured data
+  // Step 3: Parse transcript JSONL into structured data
   // -------------------------------------------------------------------------
 
   const parseResult = await parseTranscript(sessionId, transcriptContent);
@@ -177,7 +170,7 @@ export async function runSessionPipeline(
   );
 
   // -------------------------------------------------------------------------
-  // Step 5: Persist parsed data to Postgres in a transaction
+  // Step 4: Persist parsed data to Postgres in a transaction
   // -------------------------------------------------------------------------
 
   try {
@@ -201,7 +194,7 @@ export async function runSessionPipeline(
   }
 
   // -------------------------------------------------------------------------
-  // Step 5.5: Persist extracted relationships (subagents, teams, skills, worktrees)
+  // Step 4.5: Persist extracted relationships (subagents, teams, skills, worktrees)
   //
   // Non-fatal: if this fails, the pipeline continues. Relationship data can
   // be re-derived from the transcript on a subsequent reparse.
@@ -210,7 +203,7 @@ export async function runSessionPipeline(
   await persistRelationships(sql, sessionId, parseResult, log);
 
   // -------------------------------------------------------------------------
-  // Step 5.6: Parse sub-agent transcripts
+  // Step 4.6: Parse sub-agent transcripts
   //
   // For each subagent that was persisted and has a transcript_s3_key, download
   // and parse its transcript through the same parser, then insert messages and
@@ -221,7 +214,7 @@ export async function runSessionPipeline(
   await parseSubagentTranscripts(sql, s3, sessionId, log);
 
   // -------------------------------------------------------------------------
-  // Step 6: Advance lifecycle to 'parsed' with computed stats
+  // Step 5: Advance lifecycle to 'parsed' with computed stats
   // -------------------------------------------------------------------------
 
   const stats = parseResult.stats;
@@ -229,9 +222,7 @@ export async function runSessionPipeline(
   // Extract initial prompt from the parsed messages for the session row
   const initialPrompt = extractInitialPrompt(parseResult.messages, parseResult.contentBlocks);
 
-  const transitionResult = await transitionSession(sql, sessionId, "ended", "parsed", {
-    parse_status: "completed",
-    parse_error: null,
+  const transitionResult = await transitionSession(sql, sessionId, "transcript_ready", "parsed", {
     initial_prompt: initialPrompt ?? undefined,
     duration_ms: stats.duration_ms,
     total_messages: stats.total_messages,
@@ -265,7 +256,7 @@ export async function runSessionPipeline(
   log.info("Session advanced to 'parsed'");
 
   // -------------------------------------------------------------------------
-  // Step 7: Generate summary (best-effort — failure does NOT regress lifecycle)
+  // Step 6: Generate summary (best-effort — failure does NOT regress lifecycle)
   // -------------------------------------------------------------------------
 
   let summarySuccess = false;
@@ -284,8 +275,19 @@ export async function runSessionPipeline(
       });
 
       if (summaryTransition.success) {
-        summarySuccess = true;
         log.info("Session advanced to 'summarized'");
+
+        // Advance to terminal 'complete' state
+        const completeTransition = await transitionSession(sql, sessionId, "summarized", "complete");
+        if (completeTransition.success) {
+          summarySuccess = true;
+          log.info("Session advanced to 'complete'");
+        } else {
+          log.warn(
+            { reason: completeTransition.reason },
+            "Lifecycle transition to 'complete' failed",
+          );
+        }
       } else {
         log.warn(
           { reason: summaryTransition.reason },
@@ -293,8 +295,20 @@ export async function runSessionPipeline(
         );
       }
     } else if (summaryResult.success) {
-      // Summary generation was disabled or returned empty — session stays at 'parsed'
+      // Summary generation was disabled or returned empty — advance through
+      // summarized (with null summary) to complete.
       log.info("Summary generation skipped (disabled or empty)");
+
+      const skipTransition = await transitionSession(sql, sessionId, "parsed", "summarized", {
+        summary: undefined,
+      });
+      if (skipTransition.success) {
+        const completeTransition = await transitionSession(sql, sessionId, "summarized", "complete");
+        if (completeTransition.success) {
+          log.info("Session advanced to 'complete' (summary skipped)");
+        }
+      }
+
       summarySuccess = true; // Not a failure, just skipped
     } else {
       // Summary generation returned an error — session stays at 'parsed'
@@ -308,7 +322,7 @@ export async function runSessionPipeline(
   }
 
   // -------------------------------------------------------------------------
-  // Step 8: Upload parsed backup to S3 (best-effort, fire-and-forget)
+  // Step 7: Upload parsed backup to S3 (best-effort, fire-and-forget)
   // -------------------------------------------------------------------------
 
   try {

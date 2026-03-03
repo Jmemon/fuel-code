@@ -3,13 +3,13 @@
  *
  * When a Claude Code session terminates, this handler:
  *   1. Uses transitionSession (with optimistic locking) to move the session
- *      from detected/capturing -> ended, setting ended_at, end_reason, duration_ms.
+ *      from detected -> ended, setting ended_at, end_reason, duration_ms.
  *   2. If pipelineDeps are available AND the session already has a transcript_s3_key
  *      (backfill path), triggers the post-processing pipeline asynchronously.
  *
  * The WHERE clause (via transitionSession) restricts updates to sessions in
- * "detected" or "capturing" states -- sessions that have already ended or
- * progressed further won't be regressed.
+ * the "detected" state -- sessions that have already ended or progressed
+ * further won't be regressed.
  */
 
 import type { EventHandlerContext } from "../event-processor.js";
@@ -51,11 +51,11 @@ export async function handleSessionEnd(ctx: EventHandlerContext): Promise<void> 
   logger.info({ ccSessionId, endReason, durationMs }, "Ending session");
 
   // Use transitionSession with optimistic locking instead of raw SQL.
-  // Accepts both "detected" and "capturing" as valid source states.
+  // Only "detected" is a valid source state (no more "capturing" state).
   const result = await transitionSession(
     sql,
     ccSessionId,
-    ["detected", "capturing"],
+    ["detected"],
     "ended",
     {
       ended_at: event.timestamp,
