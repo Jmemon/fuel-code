@@ -6,14 +6,23 @@
  * (WHERE lifecycle = $from), recovery utilities for stuck sessions, and a
  * reset mechanism for re-processing.
  *
- * State diagram:
- *   detected -> capturing -> ended -> parsed -> summarized -> archived
- *       \                      \        \          \
- *        +-> ended (skip)       +-> failed +-> failed +-> failed
- *        +-> failed
+ * 7-state model:
+ *   detected -> ended -> transcript_ready -> parsed -> summarized -> complete
+ *       \         \            \                \
+ *        +-> failed +-> failed  +-> failed       +-> failed
  *
- *   failed  -> (terminal — use resetSessionForReparse to move back to ended)
- *   archived -> (terminal)
+ *   failed   -> ended  (reset path for retry via resetSessionForReparse)
+ *   complete -> (terminal)
+ *
+ * Key design notes:
+ *   - "capturing" is removed: detection and capture are instantaneous.
+ *   - "archived" is replaced by "complete" as the terminal success state.
+ *   - "transcript_ready" sits between "ended" and "parsed" to represent the
+ *     moment the transcript is uploaded to S3 and ready for parsing.
+ *   - "failed" is no longer terminal: it can transition back to "ended" via
+ *     resetSessionForReparse, enabling retry of the full pipeline.
+ *   - parse_status / parse_error are removed. The lifecycle itself now
+ *     fully encodes pipeline progress. Errors are stored in `last_error`.
  */
 
 import type postgres from "postgres";
@@ -22,14 +31,14 @@ import type postgres from "postgres";
 // Types
 // ---------------------------------------------------------------------------
 
-/** Valid lifecycle states for a session */
+/** Valid lifecycle states for a session (re-exported from shared types) */
 export type SessionLifecycle =
   | "detected"
-  | "capturing"
   | "ended"
+  | "transcript_ready"
   | "parsed"
   | "summarized"
-  | "archived"
+  | "complete"
   | "failed";
 
 /** Result of attempting a lifecycle transition */
@@ -47,22 +56,22 @@ export interface TransitionResult {
 /**
  * Allowed transitions for each lifecycle state.
  *
- *   detected   -> [capturing, ended, failed]     (ended: short sessions skip capturing)
- *   capturing  -> [ended, failed]
- *   ended      -> [parsed, failed]
- *   parsed     -> [summarized, failed]
- *   summarized -> [archived]
- *   archived   -> []                              (terminal)
- *   failed     -> []                              (terminal; use resetSessionForReparse to move back)
+ *   detected         -> [ended, transcript_ready, failed]
+ *   ended            -> [transcript_ready, failed]
+ *   transcript_ready -> [parsed, failed]
+ *   parsed           -> [summarized, failed]
+ *   summarized       -> [complete]
+ *   complete         -> []                         (terminal)
+ *   failed           -> [ended]                    (reset path for retry)
  */
 export const TRANSITIONS: Record<SessionLifecycle, SessionLifecycle[]> = {
-  detected: ["capturing", "ended", "failed"],
-  capturing: ["ended", "failed"],
-  ended: ["parsed", "failed"],
+  detected: ["ended", "transcript_ready", "failed"],
+  ended: ["transcript_ready", "failed"],
+  transcript_ready: ["parsed", "failed"],
   parsed: ["summarized", "failed"],
-  summarized: ["archived"],
-  archived: [],
-  failed: [],
+  summarized: ["complete"],
+  complete: [],
+  failed: ["ended"],
 };
 
 // ---------------------------------------------------------------------------
@@ -91,8 +100,7 @@ type UpdatableSessionFields = Partial<{
   end_reason: string;
   duration_ms: number;
   transcript_s3_key: string;
-  parse_status: string;
-  parse_error: string | null;
+  last_error: string | null;
   summary: string;
   initial_prompt: string;
   total_messages: number;
@@ -225,19 +233,19 @@ export async function transitionSession(
 /** All non-terminal lifecycle states that can transition to failed */
 const NON_TERMINAL_STATES: SessionLifecycle[] = [
   "detected",
-  "capturing",
   "ended",
+  "transcript_ready",
   "parsed",
-  "summarized",
 ];
 
 /**
  * Transition any non-terminal session to the "failed" state, recording the
- * error message. Convenience wrapper around transitionSession.
+ * error message in `last_error`. Convenience wrapper that uses sql.unsafe
+ * for a direct UPDATE enforcing the source states at the DB level.
  *
  * @param sql        - postgres.js tagged template client
  * @param sessionId  - session primary key
- * @param error      - error message to record in parse_error
+ * @param error      - error message to record in last_error
  * @param fromStates - optional override of which states to transition from;
  *                     defaults to all non-terminal states
  */
@@ -249,15 +257,10 @@ export async function failSession(
 ): Promise<TransitionResult> {
   const sources = fromStates ?? NON_TERMINAL_STATES;
 
-  // We can't use transitionSession directly because not all non-terminal
-  // states have "failed" in their transition list (e.g., "summarized" only
-  // goes to "archived"). Instead, use sql.unsafe for a direct UPDATE that
-  // enforces the source states at the DB level.
   const result = await sql.unsafe(
     `UPDATE sessions
      SET lifecycle = 'failed',
-         parse_status = 'failed',
-         parse_error = $1,
+         last_error = $1,
          updated_at = now()
      WHERE id = $2 AND lifecycle = ANY($3)
      RETURNING lifecycle`,
@@ -305,7 +308,7 @@ export async function failSession(
  * preserves the raw transcript_s3_key in S3.
  *
  * Allowed source states: ended, parsed, summarized, failed.
- * NOT allowed from: detected, capturing (session hasn't ended yet).
+ * NOT allowed from: detected (session hasn't ended yet).
  *
  * Runs in a transaction so the delete + update are atomic.
  *
@@ -337,8 +340,7 @@ export async function resetSessionForReparse(
     const updated = await tx`
       UPDATE sessions
       SET lifecycle      = 'ended',
-          parse_status   = 'pending',
-          parse_error    = NULL,
+          last_error     = NULL,
           summary        = NULL,
           initial_prompt = NULL,
           total_messages      = NULL,
@@ -378,7 +380,7 @@ export async function resetSessionForReparse(
 // ---------------------------------------------------------------------------
 
 /**
- * Look up a session's current lifecycle state, parse_status, and parse_error.
+ * Look up a session's current lifecycle state and last_error.
  * Returns null if the session doesn't exist.
  */
 export async function getSessionState(
@@ -386,11 +388,10 @@ export async function getSessionState(
   sessionId: string,
 ): Promise<{
   lifecycle: SessionLifecycle;
-  parse_status: string;
-  parse_error: string | null;
+  last_error: string | null;
 } | null> {
   const rows = await sql`
-    SELECT lifecycle, parse_status, parse_error
+    SELECT lifecycle, last_error
     FROM sessions
     WHERE id = ${sessionId}
   `;
@@ -399,15 +400,14 @@ export async function getSessionState(
 
   return {
     lifecycle: rows[0].lifecycle as SessionLifecycle,
-    parse_status: rows[0].parse_status as string,
-    parse_error: rows[0].parse_error as string | null,
+    last_error: rows[0].last_error as string | null,
   };
 }
 
 /**
- * Find sessions that are stuck in intermediate pipeline states. A session is
- * "stuck" if its lifecycle is 'ended' or 'parsed' and its parse_status is
- * 'pending' or 'parsing', and it hasn't been updated within the threshold.
+ * Find sessions that are stuck in the transcript_ready state. A session is
+ * "stuck" if its lifecycle is 'transcript_ready' and it hasn't been updated
+ * within the threshold — meaning the parser never picked it up or crashed.
  *
  * Used by the server on startup and periodically to recover sessions whose
  * parser crashed or timed out.
@@ -423,7 +423,6 @@ export async function findStuckSessions(
   Array<{
     id: string;
     lifecycle: SessionLifecycle;
-    parse_status: string;
     updated_at: string;
   }>
 > {
@@ -431,10 +430,9 @@ export async function findStuckSessions(
   const intervalMs = `${stuckDurationMs} milliseconds`;
 
   const rows = await sql`
-    SELECT id, lifecycle, parse_status, updated_at
+    SELECT id, lifecycle, updated_at
     FROM sessions
-    WHERE lifecycle IN ('ended', 'parsed')
-      AND parse_status IN ('pending', 'parsing')
+    WHERE lifecycle = 'transcript_ready'
       AND updated_at < now() - ${intervalMs}::interval
     ORDER BY updated_at ASC
   `;
@@ -442,7 +440,6 @@ export async function findStuckSessions(
   return rows.map((r) => ({
     id: r.id as string,
     lifecycle: r.lifecycle as SessionLifecycle,
-    parse_status: r.parse_status as string,
     updated_at: (r.updated_at as Date).toISOString(),
   }));
 }
