@@ -446,9 +446,10 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
         const { id } = req.params;
         const subagentId = (req.query.subagent_id as string | undefined)?.trim() || undefined;
 
-        // First verify the session exists and check its parse status
+        // First verify the session exists and check its lifecycle.
+        // Transcript is available once the session reaches 'complete' lifecycle.
         const sessionRows = await sql`
-          SELECT id, parse_status, parse_error, lifecycle
+          SELECT id, lifecycle
           FROM sessions
           WHERE id = ${id}
         `;
@@ -460,12 +461,11 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
 
         const session = sessionRows[0];
 
-        // Transcript is only available when parse_status is 'completed'
-        if (session.parse_status !== "completed") {
+        // Transcript is only available once the session has been fully processed
+        const transcriptReadyStates = new Set(["complete", "parsed", "summarized", "archived"]);
+        if (!transcriptReadyStates.has(session.lifecycle as string)) {
           res.status(404).json({
             error: "Transcript not yet available",
-            parse_status: session.parse_status,
-            parse_error: session.parse_error || null,
             lifecycle: session.lifecycle,
           });
           return;
@@ -849,19 +849,18 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
         const { session_ids } = parseResult.data;
 
         const rows = await sql`
-          SELECT id, lifecycle, parse_status
+          SELECT id, lifecycle
           FROM sessions
           WHERE id IN ${sql(session_ids)}
         `;
 
         // Build statuses map and detect not_found IDs
-        const statuses: Record<string, { lifecycle: string; parse_status: string }> = {};
+        const statuses: Record<string, { lifecycle: string }> = {};
         const foundIds = new Set<string>();
 
         for (const row of rows) {
           statuses[row.id as string] = {
             lifecycle: row.lifecycle as string,
-            parse_status: row.parse_status as string,
           };
           foundIds.add(row.id as string);
         }

@@ -115,7 +115,7 @@ export function parseLifecycleParam(
 
 /**
  * Schema for POST /api/sessions/batch-status request body.
- * Accepts an array of session IDs and returns their lifecycle/parse_status.
+ * Accepts an array of session IDs and returns their lifecycle status.
  * Capped at 500 to prevent oversized queries.
  */
 export const batchStatusRequestSchema = z.object({

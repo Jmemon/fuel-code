@@ -1875,7 +1875,7 @@ function sleep(ms: number): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /** Terminal lifecycle states where no further processing will occur */
-const TERMINAL_LIFECYCLES = new Set(["parsed", "summarized", "archived", "failed"]);
+const TERMINAL_LIFECYCLES = new Set(["complete", "failed"]);
 
 /** Progress callback data during pipeline wait phase */
 export interface PipelineWaitProgress {
@@ -1916,9 +1916,7 @@ export interface PipelineWaitResult {
   aborted: boolean;
   /** Count of sessions per terminal lifecycle state */
   summary: {
-    parsed: number;
-    summarized: number;
-    archived: number;
+    complete: number;
     failed: number;
     pending: number;
   };
@@ -1926,7 +1924,7 @@ export interface PipelineWaitResult {
 
 /**
  * Poll the batch-status endpoint until all sessions reach a terminal
- * lifecycle state (parsed, summarized, archived, or failed).
+ * lifecycle state (complete or failed).
  *
  * Accepts either a static array or a getter function for session IDs.
  * When a getter is provided, IDs are re-resolved each poll iteration so
@@ -1946,7 +1944,7 @@ export async function waitForPipelineCompletion(
       completed: true,
       timedOut: false,
       aborted: false,
-      summary: { parsed: 0, summarized: 0, archived: 0, failed: 0, pending: 0 },
+      summary: { complete: 0, failed: 0, pending: 0 },
     };
   }
 
@@ -1984,7 +1982,7 @@ export async function waitForPipelineCompletion(
         completed: true,
         timedOut: false,
         aborted: false,
-        summary: { parsed: 0, summarized: 0, archived: 0, failed: 0, pending: 0 },
+        summary: { complete: 0, failed: 0, pending: 0 },
       };
     }
 
@@ -2036,8 +2034,8 @@ async function fetchAllStatuses(
   apiKey: string,
   idBatches: string[][],
   signal?: AbortSignal,
-): Promise<Record<string, { lifecycle: string; parse_status: string }>> {
-  const merged: Record<string, { lifecycle: string; parse_status: string }> = {};
+): Promise<Record<string, { lifecycle: string }>> {
+  const merged: Record<string, { lifecycle: string }> = {};
 
   for (const batch of idBatches) {
     try {
@@ -2053,7 +2051,7 @@ async function fetchAllStatuses(
 
       if (response.ok) {
         const data = await response.json() as {
-          statuses: Record<string, { lifecycle: string; parse_status: string }>;
+          statuses: Record<string, { lifecycle: string }>;
         };
         Object.assign(merged, data.statuses);
       }
@@ -2068,18 +2066,16 @@ async function fetchAllStatuses(
 /** Build the final PipelineWaitResult from collected statuses */
 function buildPipelineResult(
   sessionIds: string[],
-  statuses: Record<string, { lifecycle: string; parse_status: string }>,
+  statuses: Record<string, { lifecycle: string }>,
   aborted: boolean,
   timedOut: boolean,
 ): PipelineWaitResult {
-  const summary = { parsed: 0, summarized: 0, archived: 0, failed: 0, pending: 0 };
+  const summary = { complete: 0, failed: 0, pending: 0 };
   let allTerminal = true;
 
   for (const id of sessionIds) {
     const lifecycle = statuses[id]?.lifecycle;
-    if (lifecycle === "parsed") summary.parsed++;
-    else if (lifecycle === "summarized") summary.summarized++;
-    else if (lifecycle === "archived") summary.archived++;
+    if (lifecycle === "complete") summary.complete++;
     else if (lifecycle === "failed") summary.failed++;
     else { summary.pending++; allTerminal = false; }
   }
