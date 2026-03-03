@@ -10,29 +10,38 @@ import type { Subagent } from './subagent.js';
 import type { SessionSkill } from './skill.js';
 import type { SessionWorktree } from './worktree.js';
 import type { Team } from './team.js';
+import type { Teammate } from './teammate.js';
 
 /**
- * Session lifecycle states.
- * Progression: detected -> capturing -> ended -> parsed -> summarized -> archived
+ * Session lifecycle states — unified progression through the pipeline.
+ *
+ * Progression: detected -> ended -> transcript_ready -> parsed -> summarized -> complete
  * "failed" can occur at any stage.
+ *
+ * Key changes from prior design:
+ *   - Removed "capturing" (no longer needed; detection is instantaneous)
+ *   - Removed "archived" (replaced by "complete" as the terminal success state)
+ *   - Added "transcript_ready" between "ended" and "parsed" to represent
+ *     the moment the transcript is uploaded to S3 and ready for parsing
  */
 export type SessionLifecycle =
   | "detected"
-  | "capturing"
   | "ended"
+  | "transcript_ready"
   | "parsed"
   | "summarized"
-  | "archived"
+  | "complete"
   | "failed";
 
 /**
- * Status of transcript parsing for this session.
- * Separate from lifecycle because parsing is an async background job.
- */
-export type ParseStatus = "pending" | "parsing" | "completed" | "failed";
-
-/**
  * Session interface — maps to the `sessions` Postgres table.
+ *
+ * Changes from prior version:
+ *   - Dropped `parse_status` and `parse_error` — lifecycle now subsumes parse tracking.
+ *   - Dropped `team_name` and `team_role` — replaced by the `teammates` join from
+ *     the new teammates table (session-scoped team membership).
+ *   - Added `last_error` — stores the most recent error message when lifecycle is "failed".
+ *   - Added `teammates` — optional joined data from the teammates table.
  */
 export interface Session {
   /** ULID primary key */
@@ -45,8 +54,6 @@ export interface Session {
   cc_session_id: string;
   /** Current lifecycle state */
   lifecycle: SessionLifecycle;
-  /** Current transcript parse status */
-  parse_status: ParseStatus;
   /** Working directory where the session ran */
   cwd: string;
   /** Git branch at session start (null if not in a git repo) */
@@ -63,17 +70,15 @@ export interface Session {
   started_at: string;
   /** When the session ended (null if still active) */
   ended_at: string | null;
+  /** Most recent error message (populated when lifecycle is "failed") */
+  last_error: string | null;
   /** Arbitrary metadata */
   metadata: Record<string, unknown>;
 
-  // -- Phase 4-2: session chain, team membership, permission mode --
+  // -- Phase 4-2: session chain, permission mode --
 
   /** ID of the session this one was resumed from (session chaining) */
   resumed_from_session_id?: string;
-  /** Team this session belongs to (multi-agent coordination) */
-  team_name?: string;
-  /** Role within the team: lead orchestrates, member executes */
-  team_role?: 'lead' | 'member';
   /** Permission mode the session ran under (e.g. "plan", "auto-edit") */
   permission_mode?: string;
 
@@ -87,6 +92,8 @@ export interface Session {
   worktrees?: SessionWorktree[];
   /** Team this session is a member of */
   team?: Team;
+  /** Teammates in this session's team (session-scoped membership) */
+  teammates?: Teammate[];
   /** The session this one was resumed from */
   resumed_from?: { id: string; started_at: string; initial_prompt?: string };
   /** Sessions that resumed from this one */

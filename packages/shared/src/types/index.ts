@@ -11,5 +11,6 @@ export * from "./git-activity.js";
 export * from "./ws.js";
 export * from "./subagent.js";
 export * from "./team.js";
+export * from "./teammate.js";
 export * from "./skill.js";
 export * from "./worktree.js";

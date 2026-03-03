@@ -86,6 +86,8 @@ export interface RawContentBlock {
 export interface TranscriptMessage {
   id: string;
   session_id: string;
+  /** Teammate who produced this message (null for non-team sessions) */
+  teammate_id: string | null;
   line_number: number;
   ordinal: number;
   message_type: string;
@@ -112,6 +114,8 @@ export interface ParsedContentBlock {
   id: string;
   message_id: string;
   session_id: string;
+  /** Teammate who produced this content block (null for non-team sessions) */
+  teammate_id: string | null;
   block_order: number;
   block_type: ContentBlockType;
   content_text: string | null;
