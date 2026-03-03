@@ -22,6 +22,7 @@ import * as path from "node:path";
 import * as readline from "node:readline";
 import {
   buildTranscriptKey,
+  buildSubagentTranscriptKey,
   deriveWorkspaceCanonicalId,
 } from "@fuel-code/shared";
 import type { Sql } from "postgres";
@@ -147,6 +148,8 @@ export interface IngestDeps {
   onSessionIngested?: (sessionId: string) => void;
   /** Optional callback to enqueue a session for reconcile (parsing/summary) */
   enqueueReconcile?: (sessionId: string) => void;
+  /** Sub-agent transcripts discovered during scan, indexed by parentSessionId at runtime */
+  subagentTranscripts?: DiscoveredSubagentTranscript[];
 }
 
 /** Entry from a sessions-index.json file */
@@ -936,6 +939,19 @@ export async function ingestBackfillSessions(
     arch: process.arch,
   });
 
+  // Build lookup of sub-agent transcripts by parent session ID for use in processSession
+  const subagentsBySession = new Map<string, DiscoveredSubagentTranscript[]>();
+  if (deps.subagentTranscripts) {
+    for (const sa of deps.subagentTranscripts) {
+      let list = subagentsBySession.get(sa.parentSessionId);
+      if (!list) {
+        list = [];
+        subagentsBySession.set(sa.parentSessionId, list);
+      }
+      list.push(sa);
+    }
+  }
+
   /**
    * Process a single session: write directly to DB+S3 without HTTP.
    * Called concurrently by the worker pool.
@@ -977,6 +993,20 @@ export async function ingestBackfillSessions(
 
       // Step 3b: uploadMainTranscript — S3 upload + UPDATE transcript_s3_key
       await uploadMainTranscript(deps.s3, deps.sql, seed);
+
+      // Step 3b2: Upload sub-agent transcripts for this session (if any).
+      // Uses direct S3 upload + DB update. Non-fatal: failures are logged but
+      // don't block the parent session from proceeding.
+      const sessionSubagents = subagentsBySession.get(session.sessionId);
+      if (sessionSubagents && sessionSubagents.length > 0) {
+        await uploadSubagentTranscripts(
+          deps.s3,
+          deps.sql,
+          sessionSubagents,
+          session.workspaceCanonicalId,
+          session.sessionId,
+        );
+      }
 
       // Step 3c: Transition to 'transcript_ready'
       await transitionSession(deps.sql, seed.ccSessionId, "ended", "transcript_ready");
@@ -1161,14 +1191,16 @@ export interface SubagentIngestProgress {
   currentAgentId: string | null;
 }
 
-/** Dependencies for sub-agent transcript ingestion */
+/** Dependencies for sub-agent transcript ingestion — direct DB+S3 */
 export interface SubagentIngestDeps {
-  /** Base URL of the fuel-code backend */
-  serverUrl: string;
-  /** API key for authentication */
-  apiKey: string;
+  /** Postgres client for direct DB writes */
+  sql: Sql;
+  /** S3 client for transcript uploads */
+  s3: BackfillS3Client;
   /** Set of parent session IDs that were successfully ingested */
   ingestedParentSessionIds: Set<string>;
+  /** Map from session ID to workspace canonical ID (needed for S3 key construction) */
+  workspaceBySession: Map<string, string>;
   /** Progress callback */
   onProgress?: (progress: SubagentIngestProgress) => void;
   /** AbortSignal for clean cancellation */
@@ -1176,20 +1208,21 @@ export interface SubagentIngestDeps {
 }
 
 /**
- * Upload discovered sub-agent transcripts to the backend.
+ * Upload discovered sub-agent transcripts directly to S3 and update the DB.
  *
  * Only uploads transcripts whose parent session was successfully ingested
- * (i.e., the session row exists on the server). Uses the transcript upload
- * endpoint with ?subagent_id query param (Task 14 pattern).
+ * (i.e., the session row exists in the DB). For each transcript:
+ *   1. Upload to S3 at the correct subagent transcript key
+ *   2. If a subagent row exists in the DB, set transcript_s3_key
+ *      (if no row exists yet, the reconciler will pick up the S3 object later)
  *
- * Processes sequentially to avoid overwhelming the server — sub-agent
- * transcripts are typically small and secondary to the main session upload.
+ * Processes sequentially — sub-agent transcripts are typically small and
+ * secondary to the main session upload.
  */
 export async function ingestSubagentTranscripts(
   transcripts: DiscoveredSubagentTranscript[],
   deps: SubagentIngestDeps,
 ): Promise<SubagentIngestResult> {
-  const baseUrl = deps.serverUrl.replace(/\/+$/, "");
   const result: SubagentIngestResult = {
     uploaded: 0,
     skippedNoParent: 0,
@@ -1215,15 +1248,37 @@ export async function ingestSubagentTranscripts(
       continue;
     }
 
+    const workspaceCanonicalId = deps.workspaceBySession.get(tx.parentSessionId);
+    if (!workspaceCanonicalId) {
+      result.skippedNoParent++;
+      continue;
+    }
+
     try {
-      await uploadSubagentTranscriptFile(
-        baseUrl,
-        deps.apiKey,
-        tx.parentSessionId,
-        tx.agentId,
-        tx.transcriptPath,
-        deps.signal,
-      );
+      const s3Key = buildSubagentTranscriptKey(workspaceCanonicalId, tx.parentSessionId, tx.agentId);
+
+      // Read transcript file from disk
+      let content: Buffer;
+      try {
+        content = fs.readFileSync(tx.transcriptPath) as Buffer;
+      } catch (err) {
+        throw new Error(`Failed to read sub-agent transcript at ${tx.transcriptPath}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      // Upload to S3
+      await deps.s3.upload(s3Key, content, "application/x-ndjson");
+
+      // Update subagent row with S3 key if the row already exists.
+      // Uses the UNIQUE index on (session_id, agent_id) to find the right row.
+      // If no row exists (subagent not yet tracked via hooks), this is a no-op —
+      // the reconciler will create the row and pick up the S3 key later.
+      await deps.sql`
+        UPDATE subagents
+        SET transcript_s3_key = ${s3Key}
+        WHERE session_id = ${tx.parentSessionId}
+          AND agent_id = ${tx.agentId}
+      `;
+
       result.uploaded++;
       result.totalSizeBytes += tx.fileSizeBytes;
     } catch (err) {
@@ -1247,86 +1302,46 @@ export async function ingestSubagentTranscripts(
 }
 
 /**
- * Upload a single sub-agent transcript file to the backend.
- * Uses the transcript upload endpoint with ?subagent_id=<agentId> query param.
- * Retries on transient errors (404, 429, 503) with exponential backoff.
+ * Upload sub-agent transcripts for a single session directly to S3 and update
+ * the DB. Called from processSession after the main transcript is uploaded.
+ *
+ * Each sub-agent transcript is uploaded individually. If the subagent row
+ * already exists in the DB, transcript_s3_key is set. If not (no hook data
+ * yet), the transcript is still uploaded to S3 at the correct key so the
+ * reconciler can pick it up when it creates the subagent row.
+ *
+ * Errors are logged per-subagent but do not fail the parent session.
  */
-async function uploadSubagentTranscriptFile(
-  baseUrl: string,
-  apiKey: string,
+async function uploadSubagentTranscripts(
+  s3: BackfillS3Client,
+  sql: Sql,
+  subagents: DiscoveredSubagentTranscript[],
+  workspaceCanonicalId: string,
   sessionId: string,
-  agentId: string,
-  transcriptPath: string,
-  signal?: AbortSignal,
 ): Promise<void> {
-  const url = `${baseUrl}/api/sessions/${sessionId}/transcript/upload?subagent_id=${encodeURIComponent(agentId)}`;
-
-  let body: BodyInit;
-  try {
-    body = Bun.file(transcriptPath);
-  } catch {
-    body = fs.readFileSync(transcriptPath);
-  }
-
-  // Retry up to 5 times with exponential backoff
-  for (let attempt = 0; attempt <= 5; attempt++) {
-    if (signal?.aborted) throw new Error("Aborted");
-
+  for (const sa of subagents) {
     try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-ndjson",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body,
-        signal: combinedSignal(signal),
-      });
+      const s3Key = buildSubagentTranscriptKey(workspaceCanonicalId, sessionId, sa.agentId);
 
-      if (response.ok) return;
-
-      const responseBody = await response.text().catch(() => "<unreadable>");
-      const retryAfter = response.headers.get("Retry-After");
-      const retryInfo = retryAfter ? ` Retry-After: ${retryAfter}` : "";
-      const msg = `Sub-agent transcript upload failed (HTTP ${response.status}): ${responseBody}${retryInfo}`;
-
-      // Retry on transient errors
-      const isRetryable = response.status === 404 || response.status === 429 || response.status === 503;
-      if (isRetryable && attempt < 5) {
-        let waitMs: number;
-        if (response.status === 429 && retryAfter) {
-          waitMs = parseInt(retryAfter, 10) * 1000;
-        } else {
-          waitMs = Math.min(500 * Math.pow(2, attempt), 10_000) + Math.random() * 500;
-        }
-        await abortableSleep(waitMs, signal);
-        // Re-create body for retry (Bun.file() is a lazy reference, readFileSync is re-readable)
-        try {
-          body = Bun.file(transcriptPath);
-        } catch {
-          body = fs.readFileSync(transcriptPath);
-        }
-        continue;
-      }
-
-      throw new Error(msg);
-    } catch (err) {
-      if (signal?.aborted) throw err;
-      // Re-throw non-fetch errors on last attempt
-      if (attempt >= 5) throw err;
-
-      const msg = err instanceof Error ? err.message : String(err);
-      const isTransient = msg.includes("EAGAIN") || msg.includes("ECONNRESET")
-        || msg.includes("ETIMEDOUT") || msg.includes("UND_ERR_CONNECT_TIMEOUT");
-      if (!isTransient) throw err;
-
-      const waitMs = Math.min(500 * Math.pow(2, attempt), 10_000) + Math.random() * 500;
-      await abortableSleep(waitMs, signal);
+      let content: Buffer;
       try {
-        body = Bun.file(transcriptPath);
-      } catch {
-        body = fs.readFileSync(transcriptPath);
+        content = fs.readFileSync(sa.transcriptPath) as Buffer;
+      } catch (err) {
+        throw new Error(`Failed to read sub-agent transcript at ${sa.transcriptPath}: ${err instanceof Error ? err.message : String(err)}`);
       }
+
+      await s3.upload(s3Key, content, "application/x-ndjson");
+
+      // Update subagent row if it exists; no-op if the row hasn't been created yet
+      await sql`
+        UPDATE subagents
+        SET transcript_s3_key = ${s3Key}
+        WHERE session_id = ${sessionId}
+          AND agent_id = ${sa.agentId}
+      `;
+    } catch {
+      // Non-fatal: sub-agent transcript upload failure should not block
+      // the parent session from proceeding through the lifecycle.
     }
   }
 }
