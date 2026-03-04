@@ -6,7 +6,8 @@ export interface Subagent {
   agent_name?: string;
   model?: string;
   spawning_tool_use_id?: string;
-  team_name?: string;
+  /** FK to teammates table — links this subagent to a teammate (null if not part of a team) */
+  teammate_id?: string | null;
   isolation?: string;
   run_in_background: boolean;
   status: 'running' | 'completed' | 'failed';

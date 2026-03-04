@@ -265,6 +265,7 @@ export function SessionDetailView({
                 gitActivity={gitActivity}
                 messages={(transcript as TranscriptMessageWithBlocks[]) ?? []}
                 subagents={session?.subagents}
+                teammates={session?.teammates}
                 skills={session?.skills}
               />
             </Box>
@@ -310,6 +311,7 @@ export function SessionDetailView({
                 gitActivity={gitActivity}
                 messages={(transcript as TranscriptMessageWithBlocks[]) ?? []}
                 subagents={session?.subagents}
+                teammates={session?.teammates}
                 skills={session?.skills}
               />
             </Box>

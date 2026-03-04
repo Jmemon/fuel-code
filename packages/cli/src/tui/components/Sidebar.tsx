@@ -13,7 +13,7 @@
 
 import React from "react";
 import { Box } from "ink";
-import type { GitActivity, ParsedContentBlock, Subagent, SessionSkill } from "@fuel-code/shared";
+import type { GitActivity, ParsedContentBlock, Subagent, SessionSkill, Teammate } from "@fuel-code/shared";
 import { GitActivityPanel } from "./GitActivityPanel.js";
 import { ToolsUsedPanel } from "./ToolsUsedPanel.js";
 import { FilesModifiedPanel } from "./FilesModifiedPanel.js";
@@ -27,6 +27,8 @@ export interface SidebarProps {
   messages: TranscriptMessageWithBlocks[];
   /** Subagents spawned during the session (optional, only rendered when present) */
   subagents?: Subagent[];
+  /** Teammates in this session (optional, passed to SubagentsPanel for grouped display) */
+  teammates?: Teammate[];
   /** Skills invoked during the session (optional, only rendered when present) */
   skills?: SessionSkill[];
 }
@@ -92,7 +94,7 @@ export function extractModifiedFiles(
   return files;
 }
 
-export function Sidebar({ gitActivity, messages, subagents, skills }: SidebarProps): React.ReactElement {
+export function Sidebar({ gitActivity, messages, subagents, teammates, skills }: SidebarProps): React.ReactElement {
   const toolCounts = extractToolCounts(messages);
   const modifiedFiles = extractModifiedFiles(messages, gitActivity);
 
@@ -107,7 +109,7 @@ export function Sidebar({ gitActivity, messages, subagents, skills }: SidebarPro
       </Box>
       {subagents && subagents.length > 0 && (
         <Box marginTop={1}>
-          <SubagentsPanel subagents={subagents} />
+          <SubagentsPanel subagents={subagents} teammates={teammates} />
         </Box>
       )}
       {skills && skills.length > 0 && (
