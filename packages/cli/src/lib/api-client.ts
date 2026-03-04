@@ -182,6 +182,60 @@ export interface TeamDetailResponse {
   };
 }
 
+/** A teammate record as returned by GET /api/sessions/:id/teammates */
+export interface TeammateResponse {
+  id: string;
+  team_id: string;
+  session_id: string;
+  name: string;
+  cc_teammate_id: string | null;
+  color: string | null;
+  summary: string | null;
+  created_at: string;
+  metadata: Record<string, unknown>;
+  /** Denormalized team name from JOIN with teams table */
+  team_name: string;
+}
+
+/** A message in the teammate stitched feed, with subagent context and content blocks */
+export interface TeammateMessageResponse {
+  id: string;
+  session_id: string;
+  teammate_id: string | null;
+  line_number: number;
+  ordinal: number;
+  message_type: string;
+  role: string | null;
+  model: string | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  cost_usd: number | null;
+  timestamp: string | null;
+  has_text: boolean;
+  has_thinking: boolean;
+  has_tool_use: boolean;
+  has_tool_result: boolean;
+  metadata: Record<string, unknown>;
+  /** Subagent agent_id from LEFT JOIN (null if main session message) */
+  agent_id: string | null;
+  /** Subagent agent_name from LEFT JOIN (null if main session message) */
+  agent_name: string | null;
+  /** Aggregated content blocks as JSON array */
+  content_blocks: Array<{
+    id: string;
+    block_type: string;
+    content_text: string | null;
+    thinking_text: string | null;
+    tool_name: string | null;
+    tool_use_id: string | null;
+    tool_input: unknown | null;
+    tool_result_id: string | null;
+    is_error: boolean;
+    result_text: string | null;
+    metadata: Record<string, unknown>;
+  }>;
+}
+
 /** Backend health status response */
 export interface HealthStatus {
   status: "ok" | "degraded" | "down";
@@ -625,6 +679,28 @@ export class FuelApiClient implements ApiClient {
       "GET",
       `/api/teams/${encodeURIComponent(name)}`,
     );
+  }
+
+  // -------------------------------------------------------------------------
+  // Teammate Endpoints
+  // -------------------------------------------------------------------------
+
+  /** List teammates for a session, returns array joined with team_name */
+  async getSessionTeammates(sessionId: string): Promise<TeammateResponse[]> {
+    const res = await this.request<{ teammates: TeammateResponse[] }>(
+      "GET",
+      `/api/sessions/${sessionId}/teammates`,
+    );
+    return res.teammates;
+  }
+
+  /** Get the stitched message feed for a specific teammate in a session */
+  async getTeammateMessages(sessionId: string, teammateId: string): Promise<TeammateMessageResponse[]> {
+    const res = await this.request<{ messages: TeammateMessageResponse[] }>(
+      "GET",
+      `/api/sessions/${sessionId}/teammates/${teammateId}/messages`,
+    );
+    return res.messages;
   }
 
   // -------------------------------------------------------------------------

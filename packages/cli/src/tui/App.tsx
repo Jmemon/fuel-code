@@ -2,11 +2,12 @@
  * TUI Shell — top-level Ink application component.
  *
  * Owns the ApiClient and WsClient instances, manages view routing between
- * WorkspacesView, SessionsView, SessionDetail, TeamsListView, and
- * TeamDetailView using a drill-down navigation model:
+ * WorkspacesView, SessionsView, SessionDetail, TeamsListView,
+ * TeamDetailView, and TeammateDetailView using a drill-down navigation model:
  *
  *   WorkspacesView → SessionsView → SessionDetailView
- *                  → TeamsListView → TeamDetailView → SessionDetailView
+ *                  → TeamsListView → TeamDetailView → TeammateDetailView
+ *                                                   → SessionDetailView
  *
  * The WsClient connects on mount and disconnects on unmount; connection
  * failure is non-fatal (views fall back to polling).
@@ -25,6 +26,7 @@ import { SessionsView } from "./SessionsView.js";
 import { SessionDetailView } from "./SessionDetailView.js";
 import { TeamsListView } from "./TeamsListView.js";
 import { TeamDetailView } from "./TeamDetailView.js";
+import { TeammateDetailView } from "./TeammateDetailView.js";
 
 // ---------------------------------------------------------------------------
 // View routing types — drill-down navigation hierarchy
@@ -35,7 +37,8 @@ type View =
   | { name: "sessions"; workspace: WorkspaceSummary }
   | { name: "session-detail"; sessionId: string; fromView: "sessions" | "team-detail"; workspace?: WorkspaceSummary; teamName?: string }
   | { name: "teams-list"; fromView: "workspaces" | "sessions"; workspace?: WorkspaceSummary }
-  | { name: "team-detail"; teamName: string; fromView: "workspaces" | "sessions"; workspace?: WorkspaceSummary };
+  | { name: "team-detail"; teamName: string; fromView: "workspaces" | "sessions"; workspace?: WorkspaceSummary }
+  | { name: "teammate-detail"; sessionId: string; teammateId: string; teamName: string; fromView: "workspaces" | "sessions"; workspace?: WorkspaceSummary };
 
 // ---------------------------------------------------------------------------
 // App component
@@ -89,7 +92,7 @@ export function App({ apiClient, wsClient }: AppProps): React.ReactElement {
   // to avoid double-handling. Only catch it here for views that don't
   // have their own quit handler (session-detail).
   useInput((input) => {
-    if (input === "q" && (view.name === "session-detail")) {
+    if (input === "q" && (view.name === "session-detail" || view.name === "teammate-detail")) {
       ws.disconnect();
       exit();
     }
@@ -172,6 +175,24 @@ export function App({ apiClient, wsClient }: AppProps): React.ReactElement {
           setView({ name: "session-detail", sessionId, fromView: "team-detail", workspace: view.workspace, teamName: view.teamName })
         }
         onBack={() => setView({ name: "teams-list", fromView: view.fromView, workspace: view.workspace })}
+      />
+    );
+  }
+
+  if (view.name === "teammate-detail") {
+    return (
+      <TeammateDetailView
+        apiClient={api}
+        sessionId={view.sessionId}
+        teammateId={view.teammateId}
+        onBack={() =>
+          setView({
+            name: "team-detail",
+            teamName: view.teamName,
+            fromView: view.fromView,
+            workspace: view.workspace,
+          })
+        }
       />
     );
   }
