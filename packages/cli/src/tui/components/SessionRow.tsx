@@ -54,6 +54,12 @@ export interface SessionDisplayData extends Session {
   skill_names?: string[];
   /** Distinct worktree names from session_worktrees table (Phase 4-2 enrichment) */
   worktree_names?: string[];
+  /** Whether this session has an associated team (from list query) */
+  has_team?: boolean;
+  /** Number of teammates in this session's team (from list query) */
+  num_teammates?: number;
+  /** Display names of teammates (from list query) */
+  teammate_names?: string[];
 }
 
 export interface SessionRowProps {
@@ -84,6 +90,10 @@ export function SessionRow({
   const subagentTypes = session.subagent_types ?? [];
   const skillNames = session.skill_names ?? [];
   const worktreeNames = session.worktree_names ?? [];
+
+  // Teammate fields (from list query)
+  const numTeammates = session.num_teammates ?? 0;
+  const teammateNames = session.teammate_names ?? [];
 
   return (
     <Box flexDirection="column">
@@ -153,6 +163,14 @@ export function SessionRow({
         <Box paddingLeft={4}>
           <Text dimColor>
             {"\u2514\u2500"} {subagentCount} agent{subagentCount !== 1 ? "s" : ""} ({subagentTypes.join(", ")})
+          </Text>
+        </Box>
+      )}
+      {/* Teammate annotation: show teammate names when session has a team */}
+      {numTeammates > 0 && teammateNames.length > 0 && (
+        <Box paddingLeft={4}>
+          <Text dimColor>
+            {"\u2514\u2500"} Teammates: {teammateNames.join(", ")}
           </Text>
         </Box>
       )}

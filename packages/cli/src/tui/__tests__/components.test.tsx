@@ -179,6 +179,42 @@ describe("SessionRow", () => {
     expect(output).not.toContain("Commit 3");
     expect(output).toContain("... 3 more commits");
   });
+
+  test("shows teammate annotation when session has teammates", () => {
+    const { lastFrame } = render(
+      <SessionRow
+        session={makeSession({
+          num_teammates: 3,
+          teammate_names: ["alice", "bob", "charlie"],
+        })}
+        selected={false}
+      />,
+    );
+    const output = stripAnsi(lastFrame()!);
+    expect(output).toContain("Teammates: alice, bob, charlie");
+  });
+
+  test("does not show teammate annotation when num_teammates is 0", () => {
+    const { lastFrame } = render(
+      <SessionRow
+        session={makeSession({
+          num_teammates: 0,
+          teammate_names: [],
+        })}
+        selected={false}
+      />,
+    );
+    const output = stripAnsi(lastFrame()!);
+    expect(output).not.toContain("Teammates");
+  });
+
+  test("does not show teammate annotation when teammate_names is missing", () => {
+    const { lastFrame } = render(
+      <SessionRow session={makeSession()} selected={false} />,
+    );
+    const output = stripAnsi(lastFrame()!);
+    expect(output).not.toContain("Teammates");
+  });
 });
 
 // ---------------------------------------------------------------------------
