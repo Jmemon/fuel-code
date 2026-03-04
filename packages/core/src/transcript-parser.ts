@@ -594,6 +594,7 @@ function buildAssistantMessage(
   const msg: TranscriptMessage = {
     id: messageId,
     session_id: sessionId,
+    teammate_id: null,
     line_number: firstLine.lineNumber,
     ordinal,
     message_type: "assistant",
@@ -676,6 +677,7 @@ function buildStandaloneMessage(
   const msg: TranscriptMessage = {
     id: messageId,
     session_id: sessionId,
+    teammate_id: null,
     line_number: lineNumber,
     ordinal,
     message_type: messageType,
@@ -736,6 +738,7 @@ function convertContentBlock(
         is_error: false,
         result_text: null,
         result_s3_key: null,
+        teammate_id: null,
         metadata: {},
       };
 
@@ -755,6 +758,7 @@ function convertContentBlock(
         is_error: false,
         result_text: null,
         result_s3_key: null,
+        teammate_id: null,
         metadata: {},
       };
 
@@ -789,6 +793,7 @@ function makeTextBlock(
     is_error: false,
     result_text: null,
     result_s3_key: null,
+    teammate_id: null,
     metadata: {},
   };
 }
@@ -840,6 +845,7 @@ function makeToolResultBlock(
     is_error: raw.is_error ?? false,
     result_text: resultText,
     result_s3_key: null,
+    teammate_id: null,
     metadata,
   };
 }
