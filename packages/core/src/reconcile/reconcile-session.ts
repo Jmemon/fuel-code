@@ -338,12 +338,10 @@ export async function reconcileSession(
       // Reuses the existing persistRelationships logic from session-pipeline.
       await persistRelationships(sql, sessionId, parseResult, log);
       stepsExecuted.push("persistRelationships");
-      // TODO T15-T18: team detection and teammate_id assignment will be added here
 
-      // Step 8: Parse subagent transcripts
+      // Step 8: Parse subagent transcripts and set teammate_id on their messages
       await parseSubagentTranscripts(sql, s3, sessionId, log);
       stepsExecuted.push("parseSubagentTranscripts");
-      // TODO T15-T18: set teammate_id on subagent messages after team detection
 
       // Step 9: Update stats, advance to parsed
       const stats = parseResult.stats;
@@ -693,7 +691,7 @@ async function parseSubagentTranscripts(
 ): Promise<void> {
   try {
     const subagentRows = await sql`
-      SELECT id, agent_id, transcript_s3_key
+      SELECT id, agent_id, transcript_s3_key, team_name
       FROM subagents
       WHERE session_id = ${sessionId}
         AND transcript_s3_key IS NOT NULL
@@ -710,6 +708,7 @@ async function parseSubagentTranscripts(
       const subagentUlid = row.id as string;
       const agentId = row.agent_id as string;
       const s3Key = row.transcript_s3_key as string;
+      const subagentTeamName = row.team_name as string | null;
 
       try {
         const content = await s3.download(s3Key);
@@ -720,18 +719,38 @@ async function parseSubagentTranscripts(
           continue;
         }
 
-        // Persist with subagent_id FK set
-        // TODO T15-T18: also set teammate_id on messages after team detection
+        // Resolve teammate_id for team-affiliated subagents.
+        // Uses the subagent's parsed transcript to extract the teammate name,
+        // then looks up the teammates table for the matching row.
+        // Returns null for non-team subagents (teammate_id stays NULL).
+        let teammateId: string | null = null;
+        try {
+          teammateId = await resolveTeammateFromParseResult(
+            sql, sessionId, subParseResult, subagentTeamName,
+          );
+          if (teammateId) {
+            logger.info({ agentId, teammateId }, `Resolved teammate_id for sub-agent ${agentId}`);
+          }
+        } catch (err) {
+          // Non-fatal: if teammate resolution fails, messages are still inserted
+          // without teammate_id. The field can be backfilled later.
+          logger.warn(
+            { agentId, error: err instanceof Error ? err.message : String(err) },
+            `Failed to resolve teammate_id for sub-agent ${agentId} — continuing without it`,
+          );
+        }
+
+        // Persist with subagent_id and teammate_id FKs set
         await sql.begin(async (tx: any) => {
           await tx`DELETE FROM content_blocks WHERE session_id = ${sessionId} AND subagent_id = ${subagentUlid}`;
           await tx`DELETE FROM transcript_messages WHERE session_id = ${sessionId} AND subagent_id = ${subagentUlid}`;
 
-          await batchInsertMessages(tx, subParseResult.messages, subagentUlid);
-          await batchInsertContentBlocks(tx, subParseResult.contentBlocks, subagentUlid);
+          await batchInsertMessages(tx, subParseResult.messages, subagentUlid, teammateId);
+          await batchInsertContentBlocks(tx, subParseResult.contentBlocks, subagentUlid, teammateId);
         });
 
         logger.info(
-          { agentId, messages: subParseResult.messages.length, blocks: subParseResult.contentBlocks.length },
+          { agentId, teammateId, messages: subParseResult.messages.length, blocks: subParseResult.contentBlocks.length },
           `Parsed sub-agent transcript for ${agentId}`,
         );
       } catch (err) {
@@ -754,21 +773,26 @@ async function parseSubagentTranscripts(
 // ---------------------------------------------------------------------------
 
 import type { TranscriptMessage, ParsedContentBlock } from "@fuel-code/shared";
+import { resolveTeammateFromParseResult } from "./teammate-mapping.js";
 
 /**
  * Insert transcript messages in batches of BATCH_SIZE.
  * Uses sql.unsafe with parameterized values to avoid exceeding Postgres limits.
+ *
+ * @param subagentId  - FK to subagents table; null for main session messages
+ * @param teammateId  - FK to teammates table; set for team-affiliated subagent messages
  */
 async function batchInsertMessages(
   tx: Sql,
   messages: TranscriptMessage[],
   subagentId: string | null = null,
+  teammateId: string | null = null,
 ): Promise<void> {
   for (let i = 0; i < messages.length; i += BATCH_SIZE) {
     const chunk = messages.slice(i, i + BATCH_SIZE);
     if (chunk.length === 0) continue;
 
-    const colCount = 22;
+    const colCount = 23;
     const placeholders: string[] = [];
     const values: unknown[] = [];
 
@@ -780,7 +804,7 @@ async function batchInsertMessages(
         `$${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10}, ` +
         `$${offset + 11}, $${offset + 12}, $${offset + 13}, $${offset + 14}, $${offset + 15}, ` +
         `$${offset + 16}, $${offset + 17}, $${offset + 18}, $${offset + 19}, $${offset + 20}, ` +
-        `$${offset + 21}, $${offset + 22})`,
+        `$${offset + 21}, $${offset + 22}, $${offset + 23})`,
       );
       values.push(
         m.id,
@@ -805,6 +829,7 @@ async function batchInsertMessages(
         m.has_tool_use,
         m.has_tool_result,
         subagentId,
+        teammateId,
       );
     }
 
@@ -813,7 +838,7 @@ async function batchInsertMessages(
         id, session_id, line_number, ordinal, message_type, role, model,
         tokens_in, tokens_out, cache_read, cache_write, cost_usd,
         compact_sequence, is_compacted, timestamp, raw_message, metadata,
-        has_text, has_thinking, has_tool_use, has_tool_result, subagent_id
+        has_text, has_thinking, has_tool_use, has_tool_result, subagent_id, teammate_id
       ) VALUES ${placeholders.join(", ")}`,
       values as any[],
     );
@@ -823,17 +848,21 @@ async function batchInsertMessages(
 /**
  * Insert content blocks in batches of BATCH_SIZE.
  * Uses sql.unsafe with parameterized values to avoid exceeding Postgres limits.
+ *
+ * @param subagentId  - FK to subagents table; null for main session blocks
+ * @param teammateId  - FK to teammates table; set for team-affiliated subagent blocks
  */
 async function batchInsertContentBlocks(
   tx: Sql,
   blocks: ParsedContentBlock[],
   subagentId: string | null = null,
+  teammateId: string | null = null,
 ): Promise<void> {
   for (let i = 0; i < blocks.length; i += BATCH_SIZE) {
     const chunk = blocks.slice(i, i + BATCH_SIZE);
     if (chunk.length === 0) continue;
 
-    const colCount = 15;
+    const colCount = 16;
     const placeholders: string[] = [];
     const values: unknown[] = [];
 
@@ -843,7 +872,8 @@ async function batchInsertContentBlocks(
       placeholders.push(
         `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, ` +
         `$${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10}, ` +
-        `$${offset + 11}, $${offset + 12}, $${offset + 13}, $${offset + 14}, $${offset + 15})`,
+        `$${offset + 11}, $${offset + 12}, $${offset + 13}, $${offset + 14}, $${offset + 15}, ` +
+        `$${offset + 16})`,
       );
       values.push(
         b.id,
@@ -861,6 +891,7 @@ async function batchInsertContentBlocks(
         b.result_text,
         JSON.stringify(b.metadata),
         subagentId,
+        teammateId,
       );
     }
 
@@ -868,7 +899,7 @@ async function batchInsertContentBlocks(
       `INSERT INTO content_blocks (
         id, message_id, session_id, block_order, block_type,
         content_text, thinking_text, tool_name, tool_use_id, tool_input,
-        tool_result_id, is_error, result_text, metadata, subagent_id
+        tool_result_id, is_error, result_text, metadata, subagent_id, teammate_id
       ) VALUES ${placeholders.join(", ")}`,
       values as any[],
     );

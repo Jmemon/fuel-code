@@ -557,13 +557,16 @@ async function parseSubagentTranscripts(
  * Insert transcript messages in batches of BATCH_SIZE.
  * Uses sql.unsafe with parameterized values to avoid exceeding Postgres limits.
  *
- * @param subagentId - When set, all messages are attributed to this sub-agent
- *                     via the subagent_id FK column. Pass null for main session messages.
+ * @param subagentId  - When set, all messages are attributed to this sub-agent
+ *                      via the subagent_id FK column. Pass null for main session messages.
+ * @param teammateId  - FK to teammates table; set for team-affiliated subagent messages.
+ *                      Pass null for main session messages and non-team subagents.
  */
 async function batchInsertMessages(
   tx: Sql,
   messages: TranscriptMessage[],
   subagentId: string | null = null,
+  teammateId: string | null = null,
 ): Promise<void> {
   for (let i = 0; i < messages.length; i += BATCH_SIZE) {
     const chunk = messages.slice(i, i + BATCH_SIZE);
@@ -571,8 +574,8 @@ async function batchInsertMessages(
     if (chunk.length === 0) continue;
 
     // Build parameterized INSERT with numbered placeholders
-    // Each message has 22 columns (transcript_messages columns + subagent_id)
-    const colCount = 22;
+    // Each message has 23 columns (transcript_messages columns + subagent_id + teammate_id)
+    const colCount = 23;
     const placeholders: string[] = [];
     const values: unknown[] = [];
 
@@ -584,7 +587,7 @@ async function batchInsertMessages(
         `$${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10}, ` +
         `$${offset + 11}, $${offset + 12}, $${offset + 13}, $${offset + 14}, $${offset + 15}, ` +
         `$${offset + 16}, $${offset + 17}, $${offset + 18}, $${offset + 19}, $${offset + 20}, ` +
-        `$${offset + 21}, $${offset + 22})`,
+        `$${offset + 21}, $${offset + 22}, $${offset + 23})`,
       );
       values.push(
         m.id,                                    // 1
@@ -609,6 +612,7 @@ async function batchInsertMessages(
         m.has_tool_use,                          // 20
         m.has_tool_result,                       // 21
         subagentId,                              // 22
+        teammateId,                              // 23
       );
     }
 
@@ -617,7 +621,7 @@ async function batchInsertMessages(
         id, session_id, line_number, ordinal, message_type, role, model,
         tokens_in, tokens_out, cache_read, cache_write, cost_usd,
         compact_sequence, is_compacted, timestamp, raw_message, metadata,
-        has_text, has_thinking, has_tool_use, has_tool_result, subagent_id
+        has_text, has_thinking, has_tool_use, has_tool_result, subagent_id, teammate_id
       ) VALUES ${placeholders.join(", ")}`,
       values as any[],
     );
@@ -628,21 +632,24 @@ async function batchInsertMessages(
  * Insert content blocks in batches of BATCH_SIZE.
  * Uses sql.unsafe with parameterized values to avoid exceeding Postgres limits.
  *
- * @param subagentId - When set, all blocks are attributed to this sub-agent
- *                     via the subagent_id FK column. Pass null for main session blocks.
+ * @param subagentId  - When set, all blocks are attributed to this sub-agent
+ *                      via the subagent_id FK column. Pass null for main session blocks.
+ * @param teammateId  - FK to teammates table; set for team-affiliated subagent blocks.
+ *                      Pass null for main session blocks and non-team subagents.
  */
 async function batchInsertContentBlocks(
   tx: Sql,
   blocks: ParsedContentBlock[],
   subagentId: string | null = null,
+  teammateId: string | null = null,
 ): Promise<void> {
   for (let i = 0; i < blocks.length; i += BATCH_SIZE) {
     const chunk = blocks.slice(i, i + BATCH_SIZE);
 
     if (chunk.length === 0) continue;
 
-    // Each content block has 15 columns (content_blocks columns + subagent_id)
-    const colCount = 15;
+    // Each content block has 16 columns (content_blocks columns + subagent_id + teammate_id)
+    const colCount = 16;
     const placeholders: string[] = [];
     const values: unknown[] = [];
 
@@ -652,7 +659,8 @@ async function batchInsertContentBlocks(
       placeholders.push(
         `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, ` +
         `$${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10}, ` +
-        `$${offset + 11}, $${offset + 12}, $${offset + 13}, $${offset + 14}, $${offset + 15})`,
+        `$${offset + 11}, $${offset + 12}, $${offset + 13}, $${offset + 14}, $${offset + 15}, ` +
+        `$${offset + 16})`,
       );
       values.push(
         b.id,                                    // 1
@@ -670,6 +678,7 @@ async function batchInsertContentBlocks(
         b.result_text,                           // 13
         JSON.stringify(b.metadata),              // 14
         subagentId,                              // 15
+        teammateId,                              // 16
       );
     }
 
@@ -677,7 +686,7 @@ async function batchInsertContentBlocks(
       `INSERT INTO content_blocks (
         id, message_id, session_id, block_order, block_type,
         content_text, thinking_text, tool_name, tool_use_id, tool_input,
-        tool_result_id, is_error, result_text, metadata, subagent_id
+        tool_result_id, is_error, result_text, metadata, subagent_id, teammate_id
       ) VALUES ${placeholders.join(", ")}`,
       values as any[],
     );
