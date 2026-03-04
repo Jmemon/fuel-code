@@ -133,7 +133,6 @@ function makeWorkspaceDetail(overrides?: Record<string, unknown>) {
         device_name: "macbook",
         cc_session_id: "cc-001",
         lifecycle: "summarized",
-        parse_status: "completed",
         cwd: "/home/user/code",
         git_branch: "main",
         git_remote: null,

@@ -102,7 +102,6 @@ function makeSession(overrides?: Record<string, unknown>) {
     cost_estimate_usd: 1.23,
     tags: ["feature"],
     cc_session_id: "cc-001",
-    parse_status: "completed",
     cwd: "/home/user/code",
     git_branch: "main",
     git_remote: null,
@@ -169,14 +168,14 @@ describe("fetchSessions", () => {
     });
 
     await fetchSessions(makeClient(), {
-      lifecycle: "detected,capturing",
+      lifecycle: "detected",
       tag: "feature",
       after: "2025-01-01",
       before: "2025-12-31",
       cursor: "page-2",
     });
 
-    expect(lastRequestUrl).toContain("lifecycle=detected%2Ccapturing");
+    expect(lastRequestUrl).toContain("lifecycle=detected");
     expect(lastRequestUrl).toContain("tag=feature");
     expect(lastRequestUrl).toContain("after=2025-01-01");
     expect(lastRequestUrl).toContain("before=2025-12-31");
@@ -321,10 +320,10 @@ describe("formatSessionsTable", () => {
   });
 
   it("renders lifecycle with appropriate labels", () => {
-    const capturingSession = makeSession({ lifecycle: "capturing" });
-    const output = formatSessionsTable([capturingSession] as any);
+    const detectedSession = makeSession({ lifecycle: "detected" });
+    const output = formatSessionsTable([detectedSession] as any);
     const plain = stripAnsi(output);
-    // "capturing" lifecycle renders as "LIVE" per formatLifecycle
+    // "detected" lifecycle renders as "LIVE" per formatLifecycle
     expect(plain).toContain("LIVE");
   });
 

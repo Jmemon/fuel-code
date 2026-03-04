@@ -299,7 +299,7 @@ describe("Phase 2 E2E: Backfill Ingestion", () => {
 
     // Assert: session has expected pipeline results
     expect(parsedSession.lifecycle).toBe("parsed");
-    expect(parsedSession.parse_status).toBe("completed");
+    expect(parsedSession.lifecycle).toBe("parsed");
     expect(parsedSession.transcript_s3_key).toBeTruthy();
 
     // Assert: transcript_messages rows exist

@@ -142,7 +142,6 @@ function makeSession(overrides?: Record<string, unknown>) {
     device_name: "macbook",
     cc_session_id: "cc-001",
     lifecycle: "summarized",
-    parse_status: "completed",
     cwd: "/home/user/code",
     git_branch: "main",
     git_remote: null,
@@ -254,7 +253,7 @@ describe("fetchStatus — unreachable", () => {
 // ---------------------------------------------------------------------------
 
 describe("fetchStatus — active sessions", () => {
-  it("returns active sessions when capturing", async () => {
+  it("returns active sessions when detected", async () => {
     mockRoute("/api/health", 200, {
       status: "ok",
       postgres: true,
@@ -265,7 +264,7 @@ describe("fetchStatus — active sessions", () => {
     });
     mockRoute("/api/sessions", 200, {
       sessions: [
-        makeSession({ lifecycle: "capturing", duration_ms: 600000 }),
+        makeSession({ lifecycle: "detected", duration_ms: 600000 }),
       ],
       next_cursor: null,
       has_more: false,
@@ -280,7 +279,7 @@ describe("fetchStatus — active sessions", () => {
     expect(data.activeSessions.length).toBeGreaterThanOrEqual(0);
   });
 
-  it("returns empty active sessions when none capturing", async () => {
+  it("returns empty active sessions when none detected", async () => {
     setupConnectedBackend();
     const config = makeConfig();
     const api = makeClient();
@@ -499,7 +498,7 @@ describe("formatStatus", () => {
       device: { id: "01HZDEV", name: "dev", type: "local" },
       backend: { url: "http://localhost:3000", status: "connected", latencyMs: 10 },
       activeSessions: [
-        makeSession({ lifecycle: "capturing", workspace_name: "active-ws" }),
+        makeSession({ lifecycle: "detected", workspace_name: "active-ws" }),
       ] as any,
       queue: { pending: 0, deadLetter: 0 },
       recentSessions: [],

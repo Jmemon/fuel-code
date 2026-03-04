@@ -453,8 +453,7 @@ describe("Phase 2 E2E Pipeline", () => {
     expect(session.transcript_s3_key).toContain("transcripts/");
     expect(session.transcript_s3_key).toContain(ccSessionId);
 
-    // Parse status is completed
-    expect(session.parse_status).toBe("completed");
+    // Lifecycle should be 'parsed' (already checked above)
 
     // Message counts from the fixture (summary=1, user=2, assistant=3 unique ids)
     expect(session.total_messages).toBeGreaterThan(0);
@@ -540,7 +539,7 @@ describe("Phase 2 E2E Pipeline", () => {
     const sessionRows = await sql`SELECT * FROM sessions WHERE id = ${ccSessionId}`;
     expect(sessionRows[0].lifecycle).toBe("ended");
     expect(sessionRows[0].transcript_s3_key).toBeNull();
-    expect(sessionRows[0].parse_status).toBe("pending");
+    // No transcript uploaded, so session stays at 'ended' lifecycle
 
     // Assert: no transcript messages or content blocks for this session
     const msgRows = await sql`
@@ -641,7 +640,7 @@ describe("Phase 2 E2E Pipeline", () => {
         if (
           rows.length > 0 &&
           rows[0].lifecycle === "parsed" &&
-          rows[0].parse_status === "completed"
+          rows[0].lifecycle === "parsed"
         ) {
           return rows[0];
         }
@@ -665,7 +664,7 @@ describe("Phase 2 E2E Pipeline", () => {
     // Assert: stats are repopulated (same as before since same transcript)
     const afterSession = await sql`SELECT * FROM sessions WHERE id = ${ccSessionId}`;
     expect(afterSession[0].total_messages).toBe(beforeTotalMessages);
-    expect(afterSession[0].parse_status).toBe("completed");
+    expect(afterSession[0].lifecycle).toBe("parsed");
   }, 60_000);
 
   // -----------------------------------------------------------------------
@@ -1080,9 +1079,9 @@ describe("Phase 2 E2E Pipeline", () => {
       500,
     );
 
-    // Assert: parse_error describes S3 download failure
-    expect(failedSession.parse_error).toBeTruthy();
-    expect(failedSession.parse_error).toMatch(/S3|download|not found/i);
+    // Assert: last_error describes S3 download failure
+    expect(failedSession.last_error).toBeTruthy();
+    expect(failedSession.last_error).toMatch(/S3|download|not found/i);
   }, 60_000);
 
   // -----------------------------------------------------------------------

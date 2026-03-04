@@ -10,7 +10,7 @@
  *   2. Reparse a 'failed' session: resets to ended, returns 202
  *   3. Reparse a 'detected' session: 409
  *   4. Reparse with no transcript_s3_key: 409
- *   5. Reparse currently processing (parse_status = 'parsing'): 409
+ *   5. Reparse currently processing (lifecycle = 'transcript_ready'): 409
  *   6. Reparse non-existent session: 404
  */
 
@@ -56,20 +56,18 @@ describe.skipIf(!DATABASE_URL)("POST /api/sessions/:id/reparse", () => {
   async function insertSession(
     lifecycle: SessionLifecycle,
     overrides?: {
-      parse_status?: string;
       transcript_s3_key?: string | null;
     },
   ): Promise<string> {
     const id = nextSessionId();
     await sql`
-      INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, parse_status, transcript_s3_key)
+      INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, transcript_s3_key)
       VALUES (
         ${id},
         ${WORKSPACE_ID},
         ${DEVICE_ID},
         ${lifecycle},
         ${new Date().toISOString()},
-        ${overrides?.parse_status ?? "pending"},
         ${overrides?.transcript_s3_key ?? null}
       )
     `;
@@ -169,7 +167,6 @@ describe.skipIf(!DATABASE_URL)("POST /api/sessions/:id/reparse", () => {
 
   test("reparse a 'parsed' session: resets to ended, returns 202", async () => {
     const sessionId = await insertSession("parsed", {
-      parse_status: "completed",
       transcript_s3_key: "transcripts/test/raw.jsonl",
     });
 
@@ -183,15 +180,13 @@ describe.skipIf(!DATABASE_URL)("POST /api/sessions/:id/reparse", () => {
 
     // Verify session was reset in DB
     const rows = await sql`
-      SELECT lifecycle, parse_status FROM sessions WHERE id = ${sessionId}
+      SELECT lifecycle FROM sessions WHERE id = ${sessionId}
     `;
     expect(rows[0].lifecycle).toBe("ended");
-    expect(rows[0].parse_status).toBe("pending");
   });
 
   test("reparse a 'failed' session: resets to ended, returns 202", async () => {
     const sessionId = await insertSession("failed", {
-      parse_status: "failed",
       transcript_s3_key: "transcripts/test/raw.jsonl",
     });
 
@@ -204,10 +199,9 @@ describe.skipIf(!DATABASE_URL)("POST /api/sessions/:id/reparse", () => {
 
     // Verify session was reset in DB
     const rows = await sql`
-      SELECT lifecycle, parse_status FROM sessions WHERE id = ${sessionId}
+      SELECT lifecycle FROM sessions WHERE id = ${sessionId}
     `;
     expect(rows[0].lifecycle).toBe("ended");
-    expect(rows[0].parse_status).toBe("pending");
   });
 
   test("reparse a 'detected' session: 409", async () => {
@@ -224,7 +218,6 @@ describe.skipIf(!DATABASE_URL)("POST /api/sessions/:id/reparse", () => {
 
   test("reparse with no transcript_s3_key: 409", async () => {
     const sessionId = await insertSession("parsed", {
-      parse_status: "completed",
       transcript_s3_key: null,
     });
 
@@ -235,17 +228,18 @@ describe.skipIf(!DATABASE_URL)("POST /api/sessions/:id/reparse", () => {
     expect(body.error).toBe("No transcript available. Cannot reparse.");
   });
 
-  test("reparse currently processing (parse_status = 'parsing'): 409", async () => {
-    const sessionId = await insertSession("ended", {
-      parse_status: "parsing",
+  test("reparse currently processing (lifecycle = 'transcript_ready'): 409", async () => {
+    const sessionId = await insertSession("transcript_ready", {
       transcript_s3_key: "transcripts/test/raw.jsonl",
     });
 
     const res = await reparse(sessionId);
+    // transcript_ready is not in the allowed source states for reset,
+    // so resetSessionForReparse returns false and the route returns 409.
     expect(res.status).toBe(409);
 
     const body = await res.json();
-    expect(body.error).toBe("Session is currently being processed. Try again later.");
+    expect(body.error).toBe("Session cannot be reparsed from current state");
   });
 
   test("reparse non-existent session: 404", async () => {

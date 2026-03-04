@@ -11,8 +11,13 @@
  *    a real Postgres. These are wrapped in describe.skipIf(!DATABASE_URL)
  *    so they don't fail in environments without a DB.
  *
- * The mock SQL approach from existing tests is used where possible to avoid
- * requiring Postgres for basic validation.
+ * Updated to reflect the 7-state lifecycle model:
+ *   detected -> ended -> transcript_ready -> parsed -> summarized -> complete
+ *   Any non-terminal state -> failed
+ *   failed -> ended (reset path for retry)
+ *
+ * parse_status and parse_error columns have been removed from the schema.
+ * Errors are tracked via `last_error`.
  */
 
 import { describe, expect, test, beforeAll, afterAll, beforeEach } from "bun:test";
@@ -32,102 +37,92 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("TRANSITIONS map", () => {
-  test("detected allows capturing, ended, and failed", () => {
-    expect(TRANSITIONS.detected).toEqual(["capturing", "ended", "failed"]);
+  test("detected allows ended, transcript_ready, and failed", () => {
+    expect(TRANSITIONS.detected).toEqual(["ended", "transcript_ready", "failed"]);
   });
 
-  test("capturing allows ended and failed", () => {
-    expect(TRANSITIONS.capturing).toEqual(["ended", "failed"]);
+  test("ended allows transcript_ready and failed", () => {
+    expect(TRANSITIONS.ended).toEqual(["transcript_ready", "failed"]);
   });
 
-  test("ended allows parsed and failed", () => {
-    expect(TRANSITIONS.ended).toEqual(["parsed", "failed"]);
+  test("transcript_ready allows parsed and failed", () => {
+    expect(TRANSITIONS.transcript_ready).toEqual(["parsed", "failed"]);
   });
 
   test("parsed allows summarized and failed", () => {
     expect(TRANSITIONS.parsed).toEqual(["summarized", "failed"]);
   });
 
-  test("summarized allows only archived", () => {
-    expect(TRANSITIONS.summarized).toEqual(["archived"]);
+  test("summarized allows only complete", () => {
+    expect(TRANSITIONS.summarized).toEqual(["complete"]);
   });
 
-  test("archived is terminal (no transitions)", () => {
-    expect(TRANSITIONS.archived).toEqual([]);
+  test("complete is terminal (no transitions)", () => {
+    expect(TRANSITIONS.complete).toEqual([]);
   });
 
-  test("failed is terminal (no transitions)", () => {
-    expect(TRANSITIONS.failed).toEqual([]);
+  test("failed allows ended (reset path for retry)", () => {
+    expect(TRANSITIONS.failed).toEqual(["ended"]);
   });
 });
 
 describe("isValidTransition", () => {
-  test("detected -> capturing is valid", () => {
-    expect(isValidTransition("detected", "capturing")).toBe(true);
-  });
-
-  test("detected -> ended is valid (short sessions skip capturing)", () => {
+  test("detected -> ended is valid", () => {
     expect(isValidTransition("detected", "ended")).toBe(true);
   });
 
-  test("detected -> parsed is NOT valid (must go through ended)", () => {
+  test("detected -> transcript_ready is valid (fast path)", () => {
+    expect(isValidTransition("detected", "transcript_ready")).toBe(true);
+  });
+
+  test("detected -> parsed is NOT valid (must go through ended/transcript_ready)", () => {
     expect(isValidTransition("detected", "parsed")).toBe(false);
   });
 
-  test("failed -> ended is NOT valid (terminal state)", () => {
-    expect(isValidTransition("failed", "ended")).toBe(false);
+  test("failed -> ended is valid (reset path)", () => {
+    expect(isValidTransition("failed", "ended")).toBe(true);
   });
 
-  test("summarized -> archived is valid", () => {
-    expect(isValidTransition("summarized", "archived")).toBe(true);
+  test("failed -> parsed is NOT valid", () => {
+    expect(isValidTransition("failed", "parsed")).toBe(false);
   });
 
-  test("summarized -> failed is NOT valid (only archived allowed)", () => {
-    // summarized can only go to archived per the transition map
+  test("summarized -> complete is valid", () => {
+    expect(isValidTransition("summarized", "complete")).toBe(true);
+  });
+
+  test("summarized -> failed is NOT valid (only complete allowed)", () => {
     expect(isValidTransition("summarized", "failed")).toBe(false);
   });
 
-  test("archived -> anything is NOT valid (terminal)", () => {
+  test("complete -> anything is NOT valid (terminal)", () => {
     const allStates: SessionLifecycle[] = [
-      "detected", "capturing", "ended", "parsed", "summarized", "archived", "failed",
+      "detected", "ended", "transcript_ready", "parsed", "summarized", "complete", "failed",
     ];
     for (const target of allStates) {
-      expect(isValidTransition("archived", target)).toBe(false);
-    }
-  });
-
-  test("failed -> anything is NOT valid (terminal)", () => {
-    const allStates: SessionLifecycle[] = [
-      "detected", "capturing", "ended", "parsed", "summarized", "archived", "failed",
-    ];
-    for (const target of allStates) {
-      expect(isValidTransition("failed", target)).toBe(false);
+      expect(isValidTransition("complete", target)).toBe(false);
     }
   });
 
   test("every state -> itself is NOT valid (no self-transitions)", () => {
     const allStates: SessionLifecycle[] = [
-      "detected", "capturing", "ended", "parsed", "summarized", "archived", "failed",
+      "detected", "ended", "transcript_ready", "parsed", "summarized", "complete", "failed",
     ];
     for (const state of allStates) {
       expect(isValidTransition(state, state)).toBe(false);
     }
   });
 
-  test("ended -> parsed is valid (normal pipeline progression)", () => {
-    expect(isValidTransition("ended", "parsed")).toBe(true);
+  test("ended -> transcript_ready is valid (normal pipeline progression)", () => {
+    expect(isValidTransition("ended", "transcript_ready")).toBe(true);
+  });
+
+  test("transcript_ready -> parsed is valid", () => {
+    expect(isValidTransition("transcript_ready", "parsed")).toBe(true);
   });
 
   test("parsed -> summarized is valid", () => {
     expect(isValidTransition("parsed", "summarized")).toBe(true);
-  });
-
-  test("capturing -> ended is valid", () => {
-    expect(isValidTransition("capturing", "ended")).toBe(true);
-  });
-
-  test("capturing -> failed is valid", () => {
-    expect(isValidTransition("capturing", "failed")).toBe(true);
   });
 });
 
@@ -190,18 +185,17 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
    */
   async function insertSession(
     lifecycle: SessionLifecycle = "detected",
-    overrides?: { parse_status?: string; updated_at?: string },
+    overrides?: { updated_at?: string },
   ): Promise<string> {
     const id = nextSessionId();
     await sql`
-      INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, parse_status, updated_at)
+      INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, updated_at)
       VALUES (
         ${id},
         ${workspaceId},
         ${deviceId},
         ${lifecycle},
         ${new Date().toISOString()},
-        ${overrides?.parse_status ?? "pending"},
         ${overrides?.updated_at ? new Date(overrides.updated_at) : sql`now()`}
       )
     `;
@@ -216,21 +210,21 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
     test("with correct from state: updates lifecycle, returns success", async () => {
       const sessionId = await insertSession("detected");
 
-      const result = await transitionSession(sql, sessionId, "detected", "capturing");
+      const result = await transitionSession(sql, sessionId, "detected", "ended");
 
       expect(result.success).toBe(true);
-      expect(result.newLifecycle).toBe("capturing");
+      expect(result.newLifecycle).toBe("ended");
 
       // Verify in DB
       const state = await getSessionState(sql, sessionId);
-      expect(state?.lifecycle).toBe("capturing");
+      expect(state?.lifecycle).toBe("ended");
     });
 
     test("with wrong from state: returns failure, session unchanged", async () => {
       const sessionId = await insertSession("detected");
 
       // Try to transition from "ended" but session is "detected"
-      const result = await transitionSession(sql, sessionId, "ended", "parsed");
+      const result = await transitionSession(sql, sessionId, "ended", "transcript_ready");
 
       expect(result.success).toBe(false);
       expect(result.reason).toContain("detected");
@@ -242,33 +236,35 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
     });
 
     test("with from array: succeeds if session is in any listed state", async () => {
-      const sessionId = await insertSession("capturing");
+      const sessionId = await insertSession("ended");
 
-      // Transition from either detected or capturing -> ended
+      // Transition from either detected or ended -> transcript_ready
       const result = await transitionSession(
         sql,
         sessionId,
-        ["detected", "capturing"],
-        "ended",
+        ["detected", "ended"],
+        "transcript_ready",
       );
 
       expect(result.success).toBe(true);
-      expect(result.newLifecycle).toBe("ended");
+      expect(result.newLifecycle).toBe("transcript_ready");
 
       const state = await getSessionState(sql, sessionId);
-      expect(state?.lifecycle).toBe("ended");
+      expect(state?.lifecycle).toBe("transcript_ready");
     });
 
     test("with additional updates: sets extra columns alongside lifecycle", async () => {
       const sessionId = await insertSession("ended");
 
+      // First advance to transcript_ready
+      await transitionSession(sql, sessionId, "ended", "transcript_ready");
+
       const result = await transitionSession(
         sql,
         sessionId,
-        "ended",
+        "transcript_ready",
         "parsed",
         {
-          parse_status: "completed",
           total_messages: 42,
           user_messages: 20,
           assistant_messages: 22,
@@ -282,12 +278,11 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
 
       // Verify the extra columns were set
       const rows = await sql`
-        SELECT lifecycle, parse_status, total_messages, user_messages,
+        SELECT lifecycle, total_messages, user_messages,
                assistant_messages, tokens_in, tokens_out, cost_estimate_usd
         FROM sessions WHERE id = ${sessionId}
       `;
       expect(rows[0].lifecycle).toBe("parsed");
-      expect(rows[0].parse_status).toBe("completed");
       expect(rows[0].total_messages).toBe(42);
       expect(rows[0].user_messages).toBe(20);
       expect(rows[0].assistant_messages).toBe(22);
@@ -301,7 +296,7 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
         sql,
         "nonexistent-session-999",
         "detected",
-        "capturing",
+        "ended",
       );
 
       expect(result.success).toBe(false);
@@ -311,7 +306,7 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
     test("invalid transition: returns failure before hitting DB", async () => {
       const sessionId = await insertSession("detected");
 
-      // detected -> parsed is not valid (must go through ended)
+      // detected -> parsed is not valid (must go through ended/transcript_ready)
       const result = await transitionSession(sql, sessionId, "detected", "parsed");
 
       expect(result.success).toBe(false);
@@ -321,10 +316,10 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
     test("concurrent transitions: only one succeeds", async () => {
       const sessionId = await insertSession("ended");
 
-      // Fire two concurrent ended -> parsed transitions
+      // Fire two concurrent ended -> transcript_ready transitions
       const [result1, result2] = await Promise.all([
-        transitionSession(sql, sessionId, "ended", "parsed"),
-        transitionSession(sql, sessionId, "ended", "parsed"),
+        transitionSession(sql, sessionId, "ended", "transcript_ready"),
+        transitionSession(sql, sessionId, "ended", "transcript_ready"),
       ]);
 
       // Exactly one should succeed
@@ -334,12 +329,12 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
       expect(successes).toHaveLength(1);
       expect(failures).toHaveLength(1);
 
-      // The failure should report the session is now in "parsed"
-      expect(failures[0].reason).toContain("parsed");
+      // The failure should report the session is now in "transcript_ready"
+      expect(failures[0].reason).toContain("transcript_ready");
 
-      // DB should show "parsed"
+      // DB should show "transcript_ready"
       const state = await getSessionState(sql, sessionId);
-      expect(state?.lifecycle).toBe("parsed");
+      expect(state?.lifecycle).toBe("transcript_ready");
     });
   });
 
@@ -348,7 +343,7 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
   // -----------------------------------------------------------------------
 
   describe("failSession", () => {
-    test("sets lifecycle to failed and records error", async () => {
+    test("sets lifecycle to failed and records error in last_error", async () => {
       const sessionId = await insertSession("ended");
 
       const result = await failSession(sql, sessionId, "Parser crashed: out of memory");
@@ -358,8 +353,7 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
 
       const state = await getSessionState(sql, sessionId);
       expect(state?.lifecycle).toBe("failed");
-      expect(state?.parse_status).toBe("failed");
-      expect(state?.parse_error).toBe("Parser crashed: out of memory");
+      expect(state?.last_error).toBe("Parser crashed: out of memory");
     });
 
     test("works from any non-terminal state", async () => {
@@ -368,8 +362,8 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
       const r1 = await failSession(sql, s1, "err");
       expect(r1.success).toBe(true);
 
-      // Test from "capturing"
-      const s2 = await insertSession("capturing");
+      // Test from "ended"
+      const s2 = await insertSession("ended");
       const r2 = await failSession(sql, s2, "err");
       expect(r2.success).toBe(true);
 
@@ -377,6 +371,11 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
       const s3 = await insertSession("parsed");
       const r3 = await failSession(sql, s3, "err");
       expect(r3.success).toBe(true);
+
+      // Test from "transcript_ready"
+      const s4 = await insertSession("transcript_ready");
+      const r4 = await failSession(sql, s4, "err");
+      expect(r4.success).toBe(true);
     });
 
     test("does NOT fail an already-failed session", async () => {
@@ -388,13 +387,13 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
       expect(result.reason).toContain("failed");
     });
 
-    test("does NOT fail an archived session", async () => {
-      const sessionId = await insertSession("archived");
+    test("does NOT fail a complete session", async () => {
+      const sessionId = await insertSession("complete");
 
       const result = await failSession(sql, sessionId, "too late");
 
       expect(result.success).toBe(false);
-      expect(result.reason).toContain("archived");
+      expect(result.reason).toContain("complete");
     });
 
     test("non-existent session: returns failure", async () => {
@@ -416,8 +415,7 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
       // Set some derived stats that should be cleared
       await sql`
         UPDATE sessions
-        SET parse_status = 'completed',
-            summary = 'test summary',
+        SET summary = 'test summary',
             total_messages = 10,
             tokens_in = 5000
         WHERE id = ${sessionId}
@@ -432,8 +430,7 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
       // Verify the session was reset
       const state = await getSessionState(sql, sessionId);
       expect(state?.lifecycle).toBe("ended");
-      expect(state?.parse_status).toBe("pending");
-      expect(state?.parse_error).toBeNull();
+      expect(state?.last_error).toBeNull();
 
       // Verify derived stats were cleared
       const rows = await sql`
@@ -445,10 +442,10 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
       expect(rows[0].tokens_in).toBeNull();
     });
 
-    test("from failed: resets to ended", async () => {
+    test("from failed: resets to ended, clears last_error", async () => {
       const sessionId = await insertSession("failed");
       await sql`
-        UPDATE sessions SET parse_error = 'some error' WHERE id = ${sessionId}
+        UPDATE sessions SET last_error = 'some error' WHERE id = ${sessionId}
       `;
 
       const result = await resetSessionForReparse(sql, sessionId);
@@ -457,7 +454,7 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
 
       const state = await getSessionState(sql, sessionId);
       expect(state?.lifecycle).toBe("ended");
-      expect(state?.parse_error).toBeNull();
+      expect(state?.last_error).toBeNull();
     });
 
     test("from detected: returns reset=false (not allowed)", async () => {
@@ -471,15 +468,6 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
       // Session should still be "detected"
       const state = await getSessionState(sql, sessionId);
       expect(state?.lifecycle).toBe("detected");
-    });
-
-    test("from capturing: returns reset=false (not allowed)", async () => {
-      const sessionId = await insertSession("capturing");
-
-      const result = await resetSessionForReparse(sql, sessionId);
-
-      expect(result.reset).toBe(false);
-      expect(result.previousLifecycle).toBeNull();
     });
 
     test("preserves transcript_s3_key", async () => {
@@ -511,15 +499,14 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
   // -----------------------------------------------------------------------
 
   describe("getSessionState", () => {
-    test("returns lifecycle, parse_status, parse_error for existing session", async () => {
+    test("returns lifecycle and last_error for existing session", async () => {
       const sessionId = await insertSession("ended");
 
       const state = await getSessionState(sql, sessionId);
 
       expect(state).not.toBeNull();
       expect(state!.lifecycle).toBe("ended");
-      expect(state!.parse_status).toBe("pending");
-      expect(state!.parse_error).toBeNull();
+      expect(state!.last_error).toBeNull();
     });
 
     test("returns null for non-existent session", async () => {
@@ -534,10 +521,9 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
   // -----------------------------------------------------------------------
 
   describe("findStuckSessions", () => {
-    test("finds sessions stuck longer than threshold", async () => {
-      // Insert a session with updated_at far in the past
-      const stuckId = await insertSession("ended", {
-        parse_status: "pending",
+    test("finds sessions stuck in transcript_ready longer than threshold", async () => {
+      // Insert a transcript_ready session with updated_at far in the past
+      const stuckId = await insertSession("transcript_ready", {
         updated_at: "2020-01-01T00:00:00Z",
       });
 
@@ -545,15 +531,12 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
 
       const found = stuck.find((s) => s.id === stuckId);
       expect(found).toBeDefined();
-      expect(found!.lifecycle).toBe("ended");
-      expect(found!.parse_status).toBe("pending");
+      expect(found!.lifecycle).toBe("transcript_ready");
     });
 
     test("ignores recently updated sessions", async () => {
-      // Insert a session updated very recently (now)
-      const recentId = await insertSession("ended", {
-        parse_status: "pending",
-      });
+      // Insert a transcript_ready session updated very recently (now)
+      const recentId = await insertSession("transcript_ready");
 
       // Use a huge threshold so nothing is "stuck"
       const stuck = await findStuckSessions(sql, 86_400_000); // 24 hours
@@ -562,10 +545,9 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
       expect(found).toBeUndefined();
     });
 
-    test("ignores sessions not in ended/parsed lifecycle", async () => {
-      // A "detected" session with pending parse_status should NOT be found
+    test("ignores sessions not in transcript_ready lifecycle", async () => {
+      // A "detected" session should NOT be found by findStuckSessions
       const detectedId = await insertSession("detected", {
-        parse_status: "pending",
         updated_at: "2020-01-01T00:00:00Z",
       });
 
@@ -575,28 +557,14 @@ describe.skipIf(!DATABASE_URL)("session-lifecycle (database)", () => {
       expect(found).toBeUndefined();
     });
 
-    test("finds sessions stuck in 'parsing' parse_status", async () => {
-      const parsingId = await insertSession("ended", {
-        parse_status: "parsing",
+    test("ignores ended sessions (only transcript_ready is 'stuck')", async () => {
+      const endedId = await insertSession("ended", {
         updated_at: "2020-01-01T00:00:00Z",
       });
 
       const stuck = await findStuckSessions(sql, 1000);
 
-      const found = stuck.find((s) => s.id === parsingId);
-      expect(found).toBeDefined();
-      expect(found!.parse_status).toBe("parsing");
-    });
-
-    test("ignores sessions with completed parse_status", async () => {
-      const completedId = await insertSession("ended", {
-        parse_status: "completed",
-        updated_at: "2020-01-01T00:00:00Z",
-      });
-
-      const stuck = await findStuckSessions(sql, 1000);
-
-      const found = stuck.find((s) => s.id === completedId);
+      const found = stuck.find((s) => s.id === endedId);
       expect(found).toBeUndefined();
     });
   });

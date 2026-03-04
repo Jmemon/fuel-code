@@ -103,14 +103,14 @@ beforeAll(async () => {
 
   // Insert session WITH relationships
   await sql`
-    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, parse_status, team_name, team_role, subagent_count)
-    VALUES (${sessionWithRelId}, ${workspaceId}, ${deviceId}, ${"parsed"}, ${new Date().toISOString()}, ${"completed"}, ${teamName}, ${"lead"}, ${2})
+    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, team_name, team_role, subagent_count)
+    VALUES (${sessionWithRelId}, ${workspaceId}, ${deviceId}, ${"parsed"}, ${new Date().toISOString()}, ${teamName}, ${"lead"}, ${2})
   `;
 
   // Insert session WITHOUT relationships (backward compat test)
   await sql`
-    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, parse_status)
-    VALUES (${sessionPlainId}, ${workspaceId}, ${deviceId}, ${"parsed"}, ${new Date().toISOString()}, ${"completed"})
+    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at)
+    VALUES (${sessionPlainId}, ${workspaceId}, ${deviceId}, ${"parsed"}, ${new Date().toISOString()})
   `;
 
   // Insert team row

@@ -931,7 +931,7 @@ describe("POST /api/sessions/batch-status", () => {
     expect(body.statuses).toBeDefined();
     expect(body.not_found).toEqual([]);
 
-    // Verify each session returns only { lifecycle } — no parse_status
+    // Verify each session returns only { lifecycle }
     expect(body.statuses["sess-01"]).toEqual({
       lifecycle: "parsed",
     });

@@ -100,7 +100,6 @@ function makeSession(overrides: Partial<SessionDetail> = {}): SessionDetail {
     device_id: "dev-001",
     cc_session_id: "cc-123",
     lifecycle: "summarized",
-    parse_status: "completed",
     cwd: "/home/user/project",
     git_branch: "main",
     git_remote: "github.com/user/repo",
@@ -656,9 +655,9 @@ describe("session resolver — full ULID", () => {
 // Tests: Lifecycle-gated transcript access
 // ---------------------------------------------------------------------------
 
-describe("session detail — capturing + --transcript", () => {
-  it("shows transcript not available message for capturing sessions", async () => {
-    const session = makeSession({ lifecycle: "capturing" });
+describe("session detail — detected + --transcript", () => {
+  it("shows transcript not available message for detected sessions", async () => {
+    const session = makeSession({ lifecycle: "detected" });
     setupSessionRoutes(session);
 
     // Capture stdout by temporarily replacing process.stdout.write
@@ -675,7 +674,7 @@ describe("session detail — capturing + --transcript", () => {
 
     try {
       await runSessionDetail(session.id, { transcript: true });
-      expect(captured).toContain("Transcript not yet available. Session is currently capturing.");
+      expect(captured).toContain("Transcript not yet available. Session is currently detected.");
     } finally {
       process.stdout.write = origWrite;
       FuelApiClient.fromConfig = origFromConfig;

@@ -106,10 +106,10 @@ export async function seedFixtures(sql: postgres.Sql): Promise<void> {
 
   // Session 2: fuel-code, summarized (completed)
   await sql`
-    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, parse_status, started_at, ended_at, duration_ms,
+    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, ended_at, duration_ms,
                           model, git_branch, total_messages, user_messages, assistant_messages,
                           tokens_in, tokens_out, cache_read_tokens, cost_estimate_usd, tags, summary, initial_prompt, tool_use_count)
-    VALUES (${IDS.sess_2_summarized}, ${IDS.ws_fuel_code}, ${IDS.dev_macbook}, 'summarized', 'completed',
+    VALUES (${IDS.sess_2_summarized}, ${IDS.ws_fuel_code}, ${IDS.dev_macbook}, 'summarized',
             ${todayAt(10, 0)}, ${todayAt(10, 45)}, ${45 * 60_000},
             'claude-sonnet-4-20250514', 'feat/auth',
             24, 10, 14, 8000, 6000, 2000, 0.42, '{"auth","bugfix"}',
@@ -118,10 +118,10 @@ export async function seedFixtures(sql: postgres.Sql): Promise<void> {
 
   // Session 3: fuel-code, summarized
   await sql`
-    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, parse_status, started_at, ended_at, duration_ms,
+    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, ended_at, duration_ms,
                           model, git_branch, total_messages, user_messages, assistant_messages,
                           tokens_in, tokens_out, cost_estimate_usd, tags, summary, initial_prompt, tool_use_count)
-    VALUES (${IDS.sess_3_summarized}, ${IDS.ws_fuel_code}, ${IDS.dev_remote}, 'summarized', 'completed',
+    VALUES (${IDS.sess_3_summarized}, ${IDS.ws_fuel_code}, ${IDS.dev_remote}, 'summarized',
             ${todayAt(11, 0)}, ${todayAt(11, 30)}, ${30 * 60_000},
             'claude-sonnet-4-20250514', 'main',
             16, 7, 9, 6000, 4500, 0.30, '{}',
@@ -130,9 +130,9 @@ export async function seedFixtures(sql: postgres.Sql): Promise<void> {
 
   // Session 4: fuel-code, failed
   await sql`
-    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, parse_status, parse_error, started_at, ended_at, duration_ms,
+    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, last_error, started_at, ended_at, duration_ms,
                           model, git_branch, cost_estimate_usd, summary)
-    VALUES (${IDS.sess_4_failed}, ${IDS.ws_fuel_code}, ${IDS.dev_macbook}, 'failed', 'failed',
+    VALUES (${IDS.sess_4_failed}, ${IDS.ws_fuel_code}, ${IDS.dev_macbook}, 'failed',
             'S3 download failed: key not found',
             ${todayAt(12, 0)}, ${todayAt(12, 10)}, ${10 * 60_000},
             'claude-sonnet-4-20250514', 'main',
@@ -141,11 +141,11 @@ export async function seedFixtures(sql: postgres.Sql): Promise<void> {
 
   // Session 5: api-service, parsed (has transcript data)
   await sql`
-    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, parse_status, started_at, ended_at, duration_ms,
+    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, ended_at, duration_ms,
                           model, git_branch, total_messages, user_messages, assistant_messages,
                           tokens_in, tokens_out, cache_read_tokens, cost_estimate_usd, tags,
                           summary, initial_prompt, tool_use_count)
-    VALUES (${IDS.sess_5_parsed}, ${IDS.ws_api_service}, ${IDS.dev_macbook}, 'parsed', 'completed',
+    VALUES (${IDS.sess_5_parsed}, ${IDS.ws_api_service}, ${IDS.dev_macbook}, 'parsed',
             ${todayAt(13, 0)}, ${todayAt(13, 20)}, ${20 * 60_000},
             'claude-sonnet-4-20250514', 'feat/api',
             20, 8, 12, 10000, 7500, 3000, 0.55, '{"api"}',
@@ -154,9 +154,9 @@ export async function seedFixtures(sql: postgres.Sql): Promise<void> {
 
   // Session 6: api-service, summarized
   await sql`
-    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, parse_status, started_at, ended_at, duration_ms,
+    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, ended_at, duration_ms,
                           model, git_branch, total_messages, tokens_in, tokens_out, cost_estimate_usd, summary, initial_prompt, tool_use_count)
-    VALUES (${IDS.sess_6_summarized}, ${IDS.ws_api_service}, ${IDS.dev_macbook}, 'summarized', 'completed',
+    VALUES (${IDS.sess_6_summarized}, ${IDS.ws_api_service}, ${IDS.dev_macbook}, 'summarized',
             ${todayAt(14, 0)}, ${todayAt(14, 25)}, ${25 * 60_000},
             'claude-sonnet-4-20250514', 'main',
             18, 7000, 5000, 0.35, 'Added unit tests for API', 'Write tests for the API', 6)
@@ -164,9 +164,9 @@ export async function seedFixtures(sql: postgres.Sql): Promise<void> {
 
   // Session 7: _unassociated, summarized
   await sql`
-    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, parse_status, started_at, ended_at, duration_ms,
+    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, ended_at, duration_ms,
                           model, git_branch, total_messages, tokens_in, tokens_out, cost_estimate_usd, summary)
-    VALUES (${IDS.sess_7_summarized}, ${IDS.ws_unassociated}, ${IDS.dev_macbook}, 'summarized', 'completed',
+    VALUES (${IDS.sess_7_summarized}, ${IDS.ws_unassociated}, ${IDS.dev_macbook}, 'summarized',
             ${todayAt(15, 0)}, ${todayAt(15, 15)}, ${15 * 60_000},
             'claude-sonnet-4-20250514', 'develop',
             10, 4000, 3000, 0.20, 'Fixed deployment pipeline')
@@ -174,9 +174,9 @@ export async function seedFixtures(sql: postgres.Sql): Promise<void> {
 
   // Session 8: _unassociated, summarized
   await sql`
-    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, parse_status, started_at, ended_at, duration_ms,
+    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, ended_at, duration_ms,
                           model, git_branch, total_messages, tokens_in, tokens_out, cost_estimate_usd, summary)
-    VALUES (${IDS.sess_8_summarized}, ${IDS.ws_unassociated}, ${IDS.dev_macbook}, 'summarized', 'completed',
+    VALUES (${IDS.sess_8_summarized}, ${IDS.ws_unassociated}, ${IDS.dev_macbook}, 'summarized',
             ${todayAt(16, 0)}, ${todayAt(16, 10)}, ${10 * 60_000},
             'claude-sonnet-4-20250514', 'develop',
             8, 3000, 2000, 0.12, 'Quick documentation update')
