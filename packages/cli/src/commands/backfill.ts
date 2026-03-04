@@ -212,7 +212,7 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
   // concurrent async contexts (upload worker pool + pipeline poller).
   let dualBarInit = false;
   const writeDualBars = (line1: string, line2: string): void => {
-    const prefix = dualBarInit ? "\x1b[1A\r" : "";
+    const prefix = dualBarInit ? "\x1b[1A\x1b[1A\r" : "";
     process.stderr.write(`${prefix}\x1b[2K${line1}\n\x1b[2K${line2}`);
     dualBarInit = true;
   };
