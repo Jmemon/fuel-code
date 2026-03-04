@@ -243,7 +243,12 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
                     FROM session_worktrees wt WHERE wt.session_id = s.id),
                    '{}'
                  ) AS worktree_names,
-                 (SELECT COUNT(*)::int FROM teammates tm WHERE tm.session_id = s.id) AS num_teammates
+                 (SELECT COUNT(*)::int FROM teammates tm WHERE tm.session_id = s.id) AS num_teammates,
+                 COALESCE(
+                   (SELECT array_agg(tm2.name ORDER BY tm2.created_at)
+                    FROM teammates tm2 WHERE tm2.session_id = s.id),
+                   '{}'
+                 ) AS teammate_names
           FROM sessions s
           JOIN workspaces w ON s.workspace_id = w.id
           JOIN devices d ON s.device_id = d.id

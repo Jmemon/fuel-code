@@ -5,6 +5,9 @@
  * Separates a data layer (fetchSessions, resolve helpers) from the presentation
  * layer (formatSessionsTable, Commander registration) so the TUI can reuse
  * the data functions independently.
+ *
+ * Sessions with teammates display an inline annotation showing teammate names.
+ * Sessions with subagents display an annotation showing agent types.
  */
 
 import { Command } from "commander";
@@ -82,7 +85,7 @@ export async function fetchSessions(
 }
 
 // ---------------------------------------------------------------------------
-// Presentation Layer — enriched table with team grouping, subagent
+// Presentation Layer — enriched table with teammate annotations, subagent
 // annotations, and ROLE column
 // ---------------------------------------------------------------------------
 
@@ -96,89 +99,18 @@ interface SessionExt extends Session {
   tokens_out?: number | string | null;
   subagent_count?: number;
   subagent_types?: string[];
+  /** Number of teammates in this session's team (from list query) */
+  num_teammates?: number;
+  /** Display names of teammates (from list query) */
+  teammate_names?: string[];
 }
 
-/** A team group: sessions sharing the same team_name */
-interface TeamGroup {
-  teamName: string;
-  /** Most recent started_at among members (for interleave ordering) */
-  latestStartedAt: string;
-  /** Members sorted: lead first, then by started_at DESC */
-  members: SessionExt[];
-}
-
-/** An item in the ordered render list */
-type RenderItem =
-  | { type: "standalone"; session: SessionExt }
-  | { type: "team"; teamName: string; members: SessionExt[] };
-
-/** Separate sessions into team groups and standalone sessions */
-function groupSessionsByTeam(sessions: SessionExt[]): {
-  teamGroups: TeamGroup[];
-  standalone: SessionExt[];
-} {
-  const teamMap = new Map<string, SessionExt[]>();
-  const standalone: SessionExt[] = [];
-
-  for (const s of sessions) {
-    if (s.team_name) {
-      const list = teamMap.get(s.team_name) ?? [];
-      list.push(s);
-      teamMap.set(s.team_name, list);
-    } else {
-      standalone.push(s);
-    }
-  }
-
-  const teamGroups: TeamGroup[] = [];
-  for (const [teamName, members] of teamMap) {
-    // Sort: lead first, then by started_at DESC
-    members.sort((a, b) => {
-      if (a.team_role === "lead" && b.team_role !== "lead") return -1;
-      if (b.team_role === "lead" && a.team_role !== "lead") return 1;
-      return new Date(b.started_at).getTime() - new Date(a.started_at).getTime();
-    });
-    const latestStartedAt = members.reduce(
-      (latest, m) => (m.started_at > latest ? m.started_at : latest),
-      members[0].started_at,
-    );
-    teamGroups.push({ teamName, latestStartedAt, members });
-  }
-
-  return { teamGroups, standalone };
-}
-
-/** Interleave teams and standalone sessions by most recent timestamp */
-function buildOrderedItems(
-  teamGroups: TeamGroup[],
-  standalone: SessionExt[],
-): RenderItem[] {
-  // Build a flat list with sort keys
-  const items: { sortKey: string; item: RenderItem }[] = [];
-
-  for (const group of teamGroups) {
-    items.push({
-      sortKey: group.latestStartedAt,
-      item: { type: "team", teamName: group.teamName, members: group.members },
-    });
-  }
-
-  for (const s of standalone) {
-    items.push({
-      sortKey: s.started_at,
-      item: { type: "standalone", session: s },
-    });
-  }
-
-  // Sort DESC (most recent first)
-  items.sort((a, b) => (a.sortKey > b.sortKey ? -1 : a.sortKey < b.sortKey ? 1 : 0));
-  return items.map((i) => i.item);
-}
-
-/** Derive the ROLE string for a session */
+/**
+ * Derive the ROLE string for a session.
+ * Sessions with teammates show "team", sessions with subagents show "parent".
+ */
 function getRole(s: SessionExt): string {
-  if (s.team_role === "lead") return pc.bold("\u2605 lead");
-  if (s.team_role === "member") return "member";
+  if ((s.num_teammates ?? 0) > 0) return pc.magenta("team");
   if ((s.subagent_count ?? 0) > 0) return "parent";
   return "";
 }
@@ -245,17 +177,24 @@ function renderSessionRow(
   s: SessionExt,
   columns: EnrichedCol[],
   widths: number[],
-  opts?: { teamBorder?: boolean },
 ): string {
   const cells = columns.map((col, i) => {
     const value = col.cell(s);
     return pad(truncate(value, widths[i]), widths[i], col.align);
   });
-  const line = cells.join("  ");
-  if (opts?.teamBorder) {
-    return pc.magenta("\u2502") + " " + line;
+  return cells.join("  ");
+}
+
+/**
+ * Calculate the character offset to align annotation lines under the SUMMARY column.
+ */
+function getSummaryOffset(columns: EnrichedCol[], widths: number[]): number {
+  const summaryIdx = columns.findIndex((c) => c.header === "SUMMARY");
+  let offset = 0;
+  for (let i = 0; i < summaryIdx; i++) {
+    offset += widths[i] + 2; // column width + gap
   }
-  return line;
+  return offset;
 }
 
 /** Render subagent annotation line below a parent session */
@@ -263,33 +202,32 @@ function renderSubagentAnnotation(
   s: SessionExt,
   columns: EnrichedCol[],
   widths: number[],
-  opts?: { teamBorder?: boolean },
 ): string {
   const types = (s.subagent_types ?? []).join(", ");
   const count = s.subagent_count ?? 0;
   const annotation = pc.dim(`\u2514\u2500 ${count} agent${count !== 1 ? "s" : ""} (${types})`);
+  const offset = getSummaryOffset(columns, widths);
+  return " ".repeat(offset) + annotation;
+}
 
-  // Calculate offset: sum of all column widths + gaps up to SUMMARY column
-  // so the annotation aligns under the SUMMARY column
-  const summaryIdx = columns.findIndex((c) => c.header === "SUMMARY");
-  let offset = 0;
-  for (let i = 0; i < summaryIdx; i++) {
-    offset += widths[i] + 2; // column width + gap
-  }
-
-  const line = " ".repeat(offset) + annotation;
-  if (opts?.teamBorder) {
-    return pc.magenta("\u2502") + " " + line;
-  }
-  return line;
+/** Render teammate annotation line below a session that has teammates */
+function renderTeammateAnnotation(
+  s: SessionExt,
+  columns: EnrichedCol[],
+  widths: number[],
+): string {
+  const names = (s.teammate_names ?? []).join(", ");
+  const annotation = pc.dim(`\u2514\u2500 Teammates: ${names}`);
+  const offset = getSummaryOffset(columns, widths);
+  return " ".repeat(offset) + annotation;
 }
 
 /**
- * Format sessions into an enriched table with team grouping, subagent
- * annotations, and a ROLE column.
+ * Format sessions into an enriched table with teammate and subagent
+ * annotations and a ROLE column.
  *
- * Team sessions are visually grouped with box-drawing borders.
- * Parent sessions (with subagents) show an annotation line below.
+ * Sessions with teammates show a teammate annotation line below.
+ * Parent sessions (with subagents) show a subagent annotation line below.
  */
 export function formatSessionsTable(sessions: Session[], hasFilters?: boolean): string {
   if (sessions.length === 0) {
@@ -303,14 +241,6 @@ export function formatSessionsTable(sessions: Session[], hasFilters?: boolean): 
   const allSessions = sessions as SessionExt[];
   const columns = getColumns();
   const widths = calcWidths(columns, allSessions);
-  const gap = 2;
-
-  // Total line width for team borders
-  const totalLineWidth = widths.reduce((a, b) => a + b, 0) + (columns.length - 1) * gap;
-
-  // Group and order
-  const { teamGroups, standalone } = groupSessionsByTeam(allSessions);
-  const orderedItems = buildOrderedItems(teamGroups, standalone);
 
   const lines: string[] = [];
 
@@ -320,27 +250,17 @@ export function formatSessionsTable(sessions: Session[], hasFilters?: boolean): 
     .join("  ");
   lines.push(headerLine);
 
-  for (const item of orderedItems) {
-    if (item.type === "standalone") {
-      lines.push(renderSessionRow(item.session, columns, widths));
-      if ((item.session.subagent_count ?? 0) > 0 && (item.session.subagent_types?.length ?? 0) > 0) {
-        lines.push(renderSubagentAnnotation(item.session, columns, widths));
-      }
-    } else {
-      // Team header
-      const label = ` Team: ${item.teamName} `;
-      const dashCount = Math.max(0, totalLineWidth - label.length);
-      lines.push(pc.magenta("\u250C\u2500" + label + "\u2500".repeat(dashCount)));
+  for (const s of allSessions) {
+    lines.push(renderSessionRow(s, columns, widths));
 
-      for (const member of item.members) {
-        lines.push(renderSessionRow(member, columns, widths, { teamBorder: true }));
-        if ((member.subagent_count ?? 0) > 0 && (member.subagent_types?.length ?? 0) > 0) {
-          lines.push(renderSubagentAnnotation(member, columns, widths, { teamBorder: true }));
-        }
-      }
+    // Teammate annotation: show teammate names when session has teammates
+    if ((s.num_teammates ?? 0) > 0 && (s.teammate_names?.length ?? 0) > 0) {
+      lines.push(renderTeammateAnnotation(s, columns, widths));
+    }
 
-      // Team footer
-      lines.push(pc.magenta("\u2514" + "\u2500".repeat(totalLineWidth + 1)));
+    // Subagent annotation: show agent types when session has subagents
+    if ((s.subagent_count ?? 0) > 0 && (s.subagent_types?.length ?? 0) > 0) {
+      lines.push(renderSubagentAnnotation(s, columns, widths));
     }
   }
 

@@ -368,23 +368,16 @@ describe("formatSessionsTable", () => {
     const plain = stripAnsi(output);
     // ROLE column header should exist, but the cell should be empty for standalone
     expect(plain).toContain("ROLE");
-    // The row should NOT contain "parent", "lead", or "member"
+    // The row should NOT contain "parent", "team", or "member"
     const lines = plain.split("\n").slice(1); // skip header
-    expect(lines[0]).not.toMatch(/parent|lead|member/);
+    expect(lines[0]).not.toMatch(/parent|team|member/);
   });
 
-  it("shows star lead role for team lead sessions", () => {
-    const sessions = [makeSession({ team_name: "my-team", team_role: "lead" })] as any;
+  it("shows 'team' role for sessions with teammates", () => {
+    const sessions = [makeSession({ num_teammates: 3, teammate_names: ["alice", "bob", "charlie"] })] as any;
     const output = formatSessionsTable(sessions);
     const plain = stripAnsi(output);
-    expect(plain).toContain("lead");
-  });
-
-  it("shows member role for team member sessions", () => {
-    const sessions = [makeSession({ team_name: "my-team", team_role: "member" })] as any;
-    const output = formatSessionsTable(sessions);
-    const plain = stripAnsi(output);
-    expect(plain).toContain("member");
+    expect(plain).toContain("team");
   });
 
   // -- Subagent annotation tests --
@@ -403,46 +396,57 @@ describe("formatSessionsTable", () => {
     expect(plain).not.toContain("agents");
   });
 
-  // -- Team grouping tests --
+  // -- Teammate annotation tests --
 
-  it("groups team sessions with box-drawing borders", () => {
-    const sessions = [
-      makeSession({ id: "01HZ0000000000000000001", team_name: "deploy-pipeline", team_role: "lead", summary: "Leading deploy" }),
-      makeSession({ id: "01HZ0000000000000000002", team_name: "deploy-pipeline", team_role: "member", summary: "Writing tests" }),
-    ] as any;
+  it("renders teammate annotation line below session with teammates", () => {
+    const sessions = [makeSession({
+      num_teammates: 3,
+      teammate_names: ["alice", "bob", "player-a"],
+      summary: "Team session work",
+    })] as any;
     const output = formatSessionsTable(sessions);
     const plain = stripAnsi(output);
-    expect(plain).toContain("Team: deploy-pipeline");
-    expect(plain).toContain("Leading deploy");
-    expect(plain).toContain("Writing tests");
+    expect(plain).toContain("Teammates: alice, bob, player-a");
+    expect(plain).toContain("Team session work");
   });
 
-  it("renders team lead before members", () => {
-    const sessions = [
-      makeSession({ id: "01HZ0000000000000000001", team_name: "my-team", team_role: "member", summary: "Member work", started_at: "2025-06-15T11:00:00Z" }),
-      makeSession({ id: "01HZ0000000000000000002", team_name: "my-team", team_role: "lead", summary: "Lead work", started_at: "2025-06-15T10:00:00Z" }),
-    ] as any;
+  it("does not render teammate annotation when num_teammates is 0", () => {
+    const sessions = [makeSession({ num_teammates: 0, teammate_names: [] })] as any;
     const output = formatSessionsTable(sessions);
     const plain = stripAnsi(output);
-    const leadIdx = plain.indexOf("Lead work");
-    const memberIdx = plain.indexOf("Member work");
-    expect(leadIdx).toBeLessThan(memberIdx);
+    expect(plain).not.toContain("Teammates");
   });
 
-  it("interleaves team groups and standalone sessions by time", () => {
+  it("does not render teammate annotation when teammate_names is missing", () => {
+    const sessions = [makeSession()] as any;
+    const output = formatSessionsTable(sessions);
+    const plain = stripAnsi(output);
+    expect(plain).not.toContain("Teammates");
+  });
+
+  it("renders both teammate and subagent annotations on same session", () => {
+    const sessions = [makeSession({
+      num_teammates: 2,
+      teammate_names: ["alice", "bob"],
+      subagent_count: 2,
+      subagent_types: ["researcher", "tester"],
+    })] as any;
+    const output = formatSessionsTable(sessions);
+    const plain = stripAnsi(output);
+    expect(plain).toContain("Teammates: alice, bob");
+    expect(plain).toContain("2 agents (researcher, tester)");
+  });
+
+  it("non-team sessions display unchanged alongside team sessions", () => {
     const sessions = [
-      makeSession({ id: "01HZ0000000000000000001", summary: "Standalone early", started_at: "2025-06-15T08:00:00Z" }),
-      makeSession({ id: "01HZ0000000000000000002", team_name: "team-a", team_role: "lead", summary: "Team work", started_at: "2025-06-15T12:00:00Z" }),
-      makeSession({ id: "01HZ0000000000000000003", summary: "Standalone late", started_at: "2025-06-15T14:00:00Z" }),
+      makeSession({ id: "01HZ0000000000000000001", summary: "Solo work" }),
+      makeSession({ id: "01HZ0000000000000000002", summary: "Team work", num_teammates: 2, teammate_names: ["alice", "bob"] }),
     ] as any;
     const output = formatSessionsTable(sessions);
     const plain = stripAnsi(output);
-    // Most recent first: "Standalone late" before "Team work" before "Standalone early"
-    const lateIdx = plain.indexOf("Standalone late");
-    const teamIdx = plain.indexOf("Team work");
-    const earlyIdx = plain.indexOf("Standalone early");
-    expect(lateIdx).toBeLessThan(teamIdx);
-    expect(teamIdx).toBeLessThan(earlyIdx);
+    expect(plain).toContain("Solo work");
+    expect(plain).toContain("Team work");
+    expect(plain).toContain("Teammates: alice, bob");
   });
 });
 
