@@ -615,38 +615,29 @@ async function persistRelationships(
   try {
     // 1. Upsert subagents — hooks may have inserted rows in real-time,
     //    parser upserts retroactively with COALESCE to fill gaps.
+    // Note: team_name column was dropped from subagents in migration 006.
+    // Teammate association is handled later via teammate_id FK.
     for (const sa of parseResult.subagents) {
       const id = generateId();
       await sql`
         INSERT INTO subagents (id, session_id, agent_id, agent_type, agent_name, model,
-          spawning_tool_use_id, team_name, isolation, run_in_background, status, started_at)
+          spawning_tool_use_id, isolation, run_in_background, status, started_at)
         VALUES (${id}, ${sessionId}, ${sa.agent_id}, ${sa.agent_type}, ${sa.agent_name ?? null},
-          ${sa.model ?? null}, ${sa.spawning_tool_use_id}, ${sa.team_name ?? null},
+          ${sa.model ?? null}, ${sa.spawning_tool_use_id},
           ${sa.isolation ?? null}, ${sa.run_in_background}, ${"completed"}, ${sa.started_at || null})
         ON CONFLICT (session_id, agent_id) DO UPDATE SET
           agent_type = COALESCE(EXCLUDED.agent_type, subagents.agent_type),
           agent_name = COALESCE(EXCLUDED.agent_name, subagents.agent_name),
           model = COALESCE(EXCLUDED.model, subagents.model),
           spawning_tool_use_id = COALESCE(EXCLUDED.spawning_tool_use_id, subagents.spawning_tool_use_id),
-          team_name = COALESCE(EXCLUDED.team_name, subagents.team_name),
           isolation = COALESCE(EXCLUDED.isolation, subagents.isolation)
       `;
     }
 
-    // 2. Upsert teams — unique on team_name; merge member_count and metadata
-    for (const team of parseResult.teams) {
-      const id = generateId();
-      const memberCount = parseResult.subagents.filter(s => s.team_name === team.team_name).length;
-      await sql`
-        INSERT INTO teams (id, team_name, description, lead_session_id, created_at, member_count, metadata)
-        VALUES (${id}, ${team.team_name}, ${team.description ?? null}, ${sessionId}, now(),
-          ${memberCount}, ${JSON.stringify({ message_count: team.message_count })})
-        ON CONFLICT (team_name) DO UPDATE SET
-          description = COALESCE(EXCLUDED.description, teams.description),
-          member_count = GREATEST(teams.member_count, EXCLUDED.member_count),
-          metadata = jsonb_set(COALESCE(teams.metadata, '{}'), '{message_count}', ${String(team.message_count)}::jsonb)
-      `;
-    }
+    // 2. Teams and teammates are now handled by team-detection.ts (T15/T16)
+    //    via extractTeamIntervals, persistTeams, extractTeammates, persistTeammates
+    //    which are called in Steps 8b and 8c below. The old globally-scoped
+    //    team upsert has been removed (migration 006 changed the teams schema).
 
     // 3. Insert skills (delete-first for idempotent reparse)
     await sql`DELETE FROM session_skills WHERE session_id = ${sessionId}`;
@@ -669,13 +660,13 @@ async function persistRelationships(
       `;
     }
 
-    // 5. Update session metadata (permission_mode, team info, resume chain)
-    if (parseResult.permission_mode || parseResult.teams.length > 0 || parseResult.resumed_from_session_id) {
+    // 5. Update session metadata (permission_mode, resume chain)
+    // Note: team_name and team_role columns were dropped from sessions in
+    // migration 006. Team data is now in the teams/teammates tables.
+    if (parseResult.permission_mode || parseResult.resumed_from_session_id) {
       await sql`
         UPDATE sessions SET
           permission_mode = COALESCE(${parseResult.permission_mode ?? null}, permission_mode),
-          team_name = COALESCE(${parseResult.teams[0]?.team_name ?? null}, team_name),
-          team_role = COALESCE(${parseResult.teams.length > 0 ? "lead" : null}, team_role),
           resumed_from_session_id = COALESCE(${parseResult.resumed_from_session_id ?? null}, resumed_from_session_id)
         WHERE id = ${sessionId}
       `;
@@ -714,7 +705,7 @@ async function parseSubagentTranscripts(
 ): Promise<void> {
   try {
     const subagentRows = await sql`
-      SELECT id, agent_id, transcript_s3_key, team_name
+      SELECT id, agent_id, transcript_s3_key
       FROM subagents
       WHERE session_id = ${sessionId}
         AND transcript_s3_key IS NOT NULL
@@ -731,7 +722,6 @@ async function parseSubagentTranscripts(
       const subagentUlid = row.id as string;
       const agentId = row.agent_id as string;
       const s3Key = row.transcript_s3_key as string;
-      const subagentTeamName = row.team_name as string | null;
 
       try {
         const content = await s3.download(s3Key);
@@ -749,7 +739,7 @@ async function parseSubagentTranscripts(
         let teammateId: string | null = null;
         try {
           teammateId = await resolveTeammateFromParseResult(
-            sql, sessionId, subParseResult, subagentTeamName,
+            sql, sessionId, subParseResult,
           );
           if (teammateId) {
             logger.info({ agentId, teammateId }, `Resolved teammate_id for sub-agent ${agentId}`);

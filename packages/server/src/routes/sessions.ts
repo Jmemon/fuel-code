@@ -245,7 +245,7 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
                  ) AS worktree_names,
                  (SELECT COUNT(*)::int FROM teammates tm WHERE tm.session_id = s.id) AS num_teammates,
                  COALESCE(
-                   (SELECT array_agg(tm2.name ORDER BY tm2.created_at)
+                   (SELECT array_agg(tm2.entity_name ORDER BY tm2.created_at)
                     FROM teammates tm2 WHERE tm2.session_id = s.id),
                    '{}'
                  ) AS teammate_names
