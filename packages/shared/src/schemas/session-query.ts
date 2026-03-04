@@ -58,7 +58,7 @@ export const sessionListQuerySchema = z.object({
   /** Filter sessions that have at least one team (EXISTS subquery on teams table) */
   has_team: z.enum(["true", "false"]).optional(),
   /** Number of results per page (default 50, max 250) */
-  limit: z.coerce.number().int().min(1).max(250).default(50),
+  limit: z.coerce.number().int().min(1).max(1000).default(50),
   /** Cursor for pagination — base64 encoded { s: started_at, i: id } */
   cursor: z.string().optional(),
 });
