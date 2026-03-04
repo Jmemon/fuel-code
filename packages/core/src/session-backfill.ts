@@ -1776,3 +1776,101 @@ function buildPipelineResult(
     summary,
   };
 }
+
+// ---------------------------------------------------------------------------
+// waitForPipelineCompletionViaHttp: same polling loop, HTTP-based lifecycle fetch
+// ---------------------------------------------------------------------------
+
+/**
+ * Dependencies for HTTP-based pipeline polling.
+ * Same as PipelineWaitDeps but replaces `sql` with a `fetchLifecycles` callback.
+ */
+export interface PipelineWaitHttpDeps {
+  /** Fetch lifecycle statuses for a batch of session IDs via HTTP */
+  fetchLifecycles: (sessionIds: string[]) => Promise<Record<string, string>>;
+  /** Milliseconds between status polls (default: 3000) */
+  pollIntervalMs?: number;
+  /** Maximum time to wait before giving up (default: 600000 = 10 min) */
+  timeoutMs?: number;
+  /** AbortSignal for clean cancellation (Ctrl-C) */
+  signal?: AbortSignal;
+  /** Progress callback fired after each poll */
+  onProgress?: (progress: PipelineWaitProgress) => void;
+  /** Signals that the upload list is finalized.
+   *  Polling won't declare "completed" until this returns true. */
+  uploadsComplete?: () => boolean;
+}
+
+/**
+ * Poll via HTTP until all sessions reach a terminal lifecycle state.
+ * Same logic as waitForPipelineCompletion but uses a caller-provided
+ * fetchLifecycles callback instead of direct DB queries.
+ */
+export async function waitForPipelineCompletionViaHttp(
+  sessionIds: string[] | (() => string[]),
+  deps: PipelineWaitHttpDeps,
+): Promise<PipelineWaitResult> {
+  const resolveIds = typeof sessionIds === "function" ? sessionIds : () => sessionIds;
+
+  if (typeof sessionIds !== "function" && sessionIds.length === 0) {
+    return { completed: true, timedOut: false, aborted: false, summary: {} };
+  }
+
+  const pollInterval = deps.pollIntervalMs ?? 3000;
+  const timeout = deps.timeoutMs ?? 600_000;
+  const startTime = Date.now();
+
+  while (true) {
+    if (deps.signal?.aborted) {
+      return buildPipelineResult(resolveIds(), {}, true, false);
+    }
+
+    if (Date.now() - startTime > timeout) {
+      const currentIds = resolveIds();
+      const statuses = await deps.fetchLifecycles(currentIds);
+      return buildPipelineResult(currentIds, statuses, false, true);
+    }
+
+    const currentIds = resolveIds();
+
+    if (currentIds.length === 0) {
+      if (deps.uploadsComplete?.() === false) {
+        try {
+          await abortableSleep(pollInterval, deps.signal);
+        } catch {
+          return buildPipelineResult([], {}, true, false);
+        }
+        continue;
+      }
+      return { completed: true, timedOut: false, aborted: false, summary: {} };
+    }
+
+    const statuses = await deps.fetchLifecycles(currentIds);
+
+    if (deps.onProgress) {
+      const byLifecycle: Record<string, number> = {};
+      let completedCount = 0;
+      for (const id of currentIds) {
+        const lifecycle = statuses[id] ?? "unknown";
+        byLifecycle[lifecycle] = (byLifecycle[lifecycle] ?? 0) + 1;
+        if (TERMINAL_LIFECYCLES.has(lifecycle)) completedCount++;
+      }
+      deps.onProgress({ total: currentIds.length, completed: completedCount, byLifecycle });
+    }
+
+    const allTerminal = currentIds.every((id) => {
+      const lifecycle = statuses[id];
+      return lifecycle && TERMINAL_LIFECYCLES.has(lifecycle);
+    });
+
+    if (allTerminal && deps.uploadsComplete?.() !== false) {
+      return buildPipelineResult(currentIds, statuses, false, false);
+    }
+
+    try {
+      await abortableSleep(pollInterval, deps.signal);
+    } catch {
+      return buildPipelineResult(currentIds, statuses, true, false);
+    }
+  }
+}

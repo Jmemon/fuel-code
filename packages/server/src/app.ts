@@ -36,6 +36,7 @@ import { createPromptsRouter } from "./routes/prompts.js";
 import { createWorkspacesRouter } from "./routes/workspaces.js";
 import { createDevicesRouter } from "./routes/devices.js";
 import { createTeamsRouter } from "./routes/teams.js";
+import { createBackfillRouter } from "./routes/backfill.js";
 
 /** Dependencies injected into createApp for testability */
 export interface AppDeps {
@@ -140,6 +141,9 @@ export function createApp(deps: AppDeps): express.Express {
   // --- 6h. Teams query routes (Phase 4) ---
   // Read-only endpoints for listing teams and viewing team detail with members.
   app.use("/api", createTeamsRouter({ sql: deps.sql, logger }));
+
+  // --- 6i. Backfill route — create session rows from CLI backfill scans ---
+  app.use("/api", createBackfillRouter({ sql: deps.sql, logger }));
 
   // --- 7. Error handler — MUST be registered last ---
   app.use(errorHandler);

@@ -117,8 +117,30 @@ export function parseLifecycleParam(
  * Capped at 500 to prevent oversized queries.
  */
 export const batchStatusRequestSchema = z.object({
-  session_ids: z.array(z.string()).min(1).max(500),
+  session_ids: z.array(z.string()).min(1).max(10_000),
 });
 
 /** Inferred type for batch status request */
 export type BatchStatusRequest = z.infer<typeof batchStatusRequestSchema>;
+
+/**
+ * Schema for POST /api/backfill/sessions — create a session row via the server
+ * during historical backfill. Replaces the CLI's direct ensureSessionRow + endSession calls.
+ */
+export const backfillSessionRequestSchema = z.object({
+  session_id: z.string().min(1),
+  workspace_canonical_id: z.string().min(1),
+  device_id: z.string().min(1),
+  device_name: z.string().optional(),
+  device_type: z.enum(["local", "remote"]).default("local"),
+  started_at: z.string(),
+  ended_at: z.string().nullable().optional(),
+  duration_ms: z.number().nullable().optional(),
+  cwd: z.string().optional(),
+  git_branch: z.string().nullable().optional(),
+  source: z.string().default("backfill:scan"),
+  is_live: z.boolean().default(false),
+});
+
+/** Inferred type for backfill session creation request */
+export type BackfillSessionRequest = z.infer<typeof backfillSessionRequestSchema>;

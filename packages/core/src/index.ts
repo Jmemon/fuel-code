@@ -103,6 +103,7 @@ export {
   ingestBackfillSessions,
   ingestSubagentTranscripts,
   waitForPipelineCompletion,
+  waitForPipelineCompletionViaHttp,
   projectDirToPath,
   type DiscoveredSession,
   type DiscoveredSubagentTranscript,
@@ -115,6 +116,7 @@ export {
   type SubagentIngestProgress,
   type SubagentIngestDeps,
   type PipelineWaitDeps,
+  type PipelineWaitHttpDeps,
   type PipelineWaitProgress,
   type PipelineWaitResult,
 } from "./session-backfill.js";

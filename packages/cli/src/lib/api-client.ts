@@ -15,7 +15,7 @@
  *   - All endpoint methods return typed responses
  */
 
-import type { Event, IngestResponse, Session, Workspace, Device, GitActivity, TranscriptMessage } from "@fuel-code/shared";
+import type { Event, IngestResponse, Session, Workspace, Device, GitActivity, TranscriptMessage, BackfillSessionRequest } from "@fuel-code/shared";
 import { NetworkError } from "@fuel-code/shared";
 import { loadConfig, type FuelCodeConfig } from "./config.js";
 
@@ -701,6 +701,81 @@ export class FuelApiClient implements ApiClient {
       `/api/sessions/${sessionId}/teammates/${teammateId}/messages`,
     );
     return res.messages;
+  }
+
+  // -------------------------------------------------------------------------
+  // Backfill Endpoints
+  // -------------------------------------------------------------------------
+
+  /** Create a session row via the backfill endpoint (replaces direct DB writes) */
+  async createBackfillSession(
+    params: BackfillSessionRequest,
+  ): Promise<{ session_id: string; lifecycle: string; workspace_id: string; status: "created" | "exists" }> {
+    return this.request("POST", "/api/backfill/sessions", { body: params });
+  }
+
+  /**
+   * Upload a raw JSONL transcript to the server (streams to S3 server-side).
+   * Uses fetch() directly for raw binary body with a 120s timeout.
+   *
+   * @param sessionId    - Session ID to attach the transcript to
+   * @param fileContent  - Raw transcript content (Buffer)
+   * @param subagentId   - Optional sub-agent ID for sub-agent transcript uploads
+   */
+  async uploadTranscript(
+    sessionId: string,
+    fileContent: Uint8Array,
+    subagentId?: string,
+  ): Promise<{ status: string; s3_key: string }> {
+    const path = subagentId
+      ? `/api/sessions/${sessionId}/transcript/upload?subagent_id=${encodeURIComponent(subagentId)}`
+      : `/api/sessions/${sessionId}/transcript/upload`;
+
+    const url = new URL(path, this.baseUrl);
+
+    let response: Response;
+    try {
+      response = await fetch(url.toString(), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Length": String(fileContent.byteLength),
+        },
+        body: fileContent as unknown as BodyInit,
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch (err) {
+      const cause = err instanceof Error ? err : new Error(String(err));
+      throw new ApiConnectionError(
+        `Failed to upload transcript for ${sessionId}: ${cause.message}`,
+        cause,
+      );
+    }
+
+    if (!response.ok) {
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch {
+        body = await response.text().catch(() => undefined);
+      }
+      const message =
+        typeof body === "object" && body !== null && "error" in body
+          ? (body as { error: string }).error
+          : `HTTP ${response.status}: ${response.statusText}`;
+      throw new ApiError(message, response.status, body);
+    }
+
+    return (await response.json()) as { status: string; s3_key: string };
+  }
+
+  /** Fetch lifecycle statuses for a batch of session IDs */
+  async batchStatus(
+    sessionIds: string[],
+  ): Promise<{ statuses: Record<string, { lifecycle: string }>; not_found: string[] }> {
+    return this.request("POST", "/api/sessions/batch-status", {
+      body: { session_ids: sessionIds },
+    });
   }
 
   // -------------------------------------------------------------------------
