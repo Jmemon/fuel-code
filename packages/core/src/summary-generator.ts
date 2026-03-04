@@ -11,7 +11,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import type { TranscriptMessage, ParsedContentBlock } from "@fuel-code/shared";
+import type { TranscriptMessage, ParsedContentBlock, TeammateSummary } from "@fuel-code/shared";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,6 +49,9 @@ export interface SummaryResult {
 /** System prompt instructing the model to produce a concise activity summary */
 const SUMMARY_SYSTEM_PROMPT = `You are a technical activity summarizer. Write a 1-3 sentence summary of this Claude Code session in past tense. Focus on WHAT was accomplished, not HOW. Be specific about files, features, or bugs. Do not start with "The user" or "This session". Example: "Refactored the authentication middleware to use JWT tokens and added comprehensive test coverage for the login flow."`;
 
+/** System prompt for team sessions — adds multi-agent coordination context */
+const TEAM_SUMMARY_SYSTEM_PROMPT = `You are a technical activity summarizer. Write a 1-3 sentence summary of this Claude Code team session in past tense. This session used multi-agent coordination where a lead agent delegated work to teammates. Focus on WHAT the team accomplished collectively, mentioning teammate contributions where noted. Be specific about files, features, or bugs. Do not start with "The user" or "This session". Example: "Set up a new API gateway with teammate alice implementing the auth routes and teammate bob adding integration tests."`;
+
 /** Maximum character length for the rendered prompt before truncation */
 const MAX_PROMPT_LENGTH = 8000;
 
@@ -85,11 +88,13 @@ const API_TIMEOUT_MS = 30_000;
  *
  * @param messages - Parsed transcript messages
  * @param contentBlocks - Parsed content blocks associated with the messages
+ * @param teammates - Optional list of teammates for team sessions
  * @returns A markdown-formatted string for prompting
  */
 export function renderTranscriptForSummary(
   messages: TranscriptMessage[],
-  contentBlocks: ParsedContentBlock[]
+  contentBlocks: ParsedContentBlock[],
+  teammates?: TeammateSummary[]
 ): string {
   // Build a lookup: message_id -> content blocks (ordered by block_order)
   const blocksByMessage = new Map<string, ParsedContentBlock[]>();
@@ -158,6 +163,17 @@ export function renderTranscriptForSummary(
       }
     }
     // Skip system/summary/progress/other message types
+  }
+
+  // Append teammate context for team sessions so the summary model knows
+  // about multi-agent coordination and each participant's contribution.
+  if (teammates && teammates.length > 0) {
+    lines.push(``);
+    lines.push(`## Teammate work`);
+    for (const tm of teammates) {
+      const summaryText = tm.summary ?? "No summary yet";
+      lines.push(`- ${tm.name}: ${summaryText}`);
+    }
   }
 
   let rendered = lines.join("\n");
@@ -237,12 +253,14 @@ export function extractInitialPrompt(
  * @param messages - Parsed transcript messages
  * @param contentBlocks - Parsed content blocks
  * @param config - Summary generation configuration
+ * @param teammates - Optional teammates for team session context
  * @returns SummaryResult with the generated summary or error details
  */
 export async function generateSummary(
   messages: TranscriptMessage[],
   contentBlocks: ParsedContentBlock[],
-  config: SummaryConfig
+  config: SummaryConfig,
+  teammates?: TeammateSummary[]
 ): Promise<SummaryResult> {
   // Guard: disabled
   if (!config.enabled) {
@@ -259,8 +277,12 @@ export async function generateSummary(
     return { success: false, error: "ANTHROPIC_API_KEY not configured" };
   }
 
-  // Render the transcript into a condensed prompt
-  const renderedPrompt = renderTranscriptForSummary(messages, contentBlocks);
+  // Render the transcript into a condensed prompt, including teammate context
+  const renderedPrompt = renderTranscriptForSummary(messages, contentBlocks, teammates);
+
+  // Use team-aware system prompt when teammates are present
+  const hasTeammates = teammates && teammates.length > 0;
+  const systemPrompt = hasTeammates ? TEAM_SUMMARY_SYSTEM_PROMPT : SUMMARY_SYSTEM_PROMPT;
 
   try {
     // Create Anthropic client and call the API with a timeout
@@ -270,7 +292,7 @@ export async function generateSummary(
         model: config.model,
         max_tokens: config.maxOutputTokens,
         temperature: config.temperature,
-        system: SUMMARY_SYSTEM_PROMPT,
+        system: systemPrompt,
         messages: [{ role: "user", content: renderedPrompt }],
       },
       { signal: AbortSignal.timeout(API_TIMEOUT_MS) }

@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { TranscriptMessage, ParsedContentBlock } from "@fuel-code/shared";
+import type { TranscriptMessage, ParsedContentBlock, TeammateSummary } from "@fuel-code/shared";
 import {
   renderTranscriptForSummary,
   extractInitialPrompt,
@@ -331,6 +331,82 @@ describe("renderTranscriptForSummary", () => {
 
     // Header should report 3 tool uses
     expect(result).toContain("Tool uses: 3");
+  });
+
+  test("appends teammate work section when teammates are provided", () => {
+    idCounter = 0;
+
+    const userMsg = makeMessage({
+      id: "msg-user-1",
+      role: "user",
+      ordinal: 1,
+    });
+
+    const blocks: ParsedContentBlock[] = [
+      makeBlock({
+        message_id: "msg-user-1",
+        block_type: "text",
+        content_text: "Implement the new API endpoints",
+        block_order: 0,
+      }),
+    ];
+
+    const teammates: TeammateSummary[] = [
+      { id: "tm-1", name: "alice", color: "#ff0000", summary: "Implemented auth routes" },
+      { id: "tm-2", name: "bob", color: "#00ff00", summary: null },
+    ];
+
+    const result = renderTranscriptForSummary([userMsg], blocks, teammates);
+
+    expect(result).toContain("## Teammate work");
+    expect(result).toContain("- alice: Implemented auth routes");
+    expect(result).toContain("- bob: No summary yet");
+  });
+
+  test("no teammate section when teammates array is empty", () => {
+    idCounter = 0;
+
+    const userMsg = makeMessage({
+      id: "msg-user-1",
+      role: "user",
+      ordinal: 1,
+    });
+
+    const blocks: ParsedContentBlock[] = [
+      makeBlock({
+        message_id: "msg-user-1",
+        block_type: "text",
+        content_text: "Fix the bug",
+        block_order: 0,
+      }),
+    ];
+
+    const result = renderTranscriptForSummary([userMsg], blocks, []);
+
+    expect(result).not.toContain("## Teammate work");
+  });
+
+  test("no teammate section when teammates is undefined", () => {
+    idCounter = 0;
+
+    const userMsg = makeMessage({
+      id: "msg-user-1",
+      role: "user",
+      ordinal: 1,
+    });
+
+    const blocks: ParsedContentBlock[] = [
+      makeBlock({
+        message_id: "msg-user-1",
+        block_type: "text",
+        content_text: "Fix the bug",
+        block_order: 0,
+      }),
+    ];
+
+    const result = renderTranscriptForSummary([userMsg], blocks, undefined);
+
+    expect(result).not.toContain("## Teammate work");
   });
 });
 
