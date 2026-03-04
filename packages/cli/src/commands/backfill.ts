@@ -212,7 +212,9 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
   // concurrent async contexts (upload worker pool + pipeline poller).
   let dualBarInit = false;
   const writeDualBars = (line1: string, line2: string): void => {
-    const prefix = dualBarInit ? "\x1b[1A\x1b[1A\r" : "";
+    // After first write the cursor sits on line2's row (no trailing \n).
+    // Moving up 1 reaches line1's row — up 2 would overshoot and orphan lines.
+    const prefix = dualBarInit ? "\x1b[1A\r" : "";
     process.stderr.write(`${prefix}\x1b[2K${line1}\n\x1b[2K${line2}`);
     dualBarInit = true;
   };
@@ -250,6 +252,7 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
       // Skip if already ingested in a previous (interrupted) run
       if (alreadyIngested.has(session.sessionId)) {
         result.skipped++;
+        reportProgress(session.sessionId);
         return;
       }
 
@@ -275,12 +278,14 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
         // Step 2: Dedup — session already existed on server
         if (createResult.status === "exists") {
           result.skipped++;
+          reportProgress(session.sessionId);
           return;
         }
 
         // Step 3: Live sessions stop here — only a 'detected' row was created
         if (session.isLive) {
           result.liveStarted = (result.liveStarted ?? 0) + 1;
+          reportProgress(session.sessionId);
           return;
         }
 
@@ -326,7 +331,7 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
       : null;
 
     function reportProgress(currentSession: string | null): void {
-      const completed = result.ingested + result.skipped + result.failed;
+      const completed = result.ingested + result.skipped + result.failed + (result.liveStarted ?? 0);
       const sessionShort = (currentSession ?? lastReportedSession ?? "").slice(0, 8);
       const failStr = result.failed > 0 ? `  (${result.failed} failed)` : "";
       uploadBarLine = `  Uploading:   ${buildProgressBar(completed, scanResult.discovered.length, 30)} ${completed}/${scanResult.discovered.length}  ${sessionShort}...${failStr}`;
@@ -425,16 +430,15 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
 
     // Freeze upload bar as "done"
     const uploadTotal = scanResult.discovered.length;
-    const uploadCompleted = uploadResult.ingested + uploadResult.skipped + uploadResult.failed;
+    const uploadCompleted = uploadResult.ingested + uploadResult.skipped + uploadResult.failed + (uploadResult.liveStarted ?? 0);
     const uploadDoneStr = uploadResult.failed > 0
       ? `done (${uploadResult.failed} failed)`
       : "done";
     const uploadDoneLine = `  Uploading:   ${buildProgressBar(uploadCompleted, uploadTotal, 30)} ${uploadCompleted}/${uploadTotal}  ${uploadDoneStr}`;
     writeDualBars(uploadDoneLine, processingBarLine);
 
-    // Clear dual bars and print final summary
-    process.stderr.write("\n");
-    console.log("");
+    // Move past dual bars and clear any residual content before final summary
+    process.stderr.write("\n\x1b[2K");
 
     if (ingestedIds.length > 0) {
       if (pipelineResult.completed) {
