@@ -1,79 +1,44 @@
 /**
  * Unit tests for waitForPipelineCompletion.
  *
- * Mocks globalThis.fetch to simulate the batch-status endpoint responses.
+ * Uses a mock SQL tagged template to simulate direct DB lifecycle queries.
  * Each test uses fast poll intervals (50ms) to keep suite execution quick.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect } from "bun:test";
 import { waitForPipelineCompletion } from "../session-backfill.js";
 import type { PipelineWaitDeps, PipelineWaitProgress } from "../session-backfill.js";
-
-// ---------------------------------------------------------------------------
-// Setup / teardown — save and restore globalThis.fetch
-// ---------------------------------------------------------------------------
-
-let originalFetch: typeof globalThis.fetch;
-
-beforeEach(() => {
-  originalFetch = globalThis.fetch;
-});
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
+import type { Sql } from "postgres";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Create a mock SQL tagged template function that returns lifecycle rows.
+ * The handler receives the session IDs from the ANY($1) parameter and
+ * returns an array of { id, lifecycle } rows.
+ */
+function createMockSql(
+  handler: (sessionIds: string[]) => Array<{ id: string; lifecycle: string }>,
+): Sql {
+  // The mock mimics postgres tagged template behavior:
+  // sql`SELECT id, lifecycle FROM sessions WHERE id = ANY(${sessionIds})`
+  // The first interpolated value is the sessionIds array.
+  const mockSql = ((_strings: TemplateStringsArray, ...values: unknown[]) => {
+    const sessionIds = values[0] as string[];
+    return Promise.resolve(handler(sessionIds));
+  }) as unknown as Sql;
+  return mockSql;
+}
+
 /** Default deps with fast poll interval for testing. */
-function makeDeps(overrides: Partial<PipelineWaitDeps> = {}): PipelineWaitDeps {
+function makeDeps(overrides: Partial<PipelineWaitDeps>): PipelineWaitDeps {
   return {
-    serverUrl: "http://localhost:3000",
-    apiKey: "test-key",
+    sql: undefined as unknown as Sql, // Must be overridden
     pollIntervalMs: 50,
     ...overrides,
   };
-}
-
-/**
- * Build a mock batch-status response body.
- * Maps session IDs to lifecycle states.
- */
-function batchStatusResponse(
-  statuses: Record<string, string>,
-): { statuses: Record<string, { lifecycle: string; parse_status: string }> } {
-  const mapped: Record<string, { lifecycle: string; parse_status: string }> = {};
-  for (const [id, lifecycle] of Object.entries(statuses)) {
-    mapped[id] = { lifecycle, parse_status: lifecycle === "failed" ? "error" : "complete" };
-  }
-  return { statuses: mapped };
-}
-
-/** Create a mock fetch that returns the given response body for POST batch-status. */
-function mockBatchStatus(
-  handler: (body: { session_ids: string[] }) => Response,
-): void {
-  globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
-    const urlStr = typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url;
-    const method = (init?.method ?? "GET").toUpperCase();
-
-    if (method === "POST" && urlStr.includes("/api/sessions/batch-status")) {
-      const reqBody = JSON.parse(init?.body as string);
-      return Promise.resolve(handler(reqBody));
-    }
-
-    return Promise.resolve(new Response("Unmatched", { status: 500 }));
-  }) as typeof fetch;
-}
-
-/** Build a 200 OK JSON response. */
-function ok(body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -87,20 +52,19 @@ describe("waitForPipelineCompletion", () => {
   it("resolves immediately when all sessions are already in a terminal state", async () => {
     const ids = ["s1", "s2", "s3"];
 
-    mockBatchStatus(() =>
-      ok(batchStatusResponse({ s1: "parsed", s2: "summarized", s3: "archived" })),
-    );
+    const sql = createMockSql(() => [
+      { id: "s1", lifecycle: "complete" },
+      { id: "s2", lifecycle: "complete" },
+      { id: "s3", lifecycle: "failed" },
+    ]);
 
-    const result = await waitForPipelineCompletion(ids, makeDeps());
+    const result = await waitForPipelineCompletion(ids, makeDeps({ sql }));
 
     expect(result.completed).toBe(true);
     expect(result.timedOut).toBe(false);
     expect(result.aborted).toBe(false);
-    expect(result.summary.parsed).toBe(1);
-    expect(result.summary.summarized).toBe(1);
-    expect(result.summary.archived).toBe(1);
-    expect(result.summary.failed).toBe(0);
-    expect(result.summary.pending).toBe(0);
+    expect(result.summary.complete).toBe(2);
+    expect(result.summary.failed).toBe(1);
   });
 
   // -----------------------------------------------------------------------
@@ -110,32 +74,39 @@ describe("waitForPipelineCompletion", () => {
     const ids = ["s1", "s2"];
     let callCount = 0;
 
-    mockBatchStatus(() => {
+    const sql = createMockSql(() => {
       callCount++;
       if (callCount === 1) {
         // First poll: s1 still processing, s2 done
-        return ok(batchStatusResponse({ s1: "ended", s2: "parsed" }));
+        return [
+          { id: "s1", lifecycle: "ended" },
+          { id: "s2", lifecycle: "complete" },
+        ];
       }
       if (callCount === 2) {
         // Second poll: s1 still processing, s2 done
-        return ok(batchStatusResponse({ s1: "uploading", s2: "parsed" }));
+        return [
+          { id: "s1", lifecycle: "transcript_ready" },
+          { id: "s2", lifecycle: "complete" },
+        ];
       }
       // Third poll: both done
-      return ok(batchStatusResponse({ s1: "summarized", s2: "parsed" }));
+      return [
+        { id: "s1", lifecycle: "complete" },
+        { id: "s2", lifecycle: "complete" },
+      ];
     });
 
     const progressCalls: PipelineWaitProgress[] = [];
     const result = await waitForPipelineCompletion(
       ids,
-      makeDeps({ onProgress: (p) => progressCalls.push({ ...p }) }),
+      makeDeps({ sql, onProgress: (p) => progressCalls.push({ ...p }) }),
     );
 
     expect(result.completed).toBe(true);
     expect(result.timedOut).toBe(false);
     expect(result.aborted).toBe(false);
-    expect(result.summary.summarized).toBe(1);
-    expect(result.summary.parsed).toBe(1);
-    expect(result.summary.pending).toBe(0);
+    expect(result.summary.complete).toBe(2);
 
     // Should have polled at least 3 times
     expect(callCount).toBeGreaterThanOrEqual(3);
@@ -143,7 +114,7 @@ describe("waitForPipelineCompletion", () => {
     // Progress should have been called each poll
     expect(progressCalls.length).toBeGreaterThanOrEqual(3);
 
-    // First progress call should show 1 completed (s2 parsed) out of 2
+    // First progress call should show 1 completed (s2 complete) out of 2
     expect(progressCalls[0].total).toBe(2);
     expect(progressCalls[0].completed).toBe(1);
   });
@@ -154,18 +125,17 @@ describe("waitForPipelineCompletion", () => {
   it("reports failed sessions correctly in the summary", async () => {
     const ids = ["s1", "s2", "s3"];
 
-    mockBatchStatus(() =>
-      ok(batchStatusResponse({ s1: "parsed", s2: "failed", s3: "summarized" })),
-    );
+    const sql = createMockSql(() => [
+      { id: "s1", lifecycle: "complete" },
+      { id: "s2", lifecycle: "failed" },
+      { id: "s3", lifecycle: "complete" },
+    ]);
 
-    const result = await waitForPipelineCompletion(ids, makeDeps());
+    const result = await waitForPipelineCompletion(ids, makeDeps({ sql }));
 
     expect(result.completed).toBe(true);
-    expect(result.summary.parsed).toBe(1);
+    expect(result.summary.complete).toBe(2);
     expect(result.summary.failed).toBe(1);
-    expect(result.summary.summarized).toBe(1);
-    expect(result.summary.archived).toBe(0);
-    expect(result.summary.pending).toBe(0);
   });
 
   // -----------------------------------------------------------------------
@@ -175,20 +145,21 @@ describe("waitForPipelineCompletion", () => {
     const ids = ["s1", "s2"];
 
     // Always return non-terminal states
-    mockBatchStatus(() =>
-      ok(batchStatusResponse({ s1: "ended", s2: "uploading" })),
-    );
+    const sql = createMockSql(() => [
+      { id: "s1", lifecycle: "ended" },
+      { id: "s2", lifecycle: "transcript_ready" },
+    ]);
 
     const result = await waitForPipelineCompletion(
       ids,
-      makeDeps({ timeoutMs: 200, pollIntervalMs: 50 }),
+      makeDeps({ sql, timeoutMs: 200, pollIntervalMs: 50 }),
     );
 
     expect(result.completed).toBe(false);
     expect(result.timedOut).toBe(true);
     expect(result.aborted).toBe(false);
-    expect(result.summary.pending).toBe(2);
-    expect(result.summary.parsed).toBe(0);
+    expect(result.summary.ended).toBe(1);
+    expect(result.summary.transcript_ready).toBe(1);
   });
 
   // -----------------------------------------------------------------------
@@ -199,16 +170,17 @@ describe("waitForPipelineCompletion", () => {
     const controller = new AbortController();
 
     // Always return non-terminal states so it keeps polling
-    mockBatchStatus(() =>
-      ok(batchStatusResponse({ s1: "ended", s2: "uploading" })),
-    );
+    const sql = createMockSql(() => [
+      { id: "s1", lifecycle: "ended" },
+      { id: "s2", lifecycle: "transcript_ready" },
+    ]);
 
     // Abort after 100ms
     setTimeout(() => controller.abort(), 100);
 
     const result = await waitForPipelineCompletion(
       ids,
-      makeDeps({ signal: controller.signal, pollIntervalMs: 50 }),
+      makeDeps({ sql, signal: controller.signal, pollIntervalMs: 50 }),
     );
 
     expect(result.completed).toBe(false);
@@ -219,25 +191,18 @@ describe("waitForPipelineCompletion", () => {
   // 6. Returns empty result for empty session list
   // -----------------------------------------------------------------------
   it("returns empty completed result for empty session list", async () => {
-    // Should not even call fetch
-    let fetchCalled = false;
-    globalThis.fetch = (() => {
-      fetchCalled = true;
-      return Promise.resolve(new Response("", { status: 500 }));
-    }) as typeof fetch;
+    let sqlCalled = false;
+    const sql = createMockSql(() => {
+      sqlCalled = true;
+      return [];
+    });
 
-    const result = await waitForPipelineCompletion([], makeDeps());
+    const result = await waitForPipelineCompletion([], makeDeps({ sql }));
 
     expect(result.completed).toBe(true);
     expect(result.timedOut).toBe(false);
     expect(result.aborted).toBe(false);
-    expect(result.summary).toEqual({
-      parsed: 0,
-      summarized: 0,
-      archived: 0,
-      failed: 0,
-      pending: 0,
-    });
-    expect(fetchCalled).toBe(false);
+    expect(result.summary).toEqual({});
+    expect(sqlCalled).toBe(false);
   });
 });

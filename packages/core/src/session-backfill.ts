@@ -178,18 +178,6 @@ const DEFAULT_CLAUDE_PROJECTS_DIR = path.join(
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** HTTP timeout for dedup checks and transcript uploads (2 minutes) */
-const HTTP_TIMEOUT_MS = 120_000;
-
-/**
- * Combine the user's abort signal with a timeout into a single signal.
- * When either fires, the combined signal aborts — enabling immediate
- * cancellation of in-flight HTTP requests on Ctrl-C.
- */
-function combinedSignal(userSignal?: AbortSignal): AbortSignal {
-  if (!userSignal) return AbortSignal.timeout(HTTP_TIMEOUT_MS);
-  return AbortSignal.any([userSignal, AbortSignal.timeout(HTTP_TIMEOUT_MS)]);
-}
 
 /**
  * Abort-aware sleep: resolves after `ms` milliseconds OR rejects immediately
@@ -1614,12 +1602,10 @@ export interface PipelineWaitProgress {
   byLifecycle: Record<string, number>;
 }
 
-/** Dependencies for waitForPipelineCompletion */
+/** Dependencies for waitForPipelineCompletion — queries DB directly */
 export interface PipelineWaitDeps {
-  /** Base URL of the fuel-code backend */
-  serverUrl: string;
-  /** API key for authentication */
-  apiKey: string;
+  /** Postgres client for direct lifecycle queries */
+  sql: Sql;
   /** Milliseconds between status polls (default: 3000) */
   pollIntervalMs?: number;
   /** Maximum time to wait before giving up (default: 600000 = 10 min) */
@@ -1641,17 +1627,13 @@ export interface PipelineWaitResult {
   timedOut: boolean;
   /** Whether the wait was aborted by signal */
   aborted: boolean;
-  /** Count of sessions per terminal lifecycle state */
-  summary: {
-    complete: number;
-    failed: number;
-    pending: number;
-  };
+  /** Count of sessions per lifecycle state (e.g., parsed, summarized, archived, failed, pending) */
+  summary: Record<string, number>;
 }
 
 /**
- * Poll the batch-status endpoint until all sessions reach a terminal
- * lifecycle state (complete or failed).
+ * Poll the database until all sessions reach a terminal lifecycle state
+ * (any state in TERMINAL_LIFECYCLES: "complete" or "failed").
  *
  * Accepts either a static array or a getter function for session IDs.
  * When a getter is provided, IDs are re-resolved each poll iteration so
@@ -1671,11 +1653,10 @@ export async function waitForPipelineCompletion(
       completed: true,
       timedOut: false,
       aborted: false,
-      summary: { complete: 0, failed: 0, pending: 0 },
+      summary: {},
     };
   }
 
-  const baseUrl = deps.serverUrl.replace(/\/+$/, "");
   const pollInterval = deps.pollIntervalMs ?? 3000;
   const timeout = deps.timeoutMs ?? 600_000;
   const startTime = Date.now();
@@ -1687,8 +1668,8 @@ export async function waitForPipelineCompletion(
 
     if (Date.now() - startTime > timeout) {
       const currentIds = resolveIds();
-      const idBatches = batchIds(currentIds, 500);
-      return buildPipelineResult(currentIds, await fetchAllStatuses(baseUrl, deps.apiKey, idBatches, deps.signal), false, true);
+      const statuses = await fetchLifecyclesFromDb(deps.sql, currentIds);
+      return buildPipelineResult(currentIds, statuses, false, true);
     }
 
     // Re-resolve IDs each iteration (may have grown since last poll)
@@ -1709,19 +1690,18 @@ export async function waitForPipelineCompletion(
         completed: true,
         timedOut: false,
         aborted: false,
-        summary: { complete: 0, failed: 0, pending: 0 },
+        summary: {},
       };
     }
 
-    const idBatches = batchIds(currentIds, 500);
-    const statuses = await fetchAllStatuses(baseUrl, deps.apiKey, idBatches, deps.signal);
+    const statuses = await fetchLifecyclesFromDb(deps.sql, currentIds);
 
     // Report progress
     if (deps.onProgress) {
       const byLifecycle: Record<string, number> = {};
       let completedCount = 0;
       for (const id of currentIds) {
-        const lifecycle = statuses[id]?.lifecycle ?? "unknown";
+        const lifecycle = statuses[id] ?? "unknown";
         byLifecycle[lifecycle] = (byLifecycle[lifecycle] ?? 0) + 1;
         if (TERMINAL_LIFECYCLES.has(lifecycle)) completedCount++;
       }
@@ -1729,7 +1709,7 @@ export async function waitForPipelineCompletion(
     }
 
     const allTerminal = currentIds.every((id) => {
-      const lifecycle = statuses[id]?.lifecycle;
+      const lifecycle = statuses[id];
       return lifecycle && TERMINAL_LIFECYCLES.has(lifecycle);
     });
 
@@ -1746,65 +1726,47 @@ export async function waitForPipelineCompletion(
   }
 }
 
-/** Split an array into chunks of the given size */
-function batchIds(ids: string[], size: number): string[][] {
-  const batches: string[][] = [];
-  for (let i = 0; i < ids.length; i += size) {
-    batches.push(ids.slice(i, i + size));
+/**
+ * Query session lifecycles directly from the database.
+ * Returns a map from session ID to lifecycle state string.
+ */
+async function fetchLifecyclesFromDb(
+  sql: Sql,
+  sessionIds: string[],
+): Promise<Record<string, string>> {
+  if (sessionIds.length === 0) return {};
+
+  const rows = await sql`
+    SELECT id, lifecycle FROM sessions WHERE id = ANY(${sessionIds})
+  `;
+
+  const result: Record<string, string> = {};
+  for (const row of rows) {
+    result[row.id] = row.lifecycle;
   }
-  return batches;
+  return result;
 }
 
-/** Fetch statuses from all batches and merge into a single map */
-async function fetchAllStatuses(
-  baseUrl: string,
-  apiKey: string,
-  idBatches: string[][],
-  signal?: AbortSignal,
-): Promise<Record<string, { lifecycle: string }>> {
-  const merged: Record<string, { lifecycle: string }> = {};
-
-  for (const batch of idBatches) {
-    try {
-      const response = await fetch(`${baseUrl}/api/sessions/batch-status`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({ session_ids: batch }),
-        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
-      });
-
-      if (response.ok) {
-        const data = await response.json() as {
-          statuses: Record<string, { lifecycle: string }>;
-        };
-        Object.assign(merged, data.statuses);
-      }
-    } catch {
-      // On fetch error, skip this batch — will retry on next poll
-    }
-  }
-
-  return merged;
-}
-
-/** Build the final PipelineWaitResult from collected statuses */
+/**
+ * Build the final PipelineWaitResult from collected lifecycle statuses.
+ * Summary is a per-lifecycle-state count (e.g., { parsed: 3, summarized: 1, failed: 1, pending: 2 }).
+ * Sessions not found in the statuses map are counted as "pending".
+ */
 function buildPipelineResult(
   sessionIds: string[],
-  statuses: Record<string, { lifecycle: string }>,
+  statuses: Record<string, string>,
   aborted: boolean,
   timedOut: boolean,
 ): PipelineWaitResult {
-  const summary = { complete: 0, failed: 0, pending: 0 };
+  const summary: Record<string, number> = {};
   let allTerminal = true;
 
   for (const id of sessionIds) {
-    const lifecycle = statuses[id]?.lifecycle;
-    if (lifecycle === "complete") summary.complete++;
-    else if (lifecycle === "failed") summary.failed++;
-    else { summary.pending++; allTerminal = false; }
+    const lifecycle = statuses[id] ?? "pending";
+    summary[lifecycle] = (summary[lifecycle] ?? 0) + 1;
+    if (!TERMINAL_LIFECYCLES.has(lifecycle)) {
+      allTerminal = false;
+    }
   }
 
   return {

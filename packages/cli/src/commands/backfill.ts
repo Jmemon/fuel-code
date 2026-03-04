@@ -2,13 +2,14 @@
  * `fuel-code backfill` command.
  *
  * Discovers all historical Claude Code sessions from ~/.claude/projects/
- * and ingests them into the fuel-code backend. Supports:
+ * and ingests them into the fuel-code backend via direct DB+S3 writes.
+ * Supports:
  *   --dry-run  — Scan and report without ingesting
  *   --status   — Show last backfill state
  *   --force    — Run even if a backfill appears to be in progress
  *
- * After discovery, the command uploads transcript files and emits synthetic
- * session.start/session.end events through the normal ingest pipeline.
+ * After discovery, sessions are written directly to Postgres and transcripts
+ * uploaded to S3. No HTTP calls to the server are made during backfill.
  *
  * Backfill state is persisted at ~/.fuel-code/backfill-state.json for:
  *   - Status reporting
@@ -19,6 +20,8 @@
 import { Command } from "commander";
 import * as os from "node:os";
 import * as path from "node:path";
+import postgres from "postgres";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import {
   scanForSessions,
   ingestBackfillSessions,
@@ -29,6 +32,7 @@ import {
   type ScanResult,
   type ScanProgress,
   type BackfillProgress,
+  type BackfillS3Client,
   type BackfillState,
   type PipelineWaitProgress,
 } from "@fuel-code/core";
@@ -174,7 +178,45 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
 
   console.error("Preparing ingestion...");
 
-  // Phase 2: Mark as running and persist state
+  // Phase 2: Create direct DB+S3 connections from environment variables.
+  // The CLI shares the same DB and S3 as the server — both read from env vars.
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    console.error("DATABASE_URL environment variable is required for backfill.");
+    console.error("Set it to the same Postgres connection string used by the fuel-code server.");
+    process.exitCode = 1;
+    process.removeListener("SIGINT", onSigint);
+    return;
+  }
+
+  const s3Bucket = process.env.S3_BUCKET || "fuel-code-blobs";
+  const s3Region = process.env.S3_REGION || "us-east-1";
+  const s3Endpoint = process.env.S3_ENDPOINT;
+  const s3ForcePathStyle = process.env.S3_FORCE_PATH_STYLE === "true";
+
+  // Create a Postgres connection pool (small — backfill is bounded by concurrency)
+  const sql = postgres(databaseUrl, { max: 5, idle_timeout: 20, connect_timeout: 10 });
+
+  // Create a minimal S3 client that satisfies BackfillS3Client interface
+  const s3Raw = new S3Client({
+    region: s3Region,
+    ...(s3Endpoint ? { endpoint: s3Endpoint } : {}),
+    ...(s3ForcePathStyle ? { forcePathStyle: true } : {}),
+  });
+  const s3: BackfillS3Client = {
+    async upload(key: string, body: Buffer | string, contentType?: string) {
+      const bodyBuffer = typeof body === "string" ? Buffer.from(body) : body;
+      await s3Raw.send(new PutObjectCommand({
+        Bucket: s3Bucket,
+        Key: key,
+        Body: bodyBuffer,
+        ContentType: contentType ?? "application/octet-stream",
+      }));
+      return { key, size: bodyBuffer.length };
+    },
+  };
+
+  // Mark as running and persist state
   const updatedState: BackfillState = {
     ...state,
     isRunning: true,
@@ -184,10 +226,8 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
 
   // Build the set of already-ingested sessions for resume
   const alreadyIngested = new Set(state.ingestedSessionIds);
-  // Sessions whose transcript upload failed last run — bypass server dedup check
-  const retriableSessionIds = new Set(state.failedSessionIds ?? []);
 
-  // Phase 3+4: Ingest sessions, then wait for server-side processing.
+  // Phase 3+4: Ingest sessions via direct DB+S3, then wait for reconcile completion.
   // Both progress bars are rendered simultaneously so the user sees the
   // full pipeline at a glance.
   console.error("");
@@ -215,16 +255,15 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
     let processingBarLine = "  Processing:  waiting...";
     const renderBars = () => writeDualBars(uploadBarLine, processingBarLine);
 
-    // Upload promise: ingests sessions, pushes IDs via onSessionIngested
+    // Upload promise: writes sessions directly to DB+S3 (no HTTP)
     const uploadPromise = ingestBackfillSessions(scanResult.discovered, {
-      serverUrl: config.backend.url,
-      apiKey: config.backend.api_key,
+      sql,
+      s3,
       deviceId: config.device.id,
       deviceName: config.device.name,
       deviceType: config.device.type,
       signal: abortController.signal,
       alreadyIngested,
-      retriableSessionIds,
       concurrency,
       onSessionIngested: (id) => ingestedIds.push(id),
       onProgress: (progress: BackfillProgress) => {
@@ -238,19 +277,18 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
       },
     }).then(r => { uploadsDone = true; return r; });
 
-    // Pipeline polling promise: watches processing progress concurrently
+    // Pipeline polling promise: polls DB lifecycle states concurrently
     const pipelinePromise = waitForPipelineCompletion(
       () => [...ingestedIds],
       {
-        serverUrl: config.backend.url,
-        apiKey: config.backend.api_key,
+        sql,
         signal: abortController.signal,
         uploadsComplete: () => uploadsDone,
         onProgress: (progress: PipelineWaitProgress) => {
           const bar = buildProgressBar(progress.completed, progress.total, 30);
           const parts: string[] = [];
           for (const [lifecycle, count] of Object.entries(progress.byLifecycle)) {
-            if (count > 0 && lifecycle !== "parsed" && lifecycle !== "summarized" && lifecycle !== "archived" && lifecycle !== "failed") {
+            if (count > 0 && lifecycle !== "complete" && lifecycle !== "failed") {
               parts.push(`${count} ${lifecycle}`);
             }
           }
@@ -309,12 +347,12 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
       }
       const ps = pipelineResult.summary;
       const processedParts: string[] = [];
-      if (ps.summarized > 0) processedParts.push(`${ps.summarized} summarized`);
-      if (ps.parsed > 0) processedParts.push(`${ps.parsed} parsed`);
-      if (ps.archived > 0) processedParts.push(`${ps.archived} archived`);
-      if (ps.failed > 0) processedParts.push(`${ps.failed} failed`);
-      if (ps.pending > 0) processedParts.push(`${ps.pending} pending`);
-      console.log(`  Processed:  ${ps.summarized + ps.parsed + ps.archived}/${ingestedIds.length}` +
+      // Summarize per-lifecycle counts (complete and failed are terminal, others are in-progress)
+      const terminalCount = (ps.complete ?? 0) + (ps.failed ?? 0);
+      for (const [lifecycle, count] of Object.entries(ps)) {
+        if (count > 0) processedParts.push(`${count} ${lifecycle}`);
+      }
+      console.log(`  Processed:  ${terminalCount}/${ingestedIds.length}` +
         (processedParts.length > 0 ? ` (${processedParts.join(", ")})` : ""));
     } else {
       console.log("Backfill complete!");
@@ -331,6 +369,9 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
       console.log(formatErrorBlock(result.errors, sessionPathMap));
     }
   } finally {
+    // Close the DB connection pool
+    await sql.end({ timeout: 5 });
+    s3Raw.destroy();
     process.removeListener("SIGINT", onSigint);
   }
 }
