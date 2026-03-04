@@ -40,5 +40,11 @@ export {
   type TeammateMapping,
 } from "./teammate-mapping.js";
 
+export {
+  generateTeammateSummaries,
+  type TeammateSummaryDeps,
+  type TeammateSummaryResult,
+} from "./teammate-summary.js";
+
 // Re-export reconcile types from the types directory for convenience
 export type { SessionSeed, SessionGap } from "../types/reconcile.js";
