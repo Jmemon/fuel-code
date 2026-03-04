@@ -3,7 +3,7 @@
  *
  * Uses mock SQL to test correlation logic without a real database.
  * Each test verifies a different correlation scenario:
- *   - Active session found (detected/capturing lifecycle)
+ *   - Active session found (detected lifecycle)
  *   - No active session
  *   - Wrong workspace/device
  *   - Multiple active sessions (most recent wins)
@@ -57,22 +57,6 @@ describe("correlateGitEventToSession", () => {
     expect(result.confidence).toBe("active");
   });
 
-  test("returns session ID when active session (capturing) exists", async () => {
-    // The mock doesn't differentiate lifecycle states — the SQL query handles that.
-    // This test verifies the result mapping works for any active session match.
-    const { sql } = createMockSql([{ id: "sess-capturing" }]);
-
-    const result = await correlateGitEventToSession(
-      sql,
-      "ws-001",
-      "device-001",
-      new Date("2024-06-15T12:00:00.000Z"),
-    );
-
-    expect(result.sessionId).toBe("sess-capturing");
-    expect(result.confidence).toBe("active");
-  });
-
   test("returns null when no active session exists", async () => {
     const { sql } = createMockSql([]);
 
@@ -88,7 +72,7 @@ describe("correlateGitEventToSession", () => {
   });
 
   test("returns null when session is ended (not in result set)", async () => {
-    // An ended session wouldn't match the SQL WHERE lifecycle IN ('detected','capturing'),
+    // An ended session wouldn't match the SQL WHERE lifecycle = 'detected',
     // so the mock returns empty to simulate this
     const { sql } = createMockSql([]);
 

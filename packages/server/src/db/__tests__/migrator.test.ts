@@ -148,11 +148,12 @@ describe("001_initial.sql migration file", () => {
     expect(content).toContain("FK to remote_envs added in Phase 5 migration");
   });
 
-  test("sessions table has all lifecycle states", async () => {
+  test("sessions table has original lifecycle states in migration 001", async () => {
     const files = await readMigrationFiles(join(import.meta.dir, "..", "migrations"));
     const content = files[0].content;
 
-    // All lifecycle states from the spec
+    // Original lifecycle states in migration 001 (capturing and archived were
+    // later removed by migration 006 which unifies them to detected/complete)
     const lifecycleStates = [
       "detected",
       "capturing",

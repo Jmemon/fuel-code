@@ -6,7 +6,7 @@
  * "what did I commit during this session?" views.
  *
  * Correlation heuristic: find the most recently started session for the same
- * workspace + device that is currently active (lifecycle = 'detected' or 'capturing').
+ * workspace + device that is currently active (lifecycle = 'detected').
  * The event timestamp must be >= session started_at to avoid false matches.
  *
  * If no active session is found, the git event is recorded as "orphan" workspace-level
@@ -34,7 +34,7 @@ export interface CorrelationResult {
 /**
  * Find the active Claude Code session for a git event.
  *
- * Queries sessions that are currently active (detected or capturing) for the
+ * Queries sessions that are currently active (detected) for the
  * same workspace and device, and started before the git event occurred.
  * Returns the most recently started session if multiple are active.
  *
@@ -54,7 +54,7 @@ export async function correlateGitEventToSession(
     SELECT id FROM sessions
     WHERE workspace_id = ${workspaceId}
       AND device_id = ${deviceId}
-      AND lifecycle IN ('detected', 'capturing')
+      AND lifecycle = 'detected'
       AND started_at <= ${eventTimestamp.toISOString()}
     ORDER BY started_at DESC
     LIMIT 1

@@ -448,7 +448,7 @@ async function handleTranscript(api: FuelApiClient, sessionId: string): Promise<
   const session = await fetchSessionDetail(api, sessionId);
 
   // Check lifecycle for transcript availability
-  if (session.lifecycle === "detected" || session.lifecycle === "capturing") {
+  if (session.lifecycle === "detected") {
     process.stdout.write(
       `Transcript not yet available. Session is currently ${session.lifecycle}.\n`,
     );

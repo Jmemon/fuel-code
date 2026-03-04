@@ -248,7 +248,7 @@ describe("WebSocket connectivity", () => {
     });
 
     // Subscribe to the live session specifically
-    const sessionId = ctx.fixtures.sess_1_capturing;
+    const sessionId = ctx.fixtures.sess_1_active;
     client.subscribe({ session_id: sessionId });
     await wait(100);
 

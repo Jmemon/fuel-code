@@ -8,7 +8,7 @@
  *   Line 4: Summary
  *   Line 5 (conditional badges): session chain breadcrumb, team badge, worktree indicator
  *
- * For live sessions (lifecycle === 'capturing'):
+ * For live sessions (lifecycle === 'detected'):
  *   - Duration shows an elapsed time counter updated every second
  *   - Cost shows running estimate
  *   - Summary shows "Session in progress..." if no summary yet
@@ -24,7 +24,7 @@ export interface SessionHeaderProps {
 }
 
 export function SessionHeader({ session }: SessionHeaderProps): React.ReactElement {
-  const isLive = session.lifecycle === "detected" || session.lifecycle === "capturing";
+  const isLive = session.lifecycle === "detected";
   const [elapsedMs, setElapsedMs] = useState<number>(() => {
     if (isLive) {
       return Date.now() - new Date(session.started_at).getTime();
@@ -65,8 +65,7 @@ export function SessionHeader({ session }: SessionHeaderProps): React.ReactEleme
 
   // Conditional header badges: session chain, team, worktree
   const resumedFrom = session.resumed_from;
-  const teamName = session.team_name;
-  const teamRole = session.team_role;
+  const teamName = session.team?.team_name ?? null;
   const worktrees = session.worktrees;
   const hasBadges = !!(resumedFrom || teamName || (worktrees && worktrees.length > 0));
 
@@ -121,7 +120,7 @@ export function SessionHeader({ session }: SessionHeaderProps): React.ReactEleme
           {resumedFrom && teamName && <Text dimColor>{"  "}</Text>}
           {teamName && (
             <Text dimColor>
-              [team: {teamName}{teamRole ? ` (${teamRole})` : ""}]
+              [team: {teamName}]
             </Text>
           )}
           {(resumedFrom || teamName) && worktrees && worktrees.length > 0 && (

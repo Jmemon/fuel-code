@@ -15,13 +15,13 @@ const LIFECYCLE_DISPLAY: Record<
   string,
   { icon: string; label: string; color: string }
 > = {
-  detected: { icon: "\u25CF", label: "LIVE", color: "green" },
-  capturing: { icon: "\u25CF", label: "LIVE", color: "green" },
-  ended: { icon: "\u25D0", label: "ENDED", color: "yellow" },
-  parsed: { icon: "\u25CC", label: "PARSING", color: "yellow" },
-  summarized: { icon: "\u2713", label: "DONE", color: "green" },
-  archived: { icon: "\u25AA", label: "ARCHIVED", color: "gray" },
-  failed: { icon: "\u2717", label: "FAIL", color: "red" },
+  detected:         { icon: "\u25CF", label: "LIVE",     color: "green" },
+  ended:            { icon: "\u25D0", label: "ENDED",    color: "yellow" },
+  transcript_ready: { icon: "\u25D0", label: "READY",    color: "yellow" },
+  parsed:           { icon: "\u25CC", label: "PARSED",   color: "yellow" },
+  summarized:       { icon: "\u2713", label: "DONE",     color: "green" },
+  complete:         { icon: "\u2713", label: "COMPLETE",  color: "green" },
+  failed:           { icon: "\u2717", label: "FAIL",     color: "red" },
 };
 
 /** Format per-tool usage counts like "Edit(3) Bash(2) Read(5)" */
@@ -124,7 +124,7 @@ export function SessionRow({
         </Text>
       </Box>
       {/* Live sessions: show per-tool breakdown or aggregate counts */}
-      {(session.lifecycle === "detected" || session.lifecycle === "capturing") && session.total_messages != null && (
+      {session.lifecycle === "detected" && session.total_messages != null && (
         <Box paddingLeft={4}>
           <Text color="green">
             {session.tool_counts

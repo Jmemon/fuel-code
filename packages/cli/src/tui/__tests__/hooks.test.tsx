@@ -58,7 +58,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     workspace_id: "ws-001",
     device_id: "dev-001",
     cc_session_id: "cc-123",
-    lifecycle: "capturing",
+    lifecycle: "detected",
     parse_status: "pending",
     cwd: "/home/user/project",
     git_branch: "main",
@@ -202,7 +202,7 @@ describe("useSessions", () => {
   it("updateSession merges fields in-place", async () => {
     const api = {
       listSessions: async () => ({
-        data: [makeSession({ id: "s1", lifecycle: "capturing" })],
+        data: [makeSession({ id: "s1", lifecycle: "detected" })],
         nextCursor: null,
         hasMore: false,
       }),

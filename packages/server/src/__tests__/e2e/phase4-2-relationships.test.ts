@@ -101,10 +101,11 @@ beforeAll(async () => {
     ON CONFLICT (id) DO NOTHING
   `;
 
-  // Insert session WITH relationships
+  // Insert session WITH relationships (team_name/team_role dropped from sessions in migration 006;
+  // team data is now in the teams table, linked via lead_session_id)
   await sql`
-    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, team_name, team_role, subagent_count)
-    VALUES (${sessionWithRelId}, ${workspaceId}, ${deviceId}, ${"parsed"}, ${new Date().toISOString()}, ${teamName}, ${"lead"}, ${2})
+    INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, subagent_count)
+    VALUES (${sessionWithRelId}, ${workspaceId}, ${deviceId}, ${"parsed"}, ${new Date().toISOString()}, ${2})
   `;
 
   // Insert session WITHOUT relationships (backward compat test)

@@ -32,7 +32,7 @@ export interface UseSessionDetailResult {
   fetchEvents: () => void;
   /** Whether events have been fetched */
   eventsFetched: boolean;
-  /** Whether the session is live (capturing) */
+  /** Whether the session is live (detected) */
   isLive: boolean;
   /** Export data for the session */
   getExportData: () => SessionExportData | null;
@@ -81,7 +81,7 @@ export function useSessionDetail(
 
   // WS subscription for live sessions
   useEffect(() => {
-    if (!session || !wsClient || (session.lifecycle !== "detected" && session.lifecycle !== "capturing")) return;
+    if (!session || !wsClient || session.lifecycle !== "detected") return;
 
     // Subscribe to this session's updates
     wsClient.subscribe({ session_id: sessionId });
@@ -151,7 +151,7 @@ export function useSessionDetail(
     error,
     fetchEvents: fetchEventsCallback,
     eventsFetched,
-    isLive: session?.lifecycle === "detected" || session?.lifecycle === "capturing",
+    isLive: session?.lifecycle === "detected",
     getExportData,
   };
 }

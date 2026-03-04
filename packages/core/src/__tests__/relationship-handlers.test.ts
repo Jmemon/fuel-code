@@ -4,7 +4,7 @@
  * Tests each handler using mock SQL (matching the pattern in git-handlers.test.ts):
  *   - subagent.start: creates subagent row with status='running', upserts on duplicate
  *   - subagent.stop: updates to status='completed', handles stop-before-start
- *   - team.create: inserts team, updates session team_name/team_role
+ *   - team.create: inserts team row (lead_session_id links to creating session)
  *   - team.message: increments metadata.message_count, warns if team missing
  *   - skill.invoke: inserts session_skills row
  *   - worktree.create: inserts session_worktrees row
@@ -240,19 +240,19 @@ describe("handleSubagentStop", () => {
 // ---------------------------------------------------------------------------
 
 describe("handleTeamCreate", () => {
-  test("creates team row and sets session team_name/team_role", async () => {
+  test("creates team row with lead_session_id", async () => {
     const event = makeEvent("team.create", {
       session_id: "sess-abc-123",
       team_name: "auth-team",
       description: "Authentication module team",
     });
     const logger = createMockLogger();
-    // 1) session lookup, 2) INSERT team, 3) UPDATE session
-    const { sql, calls } = createMockSql([[SESSION_ROW], [], []]);
+    // 1) session lookup, 2) INSERT team (no more session UPDATE — team_name/team_role dropped)
+    const { sql, calls } = createMockSql([[SESSION_ROW], []]);
 
     await handleTeamCreate({ sql, event, workspaceId: "ws-001", logger });
 
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(2);
 
     // Verify team INSERT
     const insertCall = calls[1];
@@ -261,14 +261,6 @@ describe("handleTeamCreate", () => {
     expect(insertQuery).toContain("ON CONFLICT (team_name)");
     expect(insertCall.values).toContain("auth-team");
     expect(insertCall.values).toContain("Authentication module team");
-
-    // Verify session UPDATE
-    const updateCall = calls[2];
-    const updateQuery = updateCall.strings.join("$");
-    expect(updateQuery).toContain("UPDATE sessions");
-    expect(updateCall.values).toContain("auth-team");
-    expect(updateCall.values).toContain("lead");
-    expect(updateCall.values).toContain("sess-abc-123");
   });
 
   test("upsert on duplicate team_name uses COALESCE for description", async () => {
@@ -278,7 +270,7 @@ describe("handleTeamCreate", () => {
       description: "second description",
     });
     const logger = createMockLogger();
-    const { sql, calls } = createMockSql([[SESSION_ROW], [], []]);
+    const { sql, calls } = createMockSql([[SESSION_ROW], []]);
 
     await handleTeamCreate({ sql, event, workspaceId: "ws-001", logger });
 

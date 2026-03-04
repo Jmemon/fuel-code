@@ -182,7 +182,7 @@ describe("FuelApiClient — session endpoints", () => {
 
     const result = await client.listSessions({
       workspaceId: "ws-123",
-      lifecycle: "capturing",
+      lifecycle: "detected",
       limit: 10,
       cursor: "abc",
     });
@@ -190,7 +190,7 @@ describe("FuelApiClient — session endpoints", () => {
     expect(lastRequest.method).toBe("GET");
     expect(lastRequest.url).toContain("/api/sessions");
     expect(lastRequest.url).toContain("workspace_id=ws-123");
-    expect(lastRequest.url).toContain("lifecycle=capturing");
+    expect(lastRequest.url).toContain("lifecycle=detected");
     expect(lastRequest.url).toContain("limit=10");
     expect(lastRequest.url).toContain("cursor=abc");
     expect(result.data).toEqual([]);
@@ -210,7 +210,7 @@ describe("FuelApiClient — session endpoints", () => {
   });
 
   it("listSessions returns PaginatedResponse with data, nextCursor, hasMore", async () => {
-    const session = { id: "sess-001", lifecycle: "capturing" };
+    const session = { id: "sess-001", lifecycle: "detected" };
     mockResponse(200, { sessions: [session], next_cursor: "cursor-abc", has_more: true });
     const client = makeClient();
 
@@ -223,7 +223,7 @@ describe("FuelApiClient — session endpoints", () => {
   });
 
   it("getSession sends GET /api/sessions/:id and unwraps { session } envelope", async () => {
-    const mockSession = { id: "sess-001", lifecycle: "capturing" };
+    const mockSession = { id: "sess-001", lifecycle: "detected" };
     mockResponse(200, { session: mockSession });
     const client = makeClient();
 

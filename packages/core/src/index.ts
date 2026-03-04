@@ -79,7 +79,6 @@ export { loadSummaryConfig } from "./summary-config.js";
 
 // Session pipeline orchestrator: post-processing after session ends
 export {
-  runSessionPipeline,
   createPipelineQueue,
   type PipelineDeps,
   type PipelineResult,

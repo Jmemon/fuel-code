@@ -616,7 +616,7 @@ describe("SessionDetail — Empty states", () => {
 describe("SessionDetail — Live session", () => {
   it("22. Live session subscribes via WS", async () => {
     const api = makeMockApiClient({
-      session: makeSession({ lifecycle: "capturing", duration_ms: null, ended_at: null }),
+      session: makeSession({ lifecycle: "detected", duration_ms: null, ended_at: null }),
     });
     const ws = makeMockWsClient();
     const { lastFrame } = render(
@@ -629,7 +629,7 @@ describe("SessionDetail — Live session", () => {
 
   it("23. Live session WS update changes header", async () => {
     const api = makeMockApiClient({
-      session: makeSession({ lifecycle: "capturing", duration_ms: null, ended_at: null, summary: null }),
+      session: makeSession({ lifecycle: "detected", duration_ms: null, ended_at: null, summary: null }),
     });
     const ws = makeMockWsClient();
     const { lastFrame } = render(
@@ -640,7 +640,7 @@ describe("SessionDetail — Live session", () => {
     // Simulate a WS session.update message
     ws.emit("session.update", {
       session_id: "01JTEST1234567890ABCDEFGHI",
-      lifecycle: "capturing",
+      lifecycle: "detected",
       summary: "Updated summary from WS",
       stats: { total_messages: 50, total_cost_usd: 2.50 },
     });
@@ -653,7 +653,7 @@ describe("SessionDetail — Live session", () => {
     const recentStart = new Date(Date.now() - 5000).toISOString();
     const api = makeMockApiClient({
       session: makeSession({
-        lifecycle: "capturing",
+        lifecycle: "detected",
         duration_ms: null,
         ended_at: null,
         started_at: recentStart,

@@ -312,7 +312,7 @@ export function createSessionsCommand(): Command {
     .option("-w, --workspace <name>", "Filter by workspace name or ID")
     .option("-d, --device <name>", "Filter by device name or ID")
     .option("--today", "Show only today's sessions")
-    .option("--live", "Show only live (capturing) sessions")
+    .option("--live", "Show only live (detected) sessions")
     .option("--lifecycle <state>", "Filter by lifecycle state")
     .option("--tag <tag>", "Filter by tag")
     .option("-n, --limit <n>", "Results per page (default 20)", "20")
@@ -380,9 +380,9 @@ export async function runSessions(opts: {
       params.after = today.toISOString();
     }
 
-    // --live implies lifecycle=capturing
+    // --live implies lifecycle=detected (active sessions)
     if (opts.live) {
-      params.lifecycle = "detected,capturing";
+      params.lifecycle = "detected";
     } else if (opts.lifecycle) {
       params.lifecycle = opts.lifecycle;
     }

@@ -128,7 +128,7 @@ describe("SessionRow", () => {
     const { lastFrame } = render(
       <SessionRow
         session={makeSession({
-          lifecycle: "capturing",
+          lifecycle: "detected",
           total_messages: 15,
           tool_uses: 8,
           duration_ms: null,

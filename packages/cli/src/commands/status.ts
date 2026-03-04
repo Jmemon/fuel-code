@@ -193,7 +193,7 @@ export async function fetchStatus(
       // Active sessions
       (async (): Promise<SessionsResult> => {
         const { data } = await api.listSessions({
-          lifecycle: "detected,capturing",
+          lifecycle: "detected",
           limit: 10,
         });
         return data;
@@ -323,7 +323,7 @@ export function formatStatus(data: StatusData): string {
         }
       }
       if (data.activeSessions.length > 5) {
-        lines.push(`    ...and ${data.activeSessions.length - 5} more capturing`);
+        lines.push(`    ...and ${data.activeSessions.length - 5} more active`);
       }
     }
 

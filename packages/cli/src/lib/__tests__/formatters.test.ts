@@ -199,24 +199,23 @@ describe("formatLifecycle", () => {
     expect(stripped).toContain("LIVE");
   });
 
-  it("formats 'capturing' with green color", () => {
-    const result = formatLifecycle("capturing");
-    const stripped = stripAnsi(result);
-    expect(stripped).toContain("\u25CF");
-    expect(stripped).toContain("LIVE");
-  });
-
   it("formats 'ended' with yellow color", () => {
     const result = formatLifecycle("ended");
     const stripped = stripAnsi(result);
     expect(stripped).toContain("ENDED");
   });
 
-  it("formats 'parsed' with dotted circle icon and PARSING label", () => {
+  it("formats 'transcript_ready' with READY label", () => {
+    const result = formatLifecycle("transcript_ready");
+    const stripped = stripAnsi(result);
+    expect(stripped).toContain("READY");
+  });
+
+  it("formats 'parsed' with dotted circle icon and PARSED label", () => {
     const result = formatLifecycle("parsed");
     const stripped = stripAnsi(result);
     expect(stripped).toContain("\u25CC");
-    expect(stripped).toContain("PARSING");
+    expect(stripped).toContain("PARSED");
   });
 
   it("formats 'summarized' with green color", () => {
@@ -471,7 +470,7 @@ describe("renderTable", () => {
 describe("formatSessionRow", () => {
   it("returns array with 7 elements", () => {
     const row = formatSessionRow({
-      lifecycle: "capturing",
+      lifecycle: "detected",
       workspace_name: "my-repo",
       device_name: "macbook",
       duration_ms: 3600000,
@@ -485,7 +484,7 @@ describe("formatSessionRow", () => {
 
   it("formats lifecycle state", () => {
     const row = formatSessionRow({
-      lifecycle: "capturing",
+      lifecycle: "detected",
       duration_ms: null,
       started_at: new Date().toISOString(),
     });

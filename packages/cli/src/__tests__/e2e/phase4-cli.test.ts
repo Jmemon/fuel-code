@@ -84,7 +84,7 @@ describe("Sessions command", () => {
     expect(output).toContain("WORKSPACE");
     expect(output).toContain("DEVICE");
 
-    // Check status icons appear: LIVE for capturing, DONE for summarized, FAIL for failed
+    // Check status icons appear: LIVE for detected, DONE for summarized, FAIL for failed
     expect(output).toContain("LIVE");
     expect(output).toContain("DONE");
     expect(output).toContain("FAIL");
@@ -95,7 +95,7 @@ describe("Sessions command", () => {
     const workspaceId = await api.resolveWorkspaceName("fuel-code");
     const result = await fetchSessions(api, { workspaceId, limit: 50 });
 
-    // fuel-code has 4 sessions: sess_1_capturing, sess_2_summarized, sess_3_summarized, sess_4_failed
+    // fuel-code has 4 sessions: sess_1_active, sess_2_summarized, sess_3_summarized, sess_4_failed
     expect(result.sessions.length).toBe(4);
 
     // All sessions should belong to the fuel-code workspace

@@ -3,9 +3,10 @@
  *
  * When a multi-agent team is created within a session, this handler:
  *   1. Inserts into teams (or updates on conflict by team_name)
- *   2. Updates the session row to record team_name and team_role='lead'
  *
- * The session that creates the team is always the lead.
+ * The session that creates the team is always the lead (stored via lead_session_id
+ * on the teams row). team_name/team_role columns were dropped from sessions in
+ * migration 006.
  */
 
 import type { EventHandlerContext } from "../event-processor.js";
@@ -53,10 +54,4 @@ export async function handleTeamCreate(ctx: EventHandlerContext): Promise<void> 
       lead_session_id = COALESCE(EXCLUDED.lead_session_id, teams.lead_session_id)
   `;
 
-  // Mark this session as the team lead
-  await sql`
-    UPDATE sessions
-    SET team_name = ${teamName}, team_role = ${"lead"}
-    WHERE id = ${session.id}
-  `;
 }

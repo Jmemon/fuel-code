@@ -18,7 +18,7 @@ import type { Sql } from "postgres";
 import type { Logger } from "pino";
 import {
   resetSessionForReparse,
-  runSessionPipeline,
+  reconcileSession,
   type PipelineDeps,
 } from "@fuel-code/core";
 
@@ -30,7 +30,7 @@ function triggerPipeline(pipelineDeps: PipelineDeps, sessionId: string, logger: 
   if (pipelineDeps.enqueueSession) {
     pipelineDeps.enqueueSession(sessionId);
   } else {
-    runSessionPipeline(pipelineDeps, sessionId).catch((err: unknown) => {
+    reconcileSession(pipelineDeps, sessionId).catch((err: unknown) => {
       logger.error(
         { sessionId, error: err instanceof Error ? err.message : String(err) },
         "Pipeline trigger failed (direct)",

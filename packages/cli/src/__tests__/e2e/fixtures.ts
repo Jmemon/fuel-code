@@ -37,7 +37,7 @@ export const IDS = {
 
   // Sessions (8 total) — position 5 is the session number (1-8),
   // giving each a unique 8-char prefix (01E2E1SS … 01E2E8SS).
-  sess_1_capturing:  "01E2E1SS0001CA0000000000FF",   // fuel-code, capturing
+  sess_1_active:     "01E2E1SS0001CA0000000000FF",   // fuel-code, detected (active)
   sess_2_summarized: "01E2E2SS0002SM0000000000GG",   // fuel-code, summarized
   sess_3_summarized: "01E2E3SS0003SM0000000000HH",   // fuel-code, summarized
   sess_4_failed:     "01E2E4SS0004FA0000000000JJ",   // fuel-code, failed
@@ -94,11 +94,11 @@ export async function seedFixtures(sql: postgres.Sql): Promise<void> {
   `;
 
   // -- Sessions (8 total) --
-  // Session 1: fuel-code, capturing (still active)
+  // Session 1: fuel-code, detected (still active)
   await sql`
     INSERT INTO sessions (id, workspace_id, device_id, lifecycle, started_at, ended_at, duration_ms,
                           model, git_branch, total_messages, tokens_in, tokens_out, cost_estimate_usd, tags, summary)
-    VALUES (${IDS.sess_1_capturing}, ${IDS.ws_fuel_code}, ${IDS.dev_macbook}, 'capturing',
+    VALUES (${IDS.sess_1_active}, ${IDS.ws_fuel_code}, ${IDS.dev_macbook}, 'detected',
             ${todayAt(9, 0)}, NULL, NULL,
             'claude-sonnet-4-20250514', 'main',
             12, 5000, 3000, 0.15, '{"active","wip"}', NULL)
@@ -184,13 +184,13 @@ export async function seedFixtures(sql: postgres.Sql): Promise<void> {
 
   // -- Events (20+) --
   const events = [
-    // Session 1 events (capturing — only start)
-    { type: "session.start", ts: todayAt(9, 0), device: IDS.dev_macbook, ws: IDS.ws_fuel_code, session: IDS.sess_1_capturing,
-      data: { cc_session_id: IDS.sess_1_capturing, cwd: "/Users/john/Desktop/fuel-code", git_branch: "main", model: "claude-sonnet-4-20250514" } },
+    // Session 1 events (active — only start, no end)
+    { type: "session.start", ts: todayAt(9, 0), device: IDS.dev_macbook, ws: IDS.ws_fuel_code, session: IDS.sess_1_active,
+      data: { cc_session_id: IDS.sess_1_active, cwd: "/Users/john/Desktop/fuel-code", git_branch: "main", model: "claude-sonnet-4-20250514" } },
 
     // CC session start event (different event type)
-    { type: "cc.session_start", ts: todayAt(9, 1), device: IDS.dev_macbook, ws: IDS.ws_fuel_code, session: IDS.sess_1_capturing,
-      data: { cc_session_id: IDS.sess_1_capturing, source: "startup" } },
+    { type: "cc.session_start", ts: todayAt(9, 1), device: IDS.dev_macbook, ws: IDS.ws_fuel_code, session: IDS.sess_1_active,
+      data: { cc_session_id: IDS.sess_1_active, source: "startup" } },
 
     // Session 2 events (summarized — start + end + git)
     { type: "session.start", ts: todayAt(10, 0), device: IDS.dev_macbook, ws: IDS.ws_fuel_code, session: IDS.sess_2_summarized,
@@ -280,7 +280,7 @@ export async function seedFixtures(sql: postgres.Sql): Promise<void> {
   // Seed for fuel-code summarized sessions + the live session (spec line 81)
   await seedTranscriptData(sql, IDS.sess_2_summarized, 8);
   await seedTranscriptData(sql, IDS.sess_3_summarized, 6);
-  await seedTranscriptData(sql, IDS.sess_1_capturing, 4);
+  await seedTranscriptData(sql, IDS.sess_1_active, 4);
 }
 
 /**

@@ -172,7 +172,7 @@ export function startConsumer(
           broadcaster.broadcastEvent(entry.event);
 
           // Broadcast session lifecycle transitions for event types that cause them.
-          // session.start -> lifecycle "capturing", session.end -> lifecycle "ended".
+          // session.start -> lifecycle "detected", session.end -> lifecycle "ended".
           const { session_id, workspace_id, type: eventType, data: eventData } = entry.event;
           if (session_id && workspace_id) {
             if (eventType === "session.start") {
