@@ -115,7 +115,7 @@ export async function reconcileSession(
     const sessionRows = await sql`
       SELECT id, workspace_id, device_id, lifecycle, transcript_s3_key,
              started_at, ended_at, duration_ms, summary, subagent_count,
-             cwd, git_branch, git_remote, model, end_reason
+             git_branch, model, end_reason
       FROM sessions
       WHERE id = ${sessionId}
     `;
@@ -158,9 +158,7 @@ export async function reconcileSession(
         id: session.id as string,
         workspace_id: session.workspace_id as string,
         device_id: session.device_id as string,
-        cwd: session.cwd as string | undefined,
         git_branch: session.git_branch as string | null,
-        git_remote: session.git_remote as string | null,
         model: session.model as string | null,
         lifecycle: session.lifecycle as string,
         started_at: (session.started_at as Date).toISOString(),
@@ -398,12 +396,19 @@ export async function reconcileSession(
 
     // -----------------------------------------------------------------------
     // Step 10: Generate session summary -> advance to summarized
-    // (skipped if session is already summarized or beyond)
+    // Re-query lifecycle to avoid stale gap: when this run parsed the session
+    // from transcript_ready → parsed, gap.needsSummary is false (computed at
+    // the top when lifecycle was transcript_ready). Querying the actual DB
+    // state ensures the summary step runs in the same reconcile pass.
     // -----------------------------------------------------------------------
 
     let summarySuccess = false;
 
-    if (gap.needsSummary) {
+    const preSummaryRow = await sql`SELECT lifecycle FROM sessions WHERE id = ${sessionId}`;
+    const preSummaryLifecycle = preSummaryRow[0]?.lifecycle as SessionLifecycle | undefined;
+    const shouldRunSummary = preSummaryLifecycle === "parsed";
+
+    if (shouldRunSummary) {
       try {
         // If we didn't parse in this run, we need to load messages for summary
         let messages = parseResult?.messages;
@@ -467,8 +472,8 @@ export async function reconcileSession(
         log.error({ error: errMsg }, "Summary generation threw — session stays at 'parsed'");
         errors.push(errMsg);
       }
-    } else if (!gap.needsSummary) {
-      // Summary was already done in a prior run (session is summarized or beyond)
+    } else if (preSummaryLifecycle === "summarized" || preSummaryLifecycle === "complete") {
+      // Summary was already done in a prior run
       summarySuccess = true;
     }
 
@@ -476,30 +481,39 @@ export async function reconcileSession(
     // Step 11: Per-teammate summaries (non-fatal, best-effort)
     // Iterates over teammates detected in step 7 and generates individual
     // summaries for each one. Failures never block the pipeline.
+    // Re-queries lifecycle like step 10 to avoid stale gap.
     // -----------------------------------------------------------------------
 
-    if (gap.needsTeammateSummaries) {
-      try {
-        await generateTeammateSummaries(
-          { sql: deps.sql, summaryConfig: deps.summaryConfig, logger: log },
-          sessionId,
-        );
-        stepsExecuted.push("generateTeammateSummaries");
-      } catch (err) {
-        logger.warn(
-          { sessionId, error: err instanceof Error ? err.message : String(err) },
-          "Teammate summary generation failed (non-fatal)",
-        );
-        // Do NOT fail the session — teammate summaries are best-effort
+    {
+      const preTeammateRow = await sql`SELECT lifecycle FROM sessions WHERE id = ${sessionId}`;
+      const preTeammateLifecycle = preTeammateRow[0]?.lifecycle as SessionLifecycle | undefined;
+      const shouldRunTeammateSummaries =
+        preTeammateLifecycle === "parsed" || preTeammateLifecycle === "summarized";
+
+      if (shouldRunTeammateSummaries) {
+        try {
+          await generateTeammateSummaries(
+            { sql: deps.sql, summaryConfig: deps.summaryConfig, logger: log },
+            sessionId,
+          );
+          stepsExecuted.push("generateTeammateSummaries");
+        } catch (err) {
+          logger.warn(
+            { sessionId, error: err instanceof Error ? err.message : String(err) },
+            "Teammate summary generation failed (non-fatal)",
+          );
+          // Do NOT fail the session — teammate summaries are best-effort
+        }
       }
     }
 
     // -----------------------------------------------------------------------
     // Step 12: Advance to complete
+    // Re-queries lifecycle for the actual current state rather than using the
+    // stale gap computed at the top.
     // -----------------------------------------------------------------------
 
-    if (gap.needsLifecycleAdvance) {
-      // Check current state to determine the right transition
+    {
       const currentState = await sql`SELECT lifecycle FROM sessions WHERE id = ${sessionId}`;
       const currentLifecycle = currentState[0]?.lifecycle as SessionLifecycle | undefined;
 
@@ -660,14 +674,14 @@ async function persistRelationships(
       `;
     }
 
-    // 5. Update session metadata (permission_mode, resume chain)
-    // Note: team_name and team_role columns were dropped from sessions in
-    // migration 006. Team data is now in the teams/teammates tables.
-    if (parseResult.permission_mode || parseResult.resumed_from_session_id) {
+    // 5. Update session metadata (permission_mode)
+    // Note: team_name, team_role, and resumed_from_session_id columns were
+    // dropped from sessions in migration 006. Team data is now in the
+    // teams/teammates tables.
+    if (parseResult.permission_mode) {
       await sql`
         UPDATE sessions SET
-          permission_mode = COALESCE(${parseResult.permission_mode ?? null}, permission_mode),
-          resumed_from_session_id = COALESCE(${parseResult.resumed_from_session_id ?? null}, resumed_from_session_id)
+          permission_mode = COALESCE(${parseResult.permission_mode}, permission_mode)
         WHERE id = ${sessionId}
       `;
     }

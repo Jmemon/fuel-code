@@ -2,14 +2,15 @@
  * `fuel-code backfill` command.
  *
  * Discovers all historical Claude Code sessions from ~/.claude/projects/
- * and ingests them into the fuel-code backend via direct DB+S3 writes.
+ * and ingests them into the fuel-code backend via the server HTTP API.
  * Supports:
  *   --dry-run  — Scan and report without ingesting
  *   --status   — Show last backfill state
  *   --force    — Run even if a backfill appears to be in progress
  *
- * After discovery, sessions are written directly to Postgres and transcripts
- * uploaded to S3. No HTTP calls to the server are made during backfill.
+ * After discovery, sessions are created via POST /api/backfill/sessions and
+ * transcripts uploaded via POST /api/sessions/:id/transcript/upload. The CLI
+ * only needs backend.url + api_key from ~/.fuel-code/config.yaml.
  *
  * Backfill state is persisted at ~/.fuel-code/backfill-state.json for:
  *   - Status reporting
@@ -18,25 +19,23 @@
  */
 
 import { Command } from "commander";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import postgres from "postgres";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import {
   scanForSessions,
-  ingestBackfillSessions,
-  waitForPipelineCompletion,
+  waitForPipelineCompletionViaHttp,
   loadBackfillState,
   saveBackfillState,
   type DiscoveredSession,
   type ScanResult,
   type ScanProgress,
-  type BackfillProgress,
-  type BackfillS3Client,
   type BackfillState,
   type PipelineWaitProgress,
 } from "@fuel-code/core";
+import type { BackfillResult } from "@fuel-code/core";
 import { configExists, loadConfig, getConfigDir } from "../lib/config.js";
+import { FuelApiClient } from "../lib/api-client.js";
 
 // ---------------------------------------------------------------------------
 // Command factory
@@ -158,6 +157,17 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
     scanResult.discovered.map(s => [s.sessionId, s.transcriptPath])
   );
 
+  // Build a lookup of sub-agent transcripts by parent session ID
+  const subagentsBySession = new Map<string, typeof scanResult.subagentTranscripts>();
+  for (const sa of scanResult.subagentTranscripts) {
+    let list = subagentsBySession.get(sa.parentSessionId);
+    if (!list) {
+      list = [];
+      subagentsBySession.set(sa.parentSessionId, list);
+    }
+    list.push(sa);
+  }
+
   // Group sessions by project for summary display
   const byProject = groupByProject(scanResult.discovered);
   const totalSize = scanResult.discovered.reduce(
@@ -178,43 +188,8 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
 
   console.error("Preparing ingestion...");
 
-  // Phase 2: Create direct DB+S3 connections from environment variables.
-  // The CLI shares the same DB and S3 as the server — both read from env vars.
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    console.error("DATABASE_URL environment variable is required for backfill.");
-    console.error("Set it to the same Postgres connection string used by the fuel-code server.");
-    process.exitCode = 1;
-    process.removeListener("SIGINT", onSigint);
-    return;
-  }
-
-  const s3Bucket = process.env.S3_BUCKET || "fuel-code-blobs";
-  const s3Region = process.env.S3_REGION || "us-east-1";
-  const s3Endpoint = process.env.S3_ENDPOINT;
-  const s3ForcePathStyle = process.env.S3_FORCE_PATH_STYLE === "true";
-
-  // Create a Postgres connection pool (small — backfill is bounded by concurrency)
-  const sql = postgres(databaseUrl, { max: 5, idle_timeout: 20, connect_timeout: 10 });
-
-  // Create a minimal S3 client that satisfies BackfillS3Client interface
-  const s3Raw = new S3Client({
-    region: s3Region,
-    ...(s3Endpoint ? { endpoint: s3Endpoint } : {}),
-    ...(s3ForcePathStyle ? { forcePathStyle: true } : {}),
-  });
-  const s3: BackfillS3Client = {
-    async upload(key: string, body: Buffer | string, contentType?: string) {
-      const bodyBuffer = typeof body === "string" ? Buffer.from(body) : body;
-      await s3Raw.send(new PutObjectCommand({
-        Bucket: s3Bucket,
-        Key: key,
-        Body: bodyBuffer,
-        ContentType: contentType ?? "application/octet-stream",
-      }));
-      return { key, size: bodyBuffer.length };
-    },
-  };
+  // Phase 2: Create API client from config (no DB/S3 env vars needed)
+  const api = FuelApiClient.fromConfig(config);
 
   // Mark as running and persist state
   const updatedState: BackfillState = {
@@ -227,20 +202,18 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
   // Build the set of already-ingested sessions for resume
   const alreadyIngested = new Set(state.ingestedSessionIds);
 
-  // Phase 3+4: Ingest sessions via direct DB+S3, then wait for reconcile completion.
+  // Phase 3+4: Ingest sessions via HTTP, then wait for reconcile completion.
   // Both progress bars are rendered simultaneously so the user sees the
   // full pipeline at a glance.
   console.error("");
 
-  // Dual-bar rendering state — two lines updated in place via ANSI escapes
+  // Dual-bar rendering state — two lines updated in place via ANSI escapes.
+  // Uses a single atomic write to prevent interleaving when called from
+  // concurrent async contexts (upload worker pool + pipeline poller).
   let dualBarInit = false;
   const writeDualBars = (line1: string, line2: string): void => {
-    if (dualBarInit) {
-      // Move cursor up one line so we overwrite both lines
-      process.stderr.write("\x1b[1A\r");
-    }
-    // Clear each line before writing to avoid leftover characters
-    process.stderr.write(`\x1b[2K${line1}\n\x1b[2K${line2}`);
+    const prefix = dualBarInit ? "\x1b[1A\r" : "";
+    process.stderr.write(`${prefix}\x1b[2K${line1}\n\x1b[2K${line2}`);
     dualBarInit = true;
   };
 
@@ -255,33 +228,165 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
     let processingBarLine = "  Processing:  waiting...";
     const renderBars = () => writeDualBars(uploadBarLine, processingBarLine);
 
-    // Upload promise: writes sessions directly to DB+S3 (no HTTP)
-    const uploadPromise = ingestBackfillSessions(scanResult.discovered, {
-      sql,
-      s3,
-      deviceId: config.device.id,
-      deviceName: config.device.name,
-      deviceType: config.device.type,
-      signal: abortController.signal,
-      alreadyIngested,
-      concurrency,
-      onSessionIngested: (id) => ingestedIds.push(id),
-      onProgress: (progress: BackfillProgress) => {
-        const bar = buildProgressBar(progress.completed, progress.total, 30);
-        const sessionShort = progress.currentSession
-          ? progress.currentSession.slice(0, 8) + "..."
-          : "";
-        const failStr = progress.failed > 0 ? `  (${progress.failed} failed)` : "";
-        uploadBarLine = `  Uploading:   ${bar} ${progress.completed}/${progress.total}  ${sessionShort}${failStr}`;
-        renderBars();
-      },
-    }).then(r => { uploadsDone = true; return r; });
+    // Result tracking (replaces BackfillResult from ingestBackfillSessions)
+    const result: BackfillResult = {
+      ingested: 0,
+      skipped: 0,
+      failed: 0,
+      errors: [],
+      totalSizeBytes: 0,
+      durationMs: 0,
+      liveStarted: 0,
+    };
+    const startTime = Date.now();
 
-    // Pipeline polling promise: polls DB lifecycle states concurrently
-    const pipelinePromise = waitForPipelineCompletion(
+    /**
+     * Process a single session via HTTP API.
+     * Called concurrently by the worker pool.
+     */
+    async function processSession(session: DiscoveredSession): Promise<void> {
+      if (abortController.signal.aborted) return;
+
+      // Skip if already ingested in a previous (interrupted) run
+      if (alreadyIngested.has(session.sessionId)) {
+        result.skipped++;
+        return;
+      }
+
+      try {
+        // Step 1: Create session row via server API (replaces ensureSessionRow + endSession)
+        const createResult = await api.createBackfillSession({
+          session_id: session.sessionId,
+          workspace_canonical_id: session.workspaceCanonicalId,
+          device_id: config.device.id,
+          device_name: config.device.name,
+          device_type: (config.device.type as "local" | "remote") ?? "local",
+          started_at: session.firstTimestamp ?? new Date().toISOString(),
+          ended_at: session.isLive ? null : (session.lastTimestamp ?? null),
+          duration_ms: (!session.isLive && session.firstTimestamp && session.lastTimestamp)
+            ? new Date(session.lastTimestamp).getTime() - new Date(session.firstTimestamp).getTime()
+            : null,
+          cwd: session.resolvedCwd ?? undefined,
+          git_branch: session.gitBranch ?? null,
+          source: "backfill:scan",
+          is_live: session.isLive ?? false,
+        });
+
+        // Step 2: Dedup — session already existed on server
+        if (createResult.status === "exists") {
+          result.skipped++;
+          return;
+        }
+
+        // Step 3: Live sessions stop here — only a 'detected' row was created
+        if (session.isLive) {
+          result.liveStarted = (result.liveStarted ?? 0) + 1;
+          return;
+        }
+
+        // Step 4: Read and upload main transcript
+        const content = fs.readFileSync(session.transcriptPath);
+        await api.uploadTranscript(session.sessionId, content as Buffer);
+
+        // Step 5: Upload sub-agent transcripts for this session (if any)
+        const sessionSubagents = subagentsBySession.get(session.sessionId);
+        if (sessionSubagents) {
+          for (const sa of sessionSubagents) {
+            try {
+              const saContent = fs.readFileSync(sa.transcriptPath);
+              await api.uploadTranscript(session.sessionId, saContent as Buffer, sa.agentId);
+            } catch {
+              // Non-fatal: sub-agent upload failures don't block parent
+            }
+          }
+        }
+
+        result.ingested++;
+        result.totalSizeBytes += session.fileSizeBytes;
+        ingestedIds.push(session.sessionId);
+      } catch (err) {
+        result.failed++;
+        result.errors.push({
+          sessionId: session.sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // --- Concurrent worker pool (same pattern as ingestBackfillSessions) ---
+    const inFlight = new Set<Promise<void>>();
+    let sessionIndex = 0;
+    let lastReportedSession: string | null = null;
+
+    const abortPromise = abortController.signal
+      ? new Promise<void>((_, reject) => {
+          if (abortController.signal.aborted) { reject(new Error("Aborted")); return; }
+          abortController.signal.addEventListener("abort", () => reject(new Error("Aborted")), { once: true });
+        })
+      : null;
+
+    function reportProgress(currentSession: string | null): void {
+      const completed = result.ingested + result.skipped + result.failed;
+      const sessionShort = (currentSession ?? lastReportedSession ?? "").slice(0, 8);
+      const failStr = result.failed > 0 ? `  (${result.failed} failed)` : "";
+      uploadBarLine = `  Uploading:   ${buildProgressBar(completed, scanResult.discovered.length, 30)} ${completed}/${scanResult.discovered.length}  ${sessionShort}...${failStr}`;
+      renderBars();
+    }
+
+    // Upload promise: processes sessions via HTTP (worker pool)
+    const uploadPromise = (async () => {
+      try {
+        while (sessionIndex < scanResult.discovered.length) {
+          if (abortController.signal.aborted) break;
+
+          while (inFlight.size < concurrency && sessionIndex < scanResult.discovered.length) {
+            if (abortController.signal.aborted) break;
+
+            const session = scanResult.discovered[sessionIndex++];
+            lastReportedSession = session.sessionId;
+            reportProgress(session.sessionId);
+
+            const p = processSession(session).then(() => {
+              inFlight.delete(p);
+              reportProgress(session.sessionId);
+            });
+            inFlight.add(p);
+          }
+
+          if (inFlight.size >= concurrency) {
+            const raceTargets: Promise<void>[] = [...inFlight];
+            if (abortPromise) raceTargets.push(abortPromise);
+            await Promise.race(raceTargets);
+          }
+        }
+
+        if (inFlight.size > 0) {
+          await Promise.allSettled(inFlight);
+        }
+      } catch {
+        if (inFlight.size > 0) {
+          await Promise.allSettled(inFlight);
+        }
+      }
+
+      result.durationMs = Date.now() - startTime;
+      uploadsDone = true;
+      return result;
+    })();
+
+    // Pipeline polling promise: polls lifecycle statuses via HTTP
+    const pipelinePromise = waitForPipelineCompletionViaHttp(
       () => [...ingestedIds],
       {
-        sql,
+        fetchLifecycles: async (ids: string[]) => {
+          if (ids.length === 0) return {};
+          const res = await api.batchStatus(ids);
+          const map: Record<string, string> = {};
+          for (const [id, status] of Object.entries(res.statuses)) {
+            map[id] = status.lifecycle;
+          }
+          return map;
+        },
         signal: abortController.signal,
         uploadsComplete: () => uploadsDone,
         onProgress: (progress: PipelineWaitProgress) => {
@@ -299,15 +404,15 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
       },
     );
 
-    const [result, pipelineResult] = await Promise.all([uploadPromise, pipelinePromise]);
+    const [uploadResult, pipelineResult] = await Promise.all([uploadPromise, pipelinePromise]);
 
     // Save final state.
     // failedSessionIds: sessions that failed this run (need transcript retry next time).
     // Previously-failed sessions that succeeded this run are removed from the set.
-    const currentRunFailedIds = new Set(result.errors.map(e => e.sessionId));
+    const currentRunFailedIds = new Set(uploadResult.errors.map(e => e.sessionId));
     const finalState: BackfillState = {
       lastRunAt: new Date().toISOString(),
-      lastRunResult: result,
+      lastRunResult: uploadResult,
       isRunning: false,
       startedAt: null,
       ingestedSessionIds: [
@@ -320,9 +425,9 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
 
     // Freeze upload bar as "done"
     const uploadTotal = scanResult.discovered.length;
-    const uploadCompleted = result.ingested + result.skipped + result.failed;
-    const uploadDoneStr = result.failed > 0
-      ? `done (${result.failed} failed)`
+    const uploadCompleted = uploadResult.ingested + uploadResult.skipped + uploadResult.failed;
+    const uploadDoneStr = uploadResult.failed > 0
+      ? `done (${uploadResult.failed} failed)`
       : "done";
     const uploadDoneLine = `  Uploading:   ${buildProgressBar(uploadCompleted, uploadTotal, 30)} ${uploadCompleted}/${uploadTotal}  ${uploadDoneStr}`;
     writeDualBars(uploadDoneLine, processingBarLine);
@@ -340,10 +445,10 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
         console.log("Backfill uploaded. Processing watch cancelled (server still working in background).");
       }
 
-      console.log(`  Uploaded:   ${result.ingested} sessions` +
-        (result.skipped > 0 ? ` (${result.skipped} skipped)` : ""));
-      if (result.liveStarted && result.liveStarted > 0) {
-        console.log(`  Live:       ${result.liveStarted} session${result.liveStarted === 1 ? "" : "s"} started (no end event — session still running)`);
+      console.log(`  Uploaded:   ${uploadResult.ingested} sessions` +
+        (uploadResult.skipped > 0 ? ` (${uploadResult.skipped} skipped)` : ""));
+      if (uploadResult.liveStarted && uploadResult.liveStarted > 0) {
+        console.log(`  Live:       ${uploadResult.liveStarted} session${uploadResult.liveStarted === 1 ? "" : "s"} started (no end event — session still running)`);
       }
       const ps = pipelineResult.summary;
       const processedParts: string[] = [];
@@ -356,22 +461,19 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
         (processedParts.length > 0 ? ` (${processedParts.join(", ")})` : ""));
     } else {
       console.log("Backfill complete!");
-      console.log(`  Uploaded:   ${result.ingested} sessions` +
-        (result.skipped > 0 ? ` (${result.skipped} skipped)` : ""));
-      if (result.liveStarted && result.liveStarted > 0) {
-        console.log(`  Live:       ${result.liveStarted} session${result.liveStarted === 1 ? "" : "s"} started (no end event — session still running)`);
+      console.log(`  Uploaded:   ${uploadResult.ingested} sessions` +
+        (uploadResult.skipped > 0 ? ` (${uploadResult.skipped} skipped)` : ""));
+      if (uploadResult.liveStarted && uploadResult.liveStarted > 0) {
+        console.log(`  Live:       ${uploadResult.liveStarted} session${uploadResult.liveStarted === 1 ? "" : "s"} started (no end event — session still running)`);
       }
     }
 
     // Show errors at the end with full detail: category, transcript path, error message, retry hint
-    if (result.errors.length > 0) {
+    if (uploadResult.errors.length > 0) {
       console.log("");
-      console.log(formatErrorBlock(result.errors, sessionPathMap));
+      console.log(formatErrorBlock(uploadResult.errors, sessionPathMap));
     }
   } finally {
-    // Close the DB connection pool
-    await sql.end({ timeout: 5 });
-    s3Raw.destroy();
     process.removeListener("SIGINT", onSigint);
   }
 }
