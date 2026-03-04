@@ -8,6 +8,8 @@
  * Test coverage:
  *   - GET /api/sessions: list, filtering params, pagination, validation
  *   - GET /api/sessions/:id: detail, 404
+ *   - GET /api/sessions/:id/teammates: list teammates, empty array, 404
+ *   - GET /api/sessions/:id/teammates/:id/messages: message feed, 404
  *   - GET /api/sessions/:id/transcript: parsed messages, unparsed 404
  *   - GET /api/sessions/:id/transcript/raw: presigned URL, redirect, 404
  *   - GET /api/sessions/:id/events: session events, 404
@@ -137,6 +139,62 @@ const SESSION_EVENTS = [
     workspace_id: "ws-01",
     device_id: "dev-01",
     data: { cwd: "/home/user/project" },
+  },
+];
+
+const TEAMMATES = [
+  {
+    id: "tm-01",
+    team_id: "team-01",
+    session_id: "sess-01",
+    role: "lead",
+    entity_type: "human",
+    entity_name: "John",
+    summary: "Led the session",
+    created_at: "2025-01-15T10:00:00.000Z",
+    metadata: {},
+    team_name: "alpha-team",
+  },
+  {
+    id: "tm-02",
+    team_id: "team-01",
+    session_id: "sess-01",
+    role: "member",
+    entity_type: "agent",
+    entity_name: "Claude",
+    summary: "Assisted with code",
+    created_at: "2025-01-15T10:01:00.000Z",
+    metadata: {},
+    team_name: "alpha-team",
+  },
+];
+
+const TEAMMATE_MESSAGES = [
+  {
+    id: "tmsg-01",
+    session_id: "sess-01",
+    teammate_id: "tm-01",
+    subagent_id: null,
+    message_type: "user",
+    role: "human",
+    timestamp: "2025-01-15T10:02:00.000Z",
+    agent_id: null,
+    agent_name: null,
+    content_blocks: [],
+  },
+  {
+    id: "tmsg-02",
+    session_id: "sess-01",
+    teammate_id: "tm-01",
+    subagent_id: "sa-01",
+    message_type: "assistant",
+    role: "assistant",
+    timestamp: "2025-01-15T10:03:00.000Z",
+    agent_id: "agent-01",
+    agent_name: "Helper",
+    content_blocks: [
+      { id: "cb-t01", block_type: "text", content_text: "Here is the fix." },
+    ],
   },
 ];
 
@@ -285,15 +343,31 @@ function defaultQueryHandler(queryText: string, values: unknown[]): unknown[] {
     return session ? [session] : [];
   }
 
+  // Teammate existence check: SELECT id FROM teammates WHERE id = ... AND session_id = ...
+  if (queryText.includes("FROM teammates") && queryText.includes("WHERE id =") && queryText.includes("session_id")) {
+    const teammateId = values[0];
+    const sessionId = values[1];
+    const teammate = TEAMMATES.find((t) => t.id === teammateId && t.session_id === sessionId);
+    return teammate ? [teammate] : [];
+  }
+
+  // Teammates list: FROM teammates tm JOIN teams t (for session detail and /teammates endpoint)
+  if (queryText.includes("FROM teammates") && queryText.includes("JOIN teams")) {
+    const sessionId = values.find((v) => typeof v === "string");
+    return TEAMMATES.filter((t) => t.session_id === sessionId);
+  }
+
+  // Teammate messages: FROM transcript_messages msg ... WHERE msg.teammate_id =
+  // Must be checked BEFORE the general transcript_messages handler below.
+  if (queryText.includes("FROM transcript_messages msg") && queryText.includes("teammate_id")) {
+    const teammateId = values.find((v) => typeof v === "string");
+    return TEAMMATE_MESSAGES.filter((m) => m.teammate_id === teammateId);
+  }
+
   // Transcript messages: FROM transcript_messages
   if (queryText.includes("FROM transcript_messages")) {
     const sessionId = values.find((v) => typeof v === "string");
     return TRANSCRIPT_MESSAGES.filter((m) => m.session_id === sessionId);
-  }
-
-  // Teammates: FROM teammates tm JOIN teams t
-  if (queryText.includes("FROM teammates") && queryText.includes("JOIN teams")) {
-    return [];
   }
 
   // Events: FROM events
@@ -495,6 +569,102 @@ describe("GET /api/sessions/:id", () => {
 
     const body = await res.json();
     expect(body.error).toBe("Session not found");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/sessions/:id/teammates
+// ---------------------------------------------------------------------------
+
+describe("GET /api/sessions/:id/teammates", () => {
+  test("returns teammates for a session with team_name", async () => {
+    const res = await get("/api/sessions/sess-01/teammates");
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(body.teammates).toBeDefined();
+    expect(Array.isArray(body.teammates)).toBe(true);
+    expect(body.teammates.length).toBe(2);
+    expect(body.teammates[0].team_name).toBe("alpha-team");
+    expect(body.teammates[0].entity_name).toBe("John");
+    expect(body.teammates[1].entity_name).toBe("Claude");
+  });
+
+  test("returns empty array for session with no teammates", async () => {
+    const res = await get("/api/sessions/sess-02/teammates");
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(body.teammates).toEqual([]);
+  });
+
+  test("returns 404 for non-existent session", async () => {
+    const res = await get("/api/sessions/nonexistent-id/teammates");
+    expect(res.status).toBe(404);
+
+    const body = await res.json();
+    expect(body.error).toBe("Session not found");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/sessions/:id/teammates/:teammateId/messages
+// ---------------------------------------------------------------------------
+
+describe("GET /api/sessions/:id/teammates/:teammateId/messages", () => {
+  test("returns stitched message feed with content_blocks", async () => {
+    const res = await get("/api/sessions/sess-01/teammates/tm-01/messages");
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(body.messages).toBeDefined();
+    expect(Array.isArray(body.messages)).toBe(true);
+    expect(body.messages.length).toBe(2);
+  });
+
+  test("messages include agent_id and agent_name from subagent", async () => {
+    const res = await get("/api/sessions/sess-01/teammates/tm-01/messages");
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    const assistantMsg = body.messages.find((m: any) => m.message_type === "assistant");
+    expect(assistantMsg).toBeDefined();
+    expect(assistantMsg.agent_id).toBe("agent-01");
+    expect(assistantMsg.agent_name).toBe("Helper");
+  });
+
+  test("messages ordered by timestamp", async () => {
+    const res = await get("/api/sessions/sess-01/teammates/tm-01/messages");
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    for (let i = 1; i < body.messages.length; i++) {
+      expect(body.messages[i].timestamp >= body.messages[i - 1].timestamp).toBe(true);
+    }
+  });
+
+  test("returns 404 for non-existent session", async () => {
+    const res = await get("/api/sessions/nonexistent-id/teammates/tm-01/messages");
+    expect(res.status).toBe(404);
+
+    const body = await res.json();
+    expect(body.error).toBe("Session not found");
+  });
+
+  test("returns 404 for non-existent teammate", async () => {
+    const res = await get("/api/sessions/sess-01/teammates/nonexistent-tm/messages");
+    expect(res.status).toBe(404);
+
+    const body = await res.json();
+    expect(body.error).toBe("Teammate not found");
+  });
+
+  test("returns empty array for teammate with no messages", async () => {
+    const res = await get("/api/sessions/sess-01/teammates/tm-02/messages");
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(body.messages).toEqual([]);
   });
 });
 

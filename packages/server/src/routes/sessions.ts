@@ -7,6 +7,8 @@
  *   - GET  /api/sessions/:id/subagents      — Sub-agents spawned in this session
  *   - GET  /api/sessions/:id/skills         — Skills invoked in this session
  *   - GET  /api/sessions/:id/worktrees      — Worktrees used in this session
+ *   - GET  /api/sessions/:id/teammates      — Teammates participating in this session
+ *   - GET  /api/sessions/:id/teammates/:teammateId/messages — Stitched message feed for a teammate
  *   - GET  /api/sessions/:id/transcript     — Parsed messages with nested content blocks
  *   - GET  /api/sessions/:id/transcript/raw — Presigned S3 URL for raw transcript
  *   - GET  /api/sessions/:id/events         — Events belonging to this session
@@ -420,6 +422,102 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
         `;
 
         res.json({ worktrees });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // =========================================================================
+  // GET /sessions/:id/teammates — List teammates participating in this session
+  //
+  // Returns all teammates for the session, joined with their team name.
+  // Used by TUI and CLI to display team composition for a session.
+  // =========================================================================
+  router.get(
+    "/sessions/:id/teammates",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const { id } = req.params;
+
+        // Verify the session exists
+        const sessionRows = await sql`
+          SELECT id FROM sessions WHERE id = ${id}
+        `;
+
+        if (sessionRows.length === 0) {
+          res.status(404).json({ error: "Session not found" });
+          return;
+        }
+
+        const teammates = await sql`
+          SELECT tm.*, t.team_name
+          FROM teammates tm
+          JOIN teams t ON t.id = tm.team_id
+          WHERE tm.session_id = ${id}
+          ORDER BY tm.created_at
+        `;
+
+        res.json({ teammates });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // =========================================================================
+  // GET /sessions/:id/teammates/:teammateId/messages — Stitched message feed
+  //
+  // Returns all transcript messages attributed to a specific teammate, with
+  // nested content_blocks and optional subagent context. Messages are ordered
+  // by timestamp for chronological playback.
+  // =========================================================================
+  router.get(
+    "/sessions/:id/teammates/:teammateId/messages",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const { id, teammateId } = req.params;
+
+        // Verify the session exists
+        const sessionRows = await sql`
+          SELECT id FROM sessions WHERE id = ${id}
+        `;
+
+        if (sessionRows.length === 0) {
+          res.status(404).json({ error: "Session not found" });
+          return;
+        }
+
+        // Verify the teammate exists and belongs to this session
+        const teammateRows = await sql`
+          SELECT id FROM teammates WHERE id = ${teammateId} AND session_id = ${id}
+        `;
+
+        if (teammateRows.length === 0) {
+          res.status(404).json({ error: "Teammate not found" });
+          return;
+        }
+
+        // Fetch messages with content blocks aggregated as JSON array, plus
+        // subagent context via LEFT JOIN (some messages may not have a subagent).
+        const messages = await sql`
+          SELECT msg.*, sa.agent_id, sa.agent_name,
+            COALESCE(json_agg(
+              json_build_object('id', cb.id, 'block_type', cb.block_type, 'content_text', cb.content_text,
+                'thinking_text', cb.thinking_text, 'tool_name', cb.tool_name, 'tool_use_id', cb.tool_use_id,
+                'tool_input', cb.tool_input, 'tool_result_id', cb.tool_result_id, 'is_error', cb.is_error,
+                'result_text', cb.result_text, 'metadata', cb.metadata)
+              ORDER BY cb.block_order
+            ) FILTER (WHERE cb.id IS NOT NULL), '[]') AS content_blocks
+          FROM transcript_messages msg
+          LEFT JOIN subagents sa ON sa.id = msg.subagent_id
+          LEFT JOIN content_blocks cb ON cb.message_id = msg.id
+          WHERE msg.teammate_id = ${teammateId}
+          GROUP BY msg.id, sa.agent_id, sa.agent_name
+          ORDER BY msg.timestamp
+        `;
+
+        res.json({ messages });
       } catch (err) {
         next(err);
       }
