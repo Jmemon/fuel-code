@@ -31,5 +31,14 @@ export {
   type PersistedTeammate,
 } from "./team-detection.js";
 
+export {
+  extractTeammateName,
+  extractTeamName,
+  extractTeammateMapping,
+  resolveTeammateId,
+  resolveTeammateFromParseResult,
+  type TeammateMapping,
+} from "./teammate-mapping.js";
+
 // Re-export reconcile types from the types directory for convenience
 export type { SessionSeed, SessionGap } from "../types/reconcile.js";
