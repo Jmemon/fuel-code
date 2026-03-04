@@ -18,7 +18,7 @@
  *   8. Parse subagent transcripts
  *   9. Update stats, advance to parsed
  *  10. Generate session summary -> advance to summarized
- *  11. Generate per-teammate summaries (stub — TODO T20)
+ *  11. Generate per-teammate summaries (best-effort, non-fatal)
  *  12. Advance to complete
  *
  * Never throws — all errors are caught and returned in the result object.
@@ -32,6 +32,7 @@ import { parseTranscript } from "../transcript-parser.js";
 import { generateSummary, extractInitialPrompt, type SummaryConfig } from "../summary-generator.js";
 import { transitionSession, failSession, type SessionLifecycle } from "../session-lifecycle.js";
 import { computeGap, type SessionForGap } from "./compute-gap.js";
+import { generateTeammateSummaries } from "./teammate-summary.js";
 import type { SessionSeed } from "../types/reconcile.js";
 import { buildSeedFromRecovery } from "./session-seed.js";
 
@@ -424,7 +425,13 @@ export async function reconcileSession(
           contentBlocks = dbBlocks as any;
         }
 
-        const summaryResult = await generateSummary(messages!, contentBlocks!, summaryConfig);
+        // Query existing teammate rows so the summary model has multi-agent context
+        const teammateSummaries = await sql`
+          SELECT id, entity_name as name, NULL as color, summary
+          FROM teammates WHERE session_id = ${sessionId}
+        `;
+
+        const summaryResult = await generateSummary(messages!, contentBlocks!, summaryConfig, teammateSummaries as any);
 
         if (summaryResult.success && summaryResult.summary) {
           const summaryTransition = await transitionSession(
@@ -466,10 +473,26 @@ export async function reconcileSession(
     }
 
     // -----------------------------------------------------------------------
-    // Step 11: Generate per-teammate summaries (non-fatal, best-effort)
-    // TODO T20: generateTeammateSummaries — will iterate over teammates
-    // detected in step 7 and generate individual summaries for each one
+    // Step 11: Per-teammate summaries (non-fatal, best-effort)
+    // Iterates over teammates detected in step 7 and generates individual
+    // summaries for each one. Failures never block the pipeline.
     // -----------------------------------------------------------------------
+
+    if (gap.needsTeammateSummaries) {
+      try {
+        await generateTeammateSummaries(
+          { sql: deps.sql, summaryConfig: deps.summaryConfig, logger: log },
+          sessionId,
+        );
+        stepsExecuted.push("generateTeammateSummaries");
+      } catch (err) {
+        logger.warn(
+          { sessionId, error: err instanceof Error ? err.message : String(err) },
+          "Teammate summary generation failed (non-fatal)",
+        );
+        // Do NOT fail the session — teammate summaries are best-effort
+      }
+    }
 
     // -----------------------------------------------------------------------
     // Step 12: Advance to complete
