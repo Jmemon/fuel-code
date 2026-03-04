@@ -250,7 +250,7 @@ export function SessionDetailView({
         {activeTab === "transcript" && (
           <Box>
             {/* Left panel: transcript (~65%) */}
-            <Box flexGrow={1} flexBasis="65%">
+            <Box flexGrow={1} flexBasis="65%" overflow="hidden">
               <TranscriptViewer
                 messages={transcript as TranscriptMessageWithBlocks[] | null}
                 scrollOffset={scrollOffset}
@@ -275,7 +275,7 @@ export function SessionDetailView({
         {activeTab === "events" && (
           <Box>
             {/* Left panel: events table (~65%) */}
-            <Box flexGrow={1} flexBasis="65%" flexDirection="column">
+            <Box flexGrow={1} flexBasis="65%" flexDirection="column" overflow="hidden">
               {events === null ? (
                 <Text dimColor>Loading events...</Text>
               ) : events.length === 0 ? (

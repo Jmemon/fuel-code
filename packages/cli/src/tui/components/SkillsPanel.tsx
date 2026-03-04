@@ -43,11 +43,7 @@ export function SkillsPanel({ skills }: SkillsPanelProps): React.ReactElement | 
 
         return (
           <Box key={skill.id}>
-            <Text> {displayName}</Text>
-            <Text>{"  "}</Text>
-            <Text dimColor>{sourceLabel}</Text>
-            <Text>{"  "}</Text>
-            <Text dimColor>{time}</Text>
+            <Text wrap="truncate"> {displayName}  <Text dimColor>{sourceLabel}  {time}</Text></Text>
           </Box>
         );
       })}

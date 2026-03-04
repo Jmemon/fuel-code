@@ -84,7 +84,7 @@ export function WorkspacesView({
                   {selected ? "> " : "  "}
                   {w.display_name}
                 </Text>
-                <Text dimColor>  {w.session_count} sessions</Text>
+                <Text dimColor>  {w.session_count} {w.session_count === 1 ? "session" : "sessions"}</Text>
                 <Text dimColor>  {formatDuration(w.total_duration_ms)}</Text>
                 {w.last_session_at && (
                   <Text dimColor>  {formatRelativeTime(w.last_session_at)}</Text>

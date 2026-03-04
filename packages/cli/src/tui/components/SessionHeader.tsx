@@ -86,26 +86,17 @@ export function SessionHeader({ session }: SessionHeaderProps): React.ReactEleme
         )}
       </Box>
 
-      {/* Line 2: Started + Duration */}
-      <Box>
-        <Text bold>Started: </Text>
-        <Text>{formatRelativeTime(session.started_at)}</Text>
-        <Text>  </Text>
-        <Text bold>Duration: </Text>
-        <Text>{duration}</Text>
-      </Box>
+      {/* Line 2: Started + Duration (single Text to prevent first-render overlap) */}
+      <Text wrap="truncate"><Text bold>Started: </Text>{formatRelativeTime(session.started_at)}  <Text bold>Duration: </Text>{duration}</Text>
 
       {/* Line 3: Tokens */}
-      <Box>
-        <Text bold>Tokens: </Text>
-        <Text>{tokenStr}</Text>
-      </Box>
+      <Text wrap="truncate"><Text bold>Tokens: </Text>{tokenStr}</Text>
 
-      {/* Line 4: Summary */}
+      {/* Line 4: Summary (wrap=truncate prevents layout push on first render) */}
       {summary && (
         <Box>
           <Text bold>Summary: </Text>
-          <Text>{summary}</Text>
+          <Text wrap="truncate">{summary}</Text>
         </Box>
       )}
 

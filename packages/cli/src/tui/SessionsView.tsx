@@ -8,7 +8,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
 import type { FuelApiClient, WorkspaceSummary } from "../lib/api-client.js";
 import type { WsClient } from "../lib/ws-client.js";
 import type { Event, Session } from "@fuel-code/shared";
@@ -97,6 +97,10 @@ export function SessionsView({
   onQuit,
 }: SessionsViewProps): React.ReactElement {
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const { stdout } = useStdout();
+  const termRows = stdout?.rows ?? 24;
+  // Reserve ~6 lines for header/breadcrumb/status bar, ~3 lines per session row
+  const visibleCount = Math.max(5, Math.floor((termRows - 6) / 3));
 
   const { sessions, loading, error, refresh, updateSession, prependSession } =
     useSessions(api, workspace.id);
@@ -296,22 +300,42 @@ export function SessionsView({
             {" "}
             No sessions yet. Start a Claude Code session in this workspace.
           </Text>
-        ) : (
-          displayList.map((item, idx) => {
-            const isSelected = idx === selectedIndex;
-            // Each session row, optionally prefixed with chain indicator
-            return (
-              <Box key={item.session.id} paddingLeft={item.isChainChild ? 2 : 0}>
-                {item.isChainChild && (
-                  <Text dimColor>{"\u21B3 "}</Text>
-                )}
-                <Box flexGrow={1}>
-                  <SessionRow session={item.session} selected={isSelected} />
-                </Box>
-              </Box>
-            );
-          })
-        )}
+        ) : (() => {
+          // Windowed rendering: compute visible slice around selected index
+          const half = Math.floor(visibleCount / 2);
+          let windowStart = Math.max(0, selectedIndex - half);
+          let windowEnd = windowStart + visibleCount;
+          if (windowEnd > displayList.length) {
+            windowEnd = displayList.length;
+            windowStart = Math.max(0, windowEnd - visibleCount);
+          }
+          const windowedList = displayList.slice(windowStart, windowEnd);
+
+          return (
+            <>
+              {windowStart > 0 && (
+                <Text dimColor>  ↑ {windowStart} more above</Text>
+              )}
+              {windowedList.map((item, idx) => {
+                const realIdx = windowStart + idx;
+                const isSelected = realIdx === selectedIndex;
+                return (
+                  <Box key={item.session.id} paddingLeft={item.isChainChild ? 2 : 0}>
+                    {item.isChainChild && (
+                      <Text dimColor>{"\u21B3 "}</Text>
+                    )}
+                    <Box flexGrow={1}>
+                      <SessionRow session={item.session} selected={isSelected} />
+                    </Box>
+                  </Box>
+                );
+              })}
+              {windowEnd < displayList.length && (
+                <Text dimColor>  ↓ {displayList.length - windowEnd} more below</Text>
+              )}
+            </>
+          );
+        })()}
       </Box>
 
       <StatusBar

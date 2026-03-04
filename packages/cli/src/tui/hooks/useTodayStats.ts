@@ -30,8 +30,8 @@ export function useTodayStats(workspaces: WorkspaceSummary[]): TodayStats {
     let tokensOut = 0;
 
     for (const ws of workspaces) {
-      sessions += ws.session_count;
-      durationMs += ws.total_duration_ms ?? 0;
+      sessions += Number(ws.session_count) || 0;
+      durationMs += Number(ws.total_duration_ms) || 0;
       tokensIn += Number((ws as any).total_tokens_in) || 0;
       tokensOut += Number((ws as any).total_tokens_out) || 0;
     }

@@ -82,19 +82,7 @@ function SubagentRow({ sub }: { sub: Subagent }): React.ReactElement {
 
   return (
     <Box key={sub.id}>
-      <Text dimColor> {sub.agent_type}</Text>
-      <Text>{"  "}</Text>
-      <Text>{name}</Text>
-      <Text>{"  "}</Text>
-      <Text color={color as any} dimColor={sub.status === "running"}>
-        {icon}
-      </Text>
-      {duration && (
-        <>
-          <Text>{"  "}</Text>
-          <Text dimColor>{duration}</Text>
-        </>
-      )}
+      <Text wrap="truncate" dimColor> {sub.agent_type}  {name}  <Text color={color as any} dimColor={sub.status === "running"}>{icon}</Text>{duration ? `  ${duration}` : ""}</Text>
     </Box>
   );
 }
